@@ -1,0 +1,828 @@
+{
+  "form_code": "I-140",
+  "form_name": "Petición de Trabajador Inmigrante",
+  "description": "Formulario para petición de trabajador inmigrante basado en empleo",
+  "sections": [
+    {
+      "id": "part1",
+      "name": "Parte 1: Información del Peticionario",
+      "description": "Información de la empresa u organización que presenta la petición",
+      "questions": [
+        {
+          "id": "petitioner_type",
+          "question": "¿Quién presenta esta petición?",
+          "type": "select",
+          "options": ["Empresa/Organización", "Individuo (auto-petición)"],
+          "required": true,
+          "hint": "Seleccione si es una empresa/organización o si es una auto-petición (NIW, EB-1A)"
+        },
+        {
+          "id": "company_name",
+          "question": "Nombre de la empresa u organización",
+          "type": "text",
+          "required": true,
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Empresa/Organización"}
+        },
+        {
+          "id": "petitioner_family_name",
+          "question": "Apellido(s) del peticionario (si es individuo)",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Individuo (auto-petición)"}
+        },
+        {
+          "id": "petitioner_given_name",
+          "question": "Nombre(s) del peticionario (si es individuo)",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Individuo (auto-petición)"}
+        },
+        {
+          "id": "ein",
+          "question": "Número de Identificación del Empleador (EIN)",
+          "type": "text",
+          "required": true,
+          "hint": "9 dígitos sin guiones (ejemplo: 123456789)",
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Empresa/Organización"}
+        },
+        {
+          "id": "petitioner_ssn",
+          "question": "Número de Seguro Social del peticionario",
+          "type": "text",
+          "required": false,
+          "hint": "9 dígitos sin guiones",
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Individuo (auto-petición)"}
+        },
+        {
+          "id": "petitioner_address_street",
+          "question": "Dirección del peticionario - Calle y número",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "petitioner_address_apt",
+          "question": "Apartamento/Suite/Piso (si aplica)",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "petitioner_address_city",
+          "question": "Ciudad",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "petitioner_address_state",
+          "question": "Estado",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "petitioner_address_zip",
+          "question": "Código postal (ZIP)",
+          "type": "text",
+          "required": true,
+          "hint": "5 dígitos"
+        },
+        {
+          "id": "petitioner_address_country",
+          "question": "País",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "petitioner_phone",
+          "question": "Número de teléfono del peticionario",
+          "type": "text",
+          "required": true,
+          "hint": "10 dígitos sin guiones ni paréntesis"
+        },
+        {
+          "id": "petitioner_email",
+          "question": "Correo electrónico del peticionario",
+          "type": "email",
+          "required": true
+        },
+        {
+          "id": "is_nonprofit",
+          "question": "¿Es una organización sin fines de lucro?",
+          "type": "yes_no",
+          "required": true,
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Empresa/Organización"}
+        },
+        {
+          "id": "total_employees",
+          "question": "Número total de empleados",
+          "type": "text",
+          "required": true,
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Empresa/Organización"}
+        },
+        {
+          "id": "gross_annual_income",
+          "question": "Ingreso bruto anual de la empresa (USD)",
+          "type": "text",
+          "required": true,
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Empresa/Organización"}
+        },
+        {
+          "id": "year_established",
+          "question": "Año de establecimiento de la empresa",
+          "type": "text",
+          "required": true,
+          "conditional_logic": {"depends_on": "petitioner_type", "show_when": "Empresa/Organización"}
+        }
+      ]
+    },
+    {
+      "id": "part2",
+      "name": "Parte 2: Clasificación de la Petición",
+      "description": "Tipo de visa de inmigrante solicitada",
+      "questions": [
+        {
+          "id": "petition_classification",
+          "question": "¿Para qué clasificación está presentando esta petición?",
+          "type": "select",
+          "options": [
+            "EB-1A: Extranjero con habilidad extraordinaria en ciencias, artes, educación, negocios o deportes",
+            "EB-1B: Profesor o investigador destacado",
+            "EB-1C: Gerente o ejecutivo multinacional",
+            "EB-2: Profesional con título avanzado",
+            "EB-2 NIW: Exención por Interés Nacional",
+            "EB-3: Trabajador calificado",
+            "EB-3: Profesional",
+            "EB-3: Otro trabajador"
+          ],
+          "required": true
+        },
+        {
+          "id": "is_amendment",
+          "question": "¿Es esta una enmienda a una petición anterior?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "previous_receipt_number",
+          "question": "Número de recibo de la petición anterior",
+          "type": "text",
+          "required": false,
+          "hint": "13 caracteres (ejemplo: EAC1234567890)",
+          "conditional_logic": {"depends_on": "is_amendment", "show_when": "Sí"}
+        }
+      ]
+    },
+    {
+      "id": "part3",
+      "name": "Parte 3: Información del Beneficiario",
+      "description": "Información personal de la persona que será beneficiada con la petición",
+      "questions": [
+        {
+          "id": "beneficiary_family_name",
+          "question": "Apellido(s) del beneficiario",
+          "type": "text",
+          "required": true,
+          "hint": "Como aparece en el pasaporte"
+        },
+        {
+          "id": "beneficiary_given_name",
+          "question": "Nombre(s) del beneficiario",
+          "type": "text",
+          "required": true,
+          "hint": "Como aparece en el pasaporte"
+        },
+        {
+          "id": "beneficiary_middle_name",
+          "question": "Segundo nombre del beneficiario (si aplica)",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "beneficiary_other_names",
+          "question": "¿Ha usado otros nombres?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "beneficiary_other_names_list",
+          "question": "Liste otros nombres usados",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "beneficiary_other_names", "show_when": "Sí"}
+        },
+        {
+          "id": "beneficiary_address_street",
+          "question": "Dirección actual del beneficiario - Calle y número",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "beneficiary_address_apt",
+          "question": "Apartamento/Suite/Piso (si aplica)",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "beneficiary_address_city",
+          "question": "Ciudad",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "beneficiary_address_state",
+          "question": "Estado/Provincia",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "beneficiary_address_zip",
+          "question": "Código postal",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "beneficiary_address_country",
+          "question": "País",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "beneficiary_dob",
+          "question": "Fecha de nacimiento del beneficiario",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: MM/DD/AAAA"
+        },
+        {
+          "id": "beneficiary_birth_city",
+          "question": "Ciudad de nacimiento",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "beneficiary_birth_state",
+          "question": "Estado/Provincia de nacimiento",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "beneficiary_birth_country",
+          "question": "País de nacimiento",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "beneficiary_nationality",
+          "question": "País de ciudadanía/nacionalidad",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "beneficiary_a_number",
+          "question": "Número de Registro de Extranjero (A-Number) si tiene",
+          "type": "text",
+          "required": false,
+          "hint": "9 dígitos sin la letra A"
+        },
+        {
+          "id": "beneficiary_ssn",
+          "question": "Número de Seguro Social (SSN) si tiene",
+          "type": "text",
+          "required": false,
+          "hint": "9 dígitos sin guiones"
+        },
+        {
+          "id": "beneficiary_uscis_online",
+          "question": "Número de cuenta en línea de USCIS (si tiene)",
+          "type": "text",
+          "required": false,
+          "hint": "12 caracteres"
+        },
+        {
+          "id": "beneficiary_sex",
+          "question": "Sexo del beneficiario",
+          "type": "select",
+          "options": ["Masculino", "Femenino"],
+          "required": true
+        },
+        {
+          "id": "beneficiary_marital_status",
+          "question": "Estado civil del beneficiario",
+          "type": "select",
+          "options": ["Soltero/a", "Casado/a", "Divorciado/a", "Viudo/a"],
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "part4",
+      "name": "Parte 4: Información de Procesamiento",
+      "description": "Información sobre el procesamiento de la visa",
+      "questions": [
+        {
+          "id": "processing_type",
+          "question": "¿Cómo procesará el beneficiario su visa?",
+          "type": "select",
+          "options": ["Ajuste de estatus en EE.UU.", "Procesamiento consular en el extranjero"],
+          "required": true
+        },
+        {
+          "id": "consulate_city",
+          "question": "Ciudad donde solicitará la visa (si es procesamiento consular)",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "processing_type", "show_when": "Procesamiento consular en el extranjero"}
+        },
+        {
+          "id": "consulate_country",
+          "question": "País donde solicitará la visa",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "processing_type", "show_when": "Procesamiento consular en el extranjero"}
+        },
+        {
+          "id": "beneficiary_in_us",
+          "question": "¿El beneficiario se encuentra actualmente en Estados Unidos?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "current_status",
+          "question": "Estatus migratorio actual del beneficiario",
+          "type": "text",
+          "required": true,
+          "hint": "Ejemplo: H-1B, F-1, B-1/B-2, etc.",
+          "conditional_logic": {"depends_on": "beneficiary_in_us", "show_when": "Sí"}
+        },
+        {
+          "id": "last_entry_date",
+          "question": "Fecha de la última entrada a Estados Unidos",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: MM/DD/AAAA",
+          "conditional_logic": {"depends_on": "beneficiary_in_us", "show_when": "Sí"}
+        },
+        {
+          "id": "i94_number",
+          "question": "Número de I-94",
+          "type": "text",
+          "required": false,
+          "hint": "11 dígitos",
+          "conditional_logic": {"depends_on": "beneficiary_in_us", "show_when": "Sí"}
+        },
+        {
+          "id": "status_expires",
+          "question": "Fecha de vencimiento del estatus actual",
+          "type": "date",
+          "required": false,
+          "hint": "Formato: MM/DD/AAAA o D/S si es indefinido",
+          "conditional_logic": {"depends_on": "beneficiary_in_us", "show_when": "Sí"}
+        },
+        {
+          "id": "passport_number",
+          "question": "Número de pasaporte del beneficiario",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "passport_country",
+          "question": "País que emitió el pasaporte",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "passport_expiration",
+          "question": "Fecha de vencimiento del pasaporte",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: MM/DD/AAAA"
+        }
+      ]
+    },
+    {
+      "id": "part5",
+      "name": "Parte 5: Información del Empleo y Oferta de Trabajo",
+      "description": "Detalles del trabajo ofrecido al beneficiario",
+      "questions": [
+        {
+          "id": "job_title",
+          "question": "Título del puesto ofrecido",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "soc_code",
+          "question": "Código SOC (Standard Occupational Classification)",
+          "type": "text",
+          "required": false,
+          "hint": "Código de 6 dígitos del Departamento de Trabajo"
+        },
+        {
+          "id": "job_description",
+          "question": "Descripción detallada de las funciones del puesto",
+          "type": "textarea",
+          "required": true
+        },
+        {
+          "id": "job_location_address",
+          "question": "Dirección donde se realizará el trabajo",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "job_location_city",
+          "question": "Ciudad del lugar de trabajo",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "job_location_state",
+          "question": "Estado del lugar de trabajo",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "job_location_zip",
+          "question": "Código postal del lugar de trabajo",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "wage_type",
+          "question": "¿El salario es por hora o anual?",
+          "type": "select",
+          "options": ["Por hora", "Anual"],
+          "required": true
+        },
+        {
+          "id": "wage_amount",
+          "question": "Monto del salario ofrecido (USD)",
+          "type": "text",
+          "required": true,
+          "hint": "Solo números"
+        },
+        {
+          "id": "hours_per_week",
+          "question": "Horas de trabajo por semana",
+          "type": "text",
+          "required": true,
+          "hint": "Normalmente 40"
+        },
+        {
+          "id": "job_permanent",
+          "question": "¿El puesto es permanente y de tiempo completo?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "labor_certification",
+          "question": "¿Se requiere certificación laboral (PERM)?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "labor_cert_number",
+          "question": "Número de caso de certificación laboral PERM",
+          "type": "text",
+          "required": false,
+          "hint": "Formato: A-XXXXX-XXXXX",
+          "conditional_logic": {"depends_on": "labor_certification", "show_when": "Sí"}
+        }
+      ]
+    },
+    {
+      "id": "part6",
+      "name": "Parte 6: Educación del Beneficiario",
+      "description": "Historial educativo del beneficiario",
+      "questions": [
+        {
+          "id": "highest_degree",
+          "question": "Grado académico más alto obtenido",
+          "type": "select",
+          "options": ["Doctorado (PhD)", "Maestría", "Licenciatura", "Asociado", "Preparatoria/Bachillerato", "Otro"],
+          "required": true
+        },
+        {
+          "id": "degree_field",
+          "question": "Campo de estudio del grado más alto",
+          "type": "text",
+          "required": true,
+          "hint": "Ejemplo: Ingeniería en Computación, Medicina, etc."
+        },
+        {
+          "id": "degree_institution",
+          "question": "Nombre de la institución donde obtuvo el grado",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "degree_city",
+          "question": "Ciudad de la institución",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "degree_country",
+          "question": "País de la institución",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "degree_date",
+          "question": "Fecha de graduación",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: MM/DD/AAAA"
+        },
+        {
+          "id": "additional_education",
+          "question": "¿Tiene educación adicional relevante?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "additional_education_details",
+          "question": "Describa su educación adicional",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {"depends_on": "additional_education", "show_when": "Sí"}
+        }
+      ]
+    },
+    {
+      "id": "part7",
+      "name": "Parte 7: Experiencia Laboral del Beneficiario",
+      "description": "Historial de empleo del beneficiario",
+      "questions": [
+        {
+          "id": "current_employer",
+          "question": "Nombre del empleador actual (si aplica)",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "current_job_title",
+          "question": "Título del puesto actual",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "current_job_start",
+          "question": "Fecha de inicio en el trabajo actual",
+          "type": "date",
+          "required": false,
+          "hint": "Formato: MM/DD/AAAA"
+        },
+        {
+          "id": "current_job_duties",
+          "question": "Descripción de sus funciones actuales",
+          "type": "textarea",
+          "required": false
+        },
+        {
+          "id": "years_experience",
+          "question": "Años totales de experiencia en su campo profesional",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "previous_employment",
+          "question": "¿Tiene experiencia laboral previa relevante?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "previous_employment_details",
+          "question": "Describa su experiencia laboral previa (últimos 5 años)",
+          "type": "textarea",
+          "required": false,
+          "hint": "Incluya: empresa, puesto, fechas, y responsabilidades principales",
+          "conditional_logic": {"depends_on": "previous_employment", "show_when": "Sí"}
+        }
+      ]
+    },
+    {
+      "id": "part8",
+      "name": "Parte 8: Información Adicional e Historial de Inmigración",
+      "description": "Información adicional sobre el historial migratorio",
+      "questions": [
+        {
+          "id": "previous_petition",
+          "question": "¿Se ha presentado alguna vez una petición I-140 a nombre del beneficiario?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "previous_petition_details",
+          "question": "Proporcione detalles de peticiones anteriores",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {"depends_on": "previous_petition", "show_when": "Sí"}
+        },
+        {
+          "id": "deportation_proceedings",
+          "question": "¿El beneficiario está actualmente en procedimientos de deportación o remoción?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "visa_denied",
+          "question": "¿Se le ha negado alguna vez una visa al beneficiario?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "visa_denied_details",
+          "question": "Explique las circunstancias de la negación",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {"depends_on": "visa_denied", "show_when": "Sí"}
+        },
+        {
+          "id": "criminal_record",
+          "question": "¿El beneficiario tiene antecedentes penales?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "criminal_record_details",
+          "question": "Proporcione detalles de los antecedentes penales",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {"depends_on": "criminal_record", "show_when": "Sí"}
+        }
+      ]
+    },
+    {
+      "id": "part9",
+      "name": "Parte 9: Declaración del Peticionario y Firma",
+      "description": "Declaración, certificación y firma del peticionario",
+      "questions": [
+        {
+          "id": "can_read_english",
+          "question": "¿Puede leer y entender inglés?",
+          "type": "yes_no",
+          "required": true,
+          "hint": "Si la respuesta es No, debe usar un intérprete"
+        },
+        {
+          "id": "interpreter_used",
+          "question": "¿Utilizó un intérprete para completar esta petición?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "interpreter_family_name",
+          "question": "Apellido(s) del intérprete",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "interpreter_used", "show_when": "Sí"}
+        },
+        {
+          "id": "interpreter_given_name",
+          "question": "Nombre(s) del intérprete",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "interpreter_used", "show_when": "Sí"}
+        },
+        {
+          "id": "interpreter_business",
+          "question": "Nombre del negocio/organización del intérprete (si aplica)",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "interpreter_used", "show_when": "Sí"}
+        },
+        {
+          "id": "interpreter_address",
+          "question": "Dirección del intérprete",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "interpreter_used", "show_when": "Sí"}
+        },
+        {
+          "id": "interpreter_phone",
+          "question": "Teléfono del intérprete",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "interpreter_used", "show_when": "Sí"}
+        },
+        {
+          "id": "interpreter_email",
+          "question": "Correo electrónico del intérprete",
+          "type": "email",
+          "required": false,
+          "conditional_logic": {"depends_on": "interpreter_used", "show_when": "Sí"}
+        },
+        {
+          "id": "interpreter_language",
+          "question": "Idioma utilizado para la interpretación",
+          "type": "text",
+          "required": false,
+          "hint": "Ejemplo: Español",
+          "conditional_logic": {"depends_on": "interpreter_used", "show_when": "Sí"}
+        },
+        {
+          "id": "preparer_used",
+          "question": "¿Un preparador completó esta petición por usted?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "preparer_family_name",
+          "question": "Apellido(s) del preparador",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "preparer_used", "show_when": "Sí"}
+        },
+        {
+          "id": "preparer_given_name",
+          "question": "Nombre(s) del preparador",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "preparer_used", "show_when": "Sí"}
+        },
+        {
+          "id": "preparer_business",
+          "question": "Nombre del negocio/organización del preparador",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "preparer_used", "show_when": "Sí"}
+        },
+        {
+          "id": "preparer_address",
+          "question": "Dirección del preparador",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "preparer_used", "show_when": "Sí"}
+        },
+        {
+          "id": "preparer_phone",
+          "question": "Teléfono del preparador",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "preparer_used", "show_when": "Sí"}
+        },
+        {
+          "id": "preparer_email",
+          "question": "Correo electrónico del preparador",
+          "type": "email",
+          "required": false,
+          "conditional_logic": {"depends_on": "preparer_used", "show_when": "Sí"}
+        },
+        {
+          "id": "is_attorney",
+          "question": "¿El preparador es un abogado o representante acreditado?",
+          "type": "yes_no",
+          "required": false,
+          "conditional_logic": {"depends_on": "preparer_used", "show_when": "Sí"}
+        },
+        {
+          "id": "attorney_bar_number",
+          "question": "Número de licencia del abogado (Bar Number)",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "is_attorney", "show_when": "Sí"}
+        },
+        {
+          "id": "attorney_uscis_number",
+          "question": "Número de registro USCIS del abogado",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {"depends_on": "is_attorney", "show_when": "Sí"}
+        },
+        {
+          "id": "petitioner_signature_confirm",
+          "question": "¿Confirma que firmará la petición?",
+          "type": "yes_no",
+          "required": true,
+          "hint": "Al seleccionar Sí, declara que toda la información proporcionada es verdadera y correcta bajo pena de perjurio"
+        },
+        {
+          "id": "petitioner_signature_date",
+          "question": "¿Cuál es la fecha de su firma?",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: MM/DD/AAAA"
+        },
+        {
+          "id": "petitioner_daytime_phone",
+          "question": "Número de teléfono durante el día del peticionario",
+          "type": "text",
+          "required": true,
+          "hint": "10 dígitos sin guiones ni paréntesis"
+        },
+        {
+          "id": "petitioner_mobile_phone",
+          "question": "Número de teléfono móvil del peticionario (si es diferente)",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "petitioner_signature_email",
+          "question": "Correo electrónico del peticionario para notificaciones",
+          "type": "email",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "total_questions": 95
+}

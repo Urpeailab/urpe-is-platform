@@ -1,0 +1,583 @@
+[
+  {
+    "fieldLabel": "1.a. Apellido (si es individuo)",
+    "fieldType": "text",
+    "placeholder": "Solo si el peticionario es una persona individual"
+  },
+  {
+    "fieldLabel": "1.b. Nombre (si es individuo)",
+    "fieldType": "text",
+    "placeholder": "Solo si el peticionario es una persona individual"
+  },
+  {
+    "fieldLabel": "1.c. Segundo Nombre (si es individuo)",
+    "fieldType": "text",
+    "placeholder": "Solo si el peticionario es una persona individual"
+  },
+  {
+    "fieldLabel": "Número de Contacto",
+    "fieldType": "number",
+    "placeholder": "Escribe tu número de contacto"
+  },
+  {
+    "fieldLabel": "7. Número de Seguro Social de EE.UU. (si aplica)",
+    "fieldType": "text",
+    "placeholder": "Solo si es individuo peticionario: 12345678 (solo números sin - / .)"
+  },
+  {
+    "fieldLabel": "8. USCIS Online Account Number (si aplica)",
+    "fieldType": "text",
+    "placeholder": "Número de cuenta en línea de USCIS si tiene una (opcional)"
+  },
+  {
+    "fieldLabel": "Seleccione el tipo de petición (SOLO UNA OPCIÓN)",
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "1.h. Extranjero solicitando NIW con grado avanzado o habilidad excepcional" }
+      ]
+    }
+  },
+  {
+    "fieldLabel": "1.a. Apellido del Beneficiario",
+    "fieldType": "text",
+    "placeholder": "Ej: GARCIA"
+  },
+  {
+    "fieldLabel": "1.b. Nombre del Beneficiario",
+    "fieldType": "text",
+    "placeholder": "Ej: MARIA"
+  },
+  {
+    "fieldLabel": "1.c. Segundo Nombre del Beneficiario",
+    "fieldType": "text",
+    "placeholder": "Ej: ELENA"
+  },
+  {
+    "fieldLabel": "3. Fecha de Nacimiento",
+    "fieldType": "date",
+    "formatDate": "mm/dd/yyyy"
+  },
+  {
+    "fieldLabel": "4. Ciudad/Pueblo de Nacimiento",
+    "fieldType": "text",
+    "placeholder": "Solo la ciudad sin país. Ej: CIUDAD DE MEXICO"
+  },
+  {
+    "fieldLabel": "5. Estado o Provincia de Nacimiento",
+    "fieldType": "text",
+    "placeholder": "Solo la ciudad sin país. Ej: DISTRITO FEDERAL"
+  },
+  {
+    "fieldLabel": "6. País de Nacimiento",
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  {
+    "fieldLabel": "7. País de Ciudadanía o Nacionalidad",
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  {
+    "fieldLabel": "8. Número de Registro de Extranjero (A-Number)",
+    "fieldType": "number",
+    "placeholder": "Solo números: 123456789 (sin - / .)"
+  },
+  {
+    "fieldLabel": "9. Número de Seguro Social de EE.UU. (si aplica)",
+    "fieldType": "number",
+    "placeholder": "Ej: 12345 (solo números sin - / .)"
+  },
+  {
+    "fieldLabel": "INFORMACIÓN DE ÚLTIMA LLEGADA A EE.UU.",
+    "fieldType": "text",
+    "placeholder": "Complete solo si el beneficiario está en Estados Unidos"
+  },
+  {
+    "fieldLabel": "10. Fecha de Última Llegada",
+    "fieldType": "date",
+    "formatDate": "mm/dd/yyyy"
+  },
+  {
+    "fieldLabel": "11.a. Número de Registro I-94",
+    "fieldType": "text",
+    "placeholder": "Solo números: 123456789 (sin letras, sin - / .)"
+  },
+  {
+    "fieldLabel": "11.b. Fecha de Vencimiento de Estadía Autorizada en I-94",
+    "fieldType": "date",
+    "formatDate": "mm/dd/yyyy"
+  },
+  {
+    "fieldLabel": "11.c. Estatus en Formulario I-94",
+    "fieldType": "text",
+    "placeholder": "Ej: H1B, F1, B2, L1A, etc. (alfanumérico)"
+  },
+  {
+    "fieldLabel": "12. Número de Pasaporte",
+    "fieldType": "text",
+    "placeholder": "Número actual del pasaporte"
+  },
+  {
+    "fieldLabel": "13. Número de Documento de Viaje",
+    "fieldType": "text",
+    "placeholder": "Si aplica"
+  },
+  {
+    "fieldLabel": "14. País de Expedición del Pasaporte o Documento de Viaje",
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  {
+    "fieldLabel": "15. Fecha de Vencimiento del Pasaporte o Documento de Viaje",
+    "fieldType": "date",
+    "formatDate": "mm/dd/yyyy"
+  },
+  {
+    "fieldLabel": "¿Dónde procesará la visa el beneficiario?",
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "1.a. Aplicará para visa en embajada o consulado de EE.UU." },
+        { "option": "2.a. Está en EE.UU. y solicitará ajuste de estatus" }
+      ]
+    }
+  },
+  {
+    "fieldLabel": "1.a. Ciudad o Pueblo",
+    "fieldType": "text",
+    "placeholder": "Provide the following information for the person named in Part 3. (select only one box): Ciudad donde procesará la visa"
+  },
+  {
+    "fieldLabel": "1.c. País",
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  {
+    "fieldLabel": "2.b. País de residencia actual del beneficiario",
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  {
+    "fieldLabel": "3.a. Número y Nombre de la Calle",
+    "fieldType": "text",
+    "placeholder": "If you provided a United States address in Part 3., provide the person's foreign address in Item Numbers 3.a. - 3.f."
+  },
+  {
+    "fieldLabel": "3.b. Apartamento",
+    "fieldType": "text",
+    "placeholder": "Apt., Ste., Flr., etc."
+  },
+  {
+    "fieldLabel": "3.c. Ciudad",
+    "fieldType": "text",
+    "placeholder": "City or Town"
+  },
+  {
+    "fieldLabel": "3.d. Provincia",
+    "fieldType": "text",
+    "placeholder": "Province"
+  },
+  {
+    "fieldLabel": "3.e. Código Postal",
+    "fieldType": "text",
+    "placeholder": "Postal Code"
+  },
+  {
+    "fieldLabel": "3.f. País",
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  {
+    "fieldLabel": "Parte 4, Ítem 6.a: ¿Está presentando otras solicitudes con este I-140?",
+    "fieldType": "dropdown",
+    "fieldOptions": { "values": [ { "option": "No" }, { "option": "Sí" } ] }
+  },
+  { "fieldLabel": "Parte 4, Ítem 7: ¿Está el beneficiario en proceso de deportación?", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "No" }, { "option": "Sí" } ] } },
+  { "fieldLabel": "Parte 4, Ítem 8: ¿Se ha presentado antes una petición de visa de inmigrante para esta persona?", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "No" }, { "option": "Sí" } ] } },
+  { "fieldLabel": "Parte 4, Ítem 9: ¿Presenta sin cert. laboral original por haberla enviado con otro I-140?", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "No" } ] } },
+  { "fieldLabel": "Parte 4, Ítem 10: ¿Solicita que USCIS pida un duplicado de la cert. laboral al DOL?", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "No" } ] } },
+  {
+    "fieldLabel": "Tipo de peticionario",
+    "fieldType": "dropdown",
+    "fieldOptions": { "values": [ { "option": "1.b. Auto-petición" } ] }
+  },
+  { "fieldLabel": "11. Ocupación del Peticionario Individual", "fieldType": "text", "placeholder": "Solo si es auto-petición o peticionario individual" },
+  { "fieldLabel": "12. Ingreso Anual del Peticionario Individual", "fieldType": "number", "placeholder": "Especificar en dólares: 150000" },
+  {
+    "fieldLabel": "9.a. Dirección donde trabajará - Número y Nombre de la Calle",
+    "fieldType": "text",
+    "placeholder": "Poner la dirección donde va a quedar tu oficina o su proyecto, poner dirección de alguna residencia de EEUU"
+  },
+  {
+    "fieldLabel": "9.b. Apartamento, Suite, Piso",
+    "fieldType": "text",
+    "placeholder": "Si aplica"
+  },
+  {
+    "fieldLabel": "9.c. Ciudad o Pueblo",
+    "fieldType": "text",
+    "placeholder": "Ciudad en EEUU"
+  },
+  {
+    "fieldLabel": "9.d. Estado",
+    "fieldType": "text",
+    "placeholder": "Estado de EEUU"
+  },
+  {
+    "fieldLabel": "9.e. Código ZIP",
+    "fieldType": "text",
+    "placeholder": "Código postal de EEUU"
+  },
+  { "fieldLabel": "¿El beneficiario tiene cónyuge o hijos?", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "No tiene cónyuge ni hijos" }, { "option": "Sí tiene cónyuge y/o hijos" }]} },
+  { "fieldLabel": "PERSONA 1 (Cónyuge o Hijo)", "fieldType": "text", "placeholder": "Complete solo si aplica" },
+  { "fieldLabel": "1.a. Apellido (Persona 1)", "fieldType": "text" }, 
+  { "fieldLabel": "1.b. Nombre (Persona 1)", "fieldType": "text" }, 
+  { "fieldLabel": "1.c. Segundo Nombre (Persona 1)", "fieldType": "text" },
+  { "fieldLabel": "2. Fecha de Nacimiento (Persona 1)", "fieldType": "date", "formatDate": "mm/dd/yyyy" }, 
+  { 
+    "fieldLabel": "3. País de Nacimiento (Persona 1)", 
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  { "fieldLabel": "4. Relación (Persona 1)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Cónyuge" }, { "option": "Hijo/a" } ] } },
+  { "fieldLabel": "5. ¿Solicitará ajuste de estatus? (Persona 1)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "6. ¿Solicitará visa en el extranjero? (Persona 1)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "PERSONA 2 (Cónyuge o Hijo)", "fieldType": "text", "placeholder": "Complete solo si aplica" },
+  { "fieldLabel": "7.a. Apellido (Persona 2)", "fieldType": "text" }, 
+  { "fieldLabel": "7.b. Nombre (Persona 2)", "fieldType": "text" }, 
+  { "fieldLabel": "7.c. Segundo Nombre (Persona 2)", "fieldType": "text" },
+  { "fieldLabel": "8. Fecha de Nacimiento (Persona 2)", "fieldType": "date", "formatDate": "mm/dd/yyyy" }, 
+  { 
+    "fieldLabel": "9. País de Nacimiento (Persona 2)", 
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  { "fieldLabel": "10. Relación (Persona 2)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Cónyuge" }, { "option": "Hijo/a" } ] } },
+  { "fieldLabel": "11. ¿Solicitará ajuste de estatus? (Persona 2)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "12. ¿Solicitará visa en el extranjero? (Persona 2)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "PERSONA 3 (Hijo)", "fieldType": "text", "placeholder": "Complete solo si aplica" },
+  { "fieldLabel": "13.a. Apellido (Persona 3)", "fieldType": "text" }, 
+  { "fieldLabel": "13.b. Nombre (Persona 3)", "fieldType": "text" }, 
+  { "fieldLabel": "13.c. Segundo Nombre (Persona 3)", "fieldType": "text" },
+  { "fieldLabel": "14. Fecha de Nacimiento (Persona 3)", "fieldType": "date", "formatDate": "mm/dd/yyyy" }, 
+  { 
+    "fieldLabel": "15. País de Nacimiento (Persona 3)", 
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  { "fieldLabel": "16. Relación (Persona 3)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Hijo/a" } ] } },
+  { "fieldLabel": "17. ¿Solicitará ajuste de estatus? (Persona 3)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "18. ¿Solicitará visa en el extranjero? (Persona 3)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "PERSONA 4 (Hijo)", "fieldType": "text", "placeholder": "Complete solo si aplica" },
+  { "fieldLabel": "19.a. Apellido (Persona 4)", "fieldType": "text" }, 
+  { "fieldLabel": "19.b. Nombre (Persona 4)", "fieldType": "text" }, 
+  { "fieldLabel": "19.c. Segundo Nombre (Persona 4)", "fieldType": "text" },
+  { "fieldLabel": "20. Fecha de Nacimiento (Persona 4)", "fieldType": "date", "formatDate": "mm/dd/yyyy" }, 
+  { 
+    "fieldLabel": "21. País de Nacimiento (Persona 4)", 
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  { "fieldLabel": "22. Relación (Persona 4)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Hijo/a" } ] } },
+  { "fieldLabel": "23. ¿Solicitará ajuste de estatus? (Persona 4)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "24. ¿Solicitará visa en el extranjero? (Persona 4)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "PERSONA 5 (Hijo)", "fieldType": "text", "placeholder": "Complete solo si aplica" },
+  { "fieldLabel": "25.a. Apellido (Persona 5)", "fieldType": "text" }, 
+  { "fieldLabel": "25.b. Nombre (Persona 5)", "fieldType": "text" }, 
+  { "fieldLabel": "25.c. Segundo Nombre (Persona 5)", "fieldType": "text" },
+  { "fieldLabel": "26. Fecha de Nacimiento (Persona 5)", "fieldType": "date", "formatDate": "mm/dd/yyyy" }, 
+  { 
+    "fieldLabel": "27. País de Nacimiento (Persona 5)", 
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  { "fieldLabel": "28. Relación (Persona 5)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Hijo/a" } ] } },
+  { "fieldLabel": "29. ¿Solicitará ajuste de estatus? (Persona 5)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "30. ¿Solicitará visa en el extranjero? (Persona 5)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "PERSONA 6 (Hijo)", "fieldType": "text", "placeholder": "Complete solo si aplica" },
+  { "fieldLabel": "31.a. Apellido (Persona 6)", "fieldType": "text" }, 
+  { "fieldLabel": "31.b. Nombre (Persona 6)", "fieldType": "text" }, 
+  { "fieldLabel": "31.c. Segundo Nombre (Persona 6)", "fieldType": "text" },
+  { "fieldLabel": "32. Fecha de Nacimiento (Persona 6)", "fieldType": "date", "formatDate": "mm/dd/yyyy" }, 
+  { 
+    "fieldLabel": "33. País de Nacimiento (Persona 6)", 
+    "fieldType": "dropdown",
+    "fieldOptions": {
+      "values": [
+        { "option": "" },
+        { "option": "Argentina" },
+        { "option": "Bolivia" },
+        { "option": "Chile" },
+        { "option": "Republic of Colombia" },
+        { "option": "Costa Rica" },
+        { "option": "Cuba" },
+        { "option": "Dominican Republic" },
+        { "option": "Ecuador" },
+        { "option": "El Salvador" },
+        { "option": "Guatemala" },
+        { "option": "Honduras" },
+        { "option": "Mexico" },
+        { "option": "Nicaragua" },
+        { "option": "Panama" },
+        { "option": "Paraguay" },
+        { "option": "Peru" },
+        { "option": "Uruguay" },
+        { "option": "Venezuela" }
+      ]
+    }
+  },
+  { "fieldLabel": "34. Relación (Persona 6)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Hijo/a" } ] } },
+  { "fieldLabel": "35. ¿Solicitará ajuste de estatus? (Persona 6)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "36. ¿Solicitará visa en el extranjero? (Persona 6)", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "" }, { "option": "Sí" }, { "option": "No" } ] } },
+  { "fieldLabel": "1.a. Apellido del Signatario", "fieldType": "text", "placeholder": "Persona autorizada para firmar" },
+  { "fieldLabel": "1.b. Nombre del Signatario", "fieldType": "text", "placeholder": "Persona autorizada para firmar" },
+  { "fieldLabel": "2. Título del Signatario", "fieldType": "text", "placeholder": "Ej: PRESIDENT, CEO, HR DIRECTOR" },
+  { "fieldLabel": "3. Teléfono de Día", "fieldType": "text", "placeholder": "Solo números: 5551234567" },
+  { "fieldLabel": "4. Teléfono Móvil", "fieldType": "text", "placeholder": "Solo números: 5559876543" },
+  { "fieldLabel": "5. Dirección de Email", "fieldType": "email", "placeholder": "presidente@empresa.com" },
+  { "fieldLabel": "Certificación del Peticionario: Certifico, bajo pena de perjurio, que he revisado esta petición y que toda la información es completa, verdadera y correcta.", "fieldType": "dropdown", "fieldOptions": { "values": [ { "option": "Sí, certifico" }]} },
+  { "fieldLabel": "6.b. Fecha de Firma", "fieldType": "date", "formatDate": "mm/dd/yyyy", "requiredField": true }
+]

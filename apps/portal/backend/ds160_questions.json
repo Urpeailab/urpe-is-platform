@@ -1,0 +1,958 @@
+{
+  "form_code": "DS-160",
+  "form_name": "Solicitud de Visa de No Inmigrante",
+  "visa_types": ["B-1", "B-2", "B-1/B-2"],
+  "sections": [
+    {
+      "id": "personal_info_1",
+      "name": "Información Personal 1",
+      "description": "Información básica del solicitante",
+      "questions": [
+        {
+          "id": "surnames",
+          "question": "Apellidos",
+          "type": "text",
+          "required": true,
+          "hint": "Tal como aparece en su pasaporte"
+        },
+        {
+          "id": "given_names",
+          "question": "Nombres",
+          "type": "text",
+          "required": true,
+          "hint": "Tal como aparece en su pasaporte"
+        },
+        {
+          "id": "full_name_native",
+          "question": "Nombre completo en alfabeto nativo",
+          "type": "text",
+          "required": false,
+          "hint": "Si aplica, escriba su nombre en su alfabeto nativo"
+        },
+        {
+          "id": "other_names_used",
+          "question": "¿Ha usado otros nombres (nombre de soltera, religioso, profesional, alias, etc.)?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "other_surnames",
+          "question": "Otros apellidos usados",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "other_names_used",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "other_given_names",
+          "question": "Otros nombres usados",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "other_names_used",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "sex",
+          "question": "Sexo",
+          "type": "select",
+          "options": ["Masculino", "Femenino"],
+          "required": true
+        },
+        {
+          "id": "marital_status",
+          "question": "Estado civil",
+          "type": "select",
+          "options": ["Soltero/a", "Casado/a", "Divorciado/a", "Viudo/a", "Separado/a legalmente", "Unión de hecho", "Otro"],
+          "required": true
+        },
+        {
+          "id": "date_of_birth",
+          "question": "Fecha de nacimiento",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: DD/MM/AAAA"
+        },
+        {
+          "id": "city_of_birth",
+          "question": "Ciudad de nacimiento",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "state_of_birth",
+          "question": "Estado/Provincia de nacimiento",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "country_of_birth",
+          "question": "País de nacimiento",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "personal_info_2",
+      "name": "Información Personal 2",
+      "description": "Nacionalidad e identificaciones",
+      "questions": [
+        {
+          "id": "nationality",
+          "question": "País de origen (Nacionalidad)",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "other_nationalities",
+          "question": "¿Tiene o ha tenido otra nacionalidad?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "other_nationality_country",
+          "question": "País de la otra nacionalidad",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "other_nationalities",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "permanent_resident_other_country",
+          "question": "¿Es residente permanente de otro país?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "permanent_resident_country",
+          "question": "País de residencia permanente",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "permanent_resident_other_country",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "national_id_number",
+          "question": "Número de identificación nacional",
+          "type": "text",
+          "required": false,
+          "hint": "Si aplica en su país"
+        },
+        {
+          "id": "us_ssn",
+          "question": "Número de Seguro Social de EE.UU.",
+          "type": "text",
+          "required": false,
+          "hint": "Solo si tiene uno"
+        },
+        {
+          "id": "us_taxpayer_id",
+          "question": "Número de identificación de contribuyente de EE.UU.",
+          "type": "text",
+          "required": false,
+          "hint": "Solo si tiene uno"
+        }
+      ]
+    },
+    {
+      "id": "travel_info",
+      "name": "Información de Viaje",
+      "description": "Propósito y planes de viaje",
+      "questions": [
+        {
+          "id": "purpose_of_trip",
+          "question": "Propósito del viaje a EE.UU.",
+          "type": "select",
+          "options": ["Turismo/Vacaciones", "Visitar familia/amigos", "Tratamiento médico", "Negocios/Reuniones", "Conferencia", "Otro"],
+          "required": true
+        },
+        {
+          "id": "specific_travel_plans",
+          "question": "¿Ha hecho planes específicos de viaje?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "arrival_date",
+          "question": "Fecha de llegada a EE.UU.",
+          "type": "date",
+          "required": false,
+          "hint": "Formato: DD/MM/AAAA",
+          "conditional_logic": {
+            "depends_on": "specific_travel_plans",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "departure_date",
+          "question": "Fecha de salida de EE.UU.",
+          "type": "date",
+          "required": false,
+          "hint": "Formato: DD/MM/AAAA",
+          "conditional_logic": {
+            "depends_on": "specific_travel_plans",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "arrival_city",
+          "question": "Ciudad de llegada en EE.UU.",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "specific_travel_plans",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "locations_to_visit",
+          "question": "Lugares que visitará en EE.UU.",
+          "type": "text",
+          "required": false,
+          "hint": "Liste las ciudades principales",
+          "conditional_logic": {
+            "depends_on": "specific_travel_plans",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "us_address_street",
+          "question": "Dirección en EE.UU. (Calle)",
+          "type": "text",
+          "required": false,
+          "hint": "Hotel o dirección donde se hospedará",
+          "conditional_logic": {
+            "depends_on": "specific_travel_plans",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "us_address_city",
+          "question": "Ciudad en EE.UU.",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "specific_travel_plans",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "us_address_state",
+          "question": "Estado en EE.UU.",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "specific_travel_plans",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "us_address_zip",
+          "question": "Código postal en EE.UU.",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "specific_travel_plans",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "who_pays_trip",
+          "question": "¿Quién pagará su viaje?",
+          "type": "select",
+          "options": ["Yo mismo", "Otra persona", "Otra empresa/organización"],
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "travel_companions",
+      "name": "Compañeros de Viaje",
+      "description": "Información sobre personas que viajan con usted",
+      "questions": [
+        {
+          "id": "traveling_with_others",
+          "question": "¿Hay otras personas viajando con usted?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "companion_names",
+          "question": "Nombres de los acompañantes",
+          "type": "text",
+          "required": false,
+          "hint": "Liste los nombres completos",
+          "conditional_logic": {
+            "depends_on": "traveling_with_others",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "group_travel",
+          "question": "¿Viaja como parte de un grupo u organización?",
+          "type": "yes_no",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "previous_us_travel",
+      "name": "Viajes Previos a EE.UU.",
+      "description": "Historial de viajes a Estados Unidos",
+      "questions": [
+        {
+          "id": "been_to_us_before",
+          "question": "¿Ha estado en EE.UU. anteriormente?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "previous_visit_date",
+          "question": "Fecha de la última visita",
+          "type": "date",
+          "required": false,
+          "hint": "Formato: DD/MM/AAAA",
+          "conditional_logic": {
+            "depends_on": "been_to_us_before",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "previous_visit_duration",
+          "question": "Duración de la estadía",
+          "type": "text",
+          "required": false,
+          "hint": "Ejemplo: 2 semanas",
+          "conditional_logic": {
+            "depends_on": "been_to_us_before",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "us_drivers_license",
+          "question": "¿Tiene o ha tenido una licencia de conducir de EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "drivers_license_number",
+          "question": "Número de licencia",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "us_drivers_license",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "drivers_license_state",
+          "question": "Estado que emitió la licencia",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "us_drivers_license",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "previous_us_visa",
+          "question": "¿Se le ha emitido alguna vez una visa de EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "previous_visa_number",
+          "question": "Número de visa anterior",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "previous_us_visa",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "previous_visa_issue_date",
+          "question": "Fecha de emisión",
+          "type": "date",
+          "required": false,
+          "hint": "Formato: DD/MM/AAAA",
+          "conditional_logic": {
+            "depends_on": "previous_us_visa",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "visa_lost_stolen",
+          "question": "¿Alguna vez se ha perdido o robado su visa de EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "visa_lost_explain",
+          "question": "Explique las circunstancias",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "visa_lost_stolen",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "visa_cancelled_revoked",
+          "question": "¿Alguna vez se ha cancelado o revocado su visa de EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "visa_cancelled_explain",
+          "question": "Explique por qué fue cancelada/revocada",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "visa_cancelled_revoked",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "visa_refused",
+          "question": "¿Alguna vez se le ha negado una visa de EE.UU. o se le ha negado la entrada a EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "visa_refused_explain",
+          "question": "Explique por qué fue negada",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "visa_refused",
+            "show_when": "Sí"
+          }
+        }
+      ]
+    },
+    {
+      "id": "contact_info",
+      "name": "Información de Contacto",
+      "description": "Dirección y teléfonos",
+      "questions": [
+        {
+          "id": "home_address_street",
+          "question": "Dirección de casa (Calle)",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "home_address_city",
+          "question": "Ciudad",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "home_address_state",
+          "question": "Estado/Provincia",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "home_address_zip",
+          "question": "Código postal",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "home_address_country",
+          "question": "País",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "primary_phone",
+          "question": "Teléfono principal",
+          "type": "text",
+          "required": true,
+          "hint": "10 dígitos sin guiones"
+        },
+        {
+          "id": "email",
+          "question": "Correo electrónico",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "has_social_media",
+          "question": "¿Tiene presencia en redes sociales?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "social_media_platforms",
+          "question": "Plataformas de redes sociales",
+          "type": "text",
+          "required": false,
+          "hint": "Ejemplo: Facebook, Instagram, Twitter",
+          "conditional_logic": {
+            "depends_on": "has_social_media",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "social_media_handles",
+          "question": "Nombres de usuario/handles",
+          "type": "text",
+          "required": false,
+          "hint": "Ejemplo: @usuario",
+          "conditional_logic": {
+            "depends_on": "has_social_media",
+            "show_when": "Sí"
+          }
+        }
+      ]
+    },
+    {
+      "id": "passport_info",
+      "name": "Información del Pasaporte",
+      "description": "Detalles del pasaporte",
+      "questions": [
+        {
+          "id": "passport_type",
+          "question": "Tipo de pasaporte/documento de viaje",
+          "type": "select",
+          "options": ["Regular", "Oficial", "Diplomático", "Otro"],
+          "required": true
+        },
+        {
+          "id": "passport_number",
+          "question": "Número de pasaporte",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "passport_book_number",
+          "question": "Número de libro del pasaporte",
+          "type": "text",
+          "required": false,
+          "hint": "Si aplica"
+        },
+        {
+          "id": "passport_country",
+          "question": "País que emitió el pasaporte",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "passport_issue_city",
+          "question": "Ciudad donde se emitió el pasaporte",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "passport_issue_date",
+          "question": "Fecha de emisión del pasaporte",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: DD/MM/AAAA"
+        },
+        {
+          "id": "passport_expiration_date",
+          "question": "Fecha de expiración del pasaporte",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: DD/MM/AAAA"
+        },
+        {
+          "id": "lost_passport",
+          "question": "¿Alguna vez ha perdido un pasaporte o le han robado uno?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "lost_passport_number",
+          "question": "Número del pasaporte perdido/robado",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "lost_passport",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "lost_passport_explain",
+          "question": "Explique las circunstancias",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "lost_passport",
+            "show_when": "Sí"
+          }
+        }
+      ]
+    },
+    {
+      "id": "us_contact",
+      "name": "Contacto en EE.UU.",
+      "description": "Persona u organización de contacto",
+      "questions": [
+        {
+          "id": "us_contact_name",
+          "question": "Nombre del contacto en EE.UU.",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "us_contact_organization",
+          "question": "Nombre de la organización (si aplica)",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "us_contact_relationship",
+          "question": "Relación con el contacto",
+          "type": "select",
+          "options": ["Familia", "Amigo", "Organización/Empresa", "Hotel", "Otro"],
+          "required": true
+        },
+        {
+          "id": "us_contact_address",
+          "question": "Dirección del contacto en EE.UU.",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "us_contact_city",
+          "question": "Ciudad",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "us_contact_state",
+          "question": "Estado",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "us_contact_zip",
+          "question": "Código postal",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "us_contact_phone",
+          "question": "Teléfono del contacto",
+          "type": "text",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "family_info",
+      "name": "Información Familiar",
+      "description": "Datos de padres y familia",
+      "questions": [
+        {
+          "id": "father_full_name",
+          "question": "Nombre completo del padre",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "father_dob",
+          "question": "Fecha de nacimiento del padre",
+          "type": "date",
+          "required": false,
+          "hint": "Si la conoce"
+        },
+        {
+          "id": "father_in_us",
+          "question": "¿Su padre está en EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "mother_full_name",
+          "question": "Nombre completo de la madre",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "mother_dob",
+          "question": "Fecha de nacimiento de la madre",
+          "type": "date",
+          "required": false,
+          "hint": "Si la conoce"
+        },
+        {
+          "id": "mother_in_us",
+          "question": "¿Su madre está en EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "relatives_in_us",
+          "question": "¿Tiene familiares inmediatos en EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "relative_names",
+          "question": "Nombres de los familiares en EE.UU.",
+          "type": "text",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "relatives_in_us",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "relative_relationship",
+          "question": "Relación con el familiar",
+          "type": "text",
+          "required": false,
+          "hint": "Ejemplo: Hermano, Tío, etc.",
+          "conditional_logic": {
+            "depends_on": "relatives_in_us",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "relative_status",
+          "question": "Estado migratorio del familiar",
+          "type": "select",
+          "options": ["Ciudadano", "Residente Permanente", "Visa de trabajo", "Visa de estudiante", "Otro"],
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "relatives_in_us",
+            "show_when": "Sí"
+          }
+        }
+      ]
+    },
+    {
+      "id": "work_education",
+      "name": "Trabajo/Educación",
+      "description": "Información laboral y educativa actual",
+      "questions": [
+        {
+          "id": "primary_occupation",
+          "question": "Ocupación principal",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "employer_name",
+          "question": "Nombre del empleador o escuela actual",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "employer_address",
+          "question": "Dirección del empleador",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "employer_city",
+          "question": "Ciudad",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "employer_country",
+          "question": "País",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "employer_phone",
+          "question": "Teléfono del empleador",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "job_start_date",
+          "question": "Fecha de inicio en el trabajo actual",
+          "type": "date",
+          "required": true,
+          "hint": "Formato: DD/MM/AAAA"
+        },
+        {
+          "id": "monthly_income",
+          "question": "Ingreso mensual (en moneda local)",
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "job_duties",
+          "question": "Describa brevemente sus funciones",
+          "type": "textarea",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "security_1",
+      "name": "Seguridad y Antecedentes - Parte 1",
+      "description": "Preguntas de salud pública",
+      "questions": [
+        {
+          "id": "communicable_disease",
+          "question": "¿Tiene alguna enfermedad transmisible de importancia para la salud pública?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "communicable_disease_explain",
+          "question": "Explique su condición",
+          "type": "textarea",
+          "required": false,
+          "conditional_logic": {
+            "depends_on": "communicable_disease",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "mental_disorder",
+          "question": "¿Tiene algún trastorno mental o físico que represente una amenaza?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "drug_abuser",
+          "question": "¿Es o ha sido abusador o adicto a las drogas?",
+          "type": "yes_no",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "security_2",
+      "name": "Seguridad y Antecedentes - Parte 2",
+      "description": "Historial criminal",
+      "questions": [
+        {
+          "id": "arrested_convicted",
+          "question": "¿Ha sido arrestado o condenado por algún delito?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "arrest_details",
+          "question": "Detalles del arresto/condena",
+          "type": "textarea",
+          "required": false,
+          "hint": "Incluya fecha, lugar y naturaleza del delito",
+          "conditional_logic": {
+            "depends_on": "arrested_convicted",
+            "show_when": "Sí"
+          }
+        },
+        {
+          "id": "controlled_substances",
+          "question": "¿Ha violado alguna ley relacionada con sustancias controladas?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "prostitution",
+          "question": "¿Viene a EE.UU. para ejercer la prostitución?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "money_laundering",
+          "question": "¿Ha estado involucrado en lavado de dinero?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "human_trafficking",
+          "question": "¿Ha cometido o conspirado para cometer un delito de tráfico de personas?",
+          "type": "yes_no",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "security_3",
+      "name": "Seguridad y Antecedentes - Parte 3",
+      "description": "Terrorismo y seguridad nacional",
+      "questions": [
+        {
+          "id": "espionage",
+          "question": "¿Busca participar en espionaje, sabotaje o actividades ilegales en EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "terrorist_activities",
+          "question": "¿Ha participado en actividades terroristas?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "financial_support_terrorism",
+          "question": "¿Ha proporcionado apoyo financiero a terroristas u organizaciones terroristas?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "terrorist_member",
+          "question": "¿Es miembro o representante de una organización terrorista?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "genocide",
+          "question": "¿Ha participado en genocidio?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "torture",
+          "question": "¿Ha participado en tortura?",
+          "type": "yes_no",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "security_4",
+      "name": "Seguridad y Antecedentes - Parte 4",
+      "description": "Historial migratorio",
+      "questions": [
+        {
+          "id": "removal_hearing",
+          "question": "¿Ha sido sujeto de un proceso de remoción o deportación?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "visa_fraud",
+          "question": "¿Ha intentado obtener una visa mediante fraude o tergiversación?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "unlawful_presence",
+          "question": "¿Ha estado presente ilegalmente en EE.UU. o ha excedido el tiempo autorizado?",
+          "type": "yes_no",
+          "required": true
+        },
+        {
+          "id": "removed_deported",
+          "question": "¿Ha sido removido o deportado de EE.UU.?",
+          "type": "yes_no",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

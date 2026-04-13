@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.next/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Emergent (legacy, should not exist)
+.emergent/
+.gitconfig
+
+# Logs
+*.log
+dev.log
+dev.err
+install.log
+
+# Uploads (local dev only)
+uploads/
+tmp/
+
+# Package locks (keep package-lock.json, ignore yarn.lock dupes)
+yarn.lock

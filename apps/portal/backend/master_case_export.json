@@ -1,0 +1,323 @@
+{
+  "exportedAt": "2025-12-17T21:35:30.501467+00:00",
+  "exportedFrom": "test_database",
+  "masterCase": {
+    "_id": "master_case_eb2_niw",
+    "caseId": "master_case_eb2_niw",
+    "userId": "MASTER_TEMPLATE",
+    "visaType": "EB-2 NIW",
+    "status": "template",
+    "isMasterCase": true,
+    "currentStage": 1,
+    "overallProgress": 0,
+    "createdAt": "2025-11-24T17:46:59.123Z",
+    "updatedAt": "2025-11-24T17:46:59.124Z"
+  },
+  "masterStages": [
+    {
+      "_id": "692f0574fb3ed5d5f34c02e6",
+      "id": "master_case_eb2_niw_stage_1",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 1,
+      "name": {
+        "es": "Bienvenida",
+        "en": "Welcome"
+      },
+      "description": {
+        "es": "Bienvenida al proceso",
+        "en": "Welcome to the process"
+      },
+      "percentage": 9,
+      "amount": 0,
+      "isPaid": true,
+      "status": "unlocked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 4,
+      "createdAt": "2025-11-24T17:53:49.027Z",
+      "updatedAt": "2025-11-24T18:32:14.739Z",
+      "isUnlocked": true
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02e7",
+      "id": "master_case_eb2_niw_stage_2",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 2,
+      "name": {
+        "es": "Reporte de Elegibilidad",
+        "en": "Eligibility Report"
+      },
+      "description": {
+        "es": "Acreditación de títulos y creación de patente",
+        "en": "Credentials accreditation and patent creation"
+      },
+      "percentage": 18,
+      "amount": 996,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 2,
+      "createdAt": "2025-11-24T17:53:49.033Z",
+      "updatedAt": "2025-11-30T02:29:02.617598+00:00"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02e8",
+      "id": "master_case_eb2_niw_stage_3",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 3,
+      "name": {
+        "es": "Estrategia Central",
+        "en": "Central Strategy"
+      },
+      "description": {
+        "es": "Business plan de interés nacional",
+        "en": "National interest business plan"
+      },
+      "percentage": 27,
+      "amount": 996,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 1,
+      "createdAt": "2025-11-24T17:53:49.053Z",
+      "updatedAt": "2025-11-24T17:53:49.053Z"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02e9",
+      "id": "master_case_eb2_niw_stage_4",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 4,
+      "name": {
+        "es": "Validación Económica",
+        "en": "Economic Validation"
+      },
+      "description": {
+        "es": "Estudio econométrico del proyecto",
+        "en": "Econometric study of the project"
+      },
+      "percentage": 36,
+      "amount": 995,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 1,
+      "createdAt": "2025-11-24T17:53:49.059Z",
+      "updatedAt": "2025-11-24T17:53:49.059Z"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02ea",
+      "id": "master_case_eb2_niw_stage_5",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 5,
+      "name": {
+        "es": "Identidad y Profundidad Técnica",
+        "en": "Identity and Technical Depth"
+      },
+      "description": {
+        "es": "Desarrollo de identidad técnica",
+        "en": "Technical identity development"
+      },
+      "percentage": 45,
+      "amount": 995,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 2,
+      "createdAt": "2025-11-24T17:53:49.065Z",
+      "updatedAt": "2025-11-24T17:53:49.065Z"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02eb",
+      "id": "master_case_eb2_niw_stage_6",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 6,
+      "name": {
+        "es": "Autoridad Académica",
+        "en": "Academic Authority"
+      },
+      "description": {
+        "es": "Documentación académica especializada",
+        "en": "Specialized academic documentation"
+      },
+      "percentage": 54,
+      "amount": 996,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 2,
+      "createdAt": "2025-11-24T17:53:49.072Z",
+      "updatedAt": "2025-11-24T17:53:49.072Z"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02ec",
+      "id": "master_case_eb2_niw_stage_7",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 7,
+      "name": {
+        "es": "Desarrollo Tecnológico (MVP)",
+        "en": "Technological Development (MVP)"
+      },
+      "description": {
+        "es": "Producto mínimo viable funcional",
+        "en": "Functional minimum viable product"
+      },
+      "percentage": 63,
+      "amount": 995,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 1,
+      "createdAt": "2025-11-24T17:53:49.077Z",
+      "updatedAt": "2025-11-24T17:53:49.077Z"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02ed",
+      "id": "master_case_eb2_niw_stage_8",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 8,
+      "name": {
+        "es": "Prueba Social",
+        "en": "Social Proof"
+      },
+      "description": {
+        "es": "Redes sociales y cartas de recomendación",
+        "en": "Social media and recommendation letters"
+      },
+      "percentage": 72,
+      "amount": 995,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 2,
+      "createdAt": "2025-11-24T17:53:49.080Z",
+      "updatedAt": "2025-11-24T17:53:49.080Z"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02ee",
+      "id": "master_case_eb2_niw_stage_9",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 9,
+      "name": {
+        "es": "Aval de Expertos",
+        "en": "Expert Endorsement"
+      },
+      "description": {
+        "es": "Cartas de expertos y documentación de empresa",
+        "en": "Expert letters and company documentation"
+      },
+      "percentage": 81,
+      "amount": 995,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 3,
+      "createdAt": "2025-11-24T17:53:49.086Z",
+      "updatedAt": "2025-11-24T17:53:49.086Z"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02ef",
+      "id": "master_case_eb2_niw_stage_10",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 10,
+      "name": {
+        "es": "Argumentación Técnica",
+        "en": "Technical Argumentation"
+      },
+      "description": {
+        "es": "Carta de autopetición",
+        "en": "Self-petition letter"
+      },
+      "percentage": 90,
+      "amount": 996,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 1,
+      "createdAt": "2025-11-24T17:53:49.093Z",
+      "updatedAt": "2025-11-24T17:53:49.093Z"
+    },
+    {
+      "_id": "692f0574fb3ed5d5f34c02f0",
+      "id": "master_case_eb2_niw_stage_11",
+      "caseId": "master_case_eb2_niw",
+      "stageNumber": 11,
+      "name": {
+        "es": "Traducciones y Logística Final",
+        "en": "Translations and Final Logistics"
+      },
+      "description": {
+        "es": "Compilación y envío final",
+        "en": "Final compilation and shipping"
+      },
+      "percentage": 100,
+      "amount": 997,
+      "isPaid": false,
+      "status": "locked",
+      "completedDeliverablesCount": 0,
+      "totalDeliverablesCount": 4,
+      "createdAt": "2025-11-24T17:53:49.102Z",
+      "updatedAt": "2025-11-24T17:53:49.102Z"
+    }
+  ],
+  "summary": {
+    "caseId": "master_case_eb2_niw",
+    "visaType": "EB-2 NIW",
+    "totalStages": 11,
+    "stages": [
+      {
+        "number": 1,
+        "name": null,
+        "amount": 0
+      },
+      {
+        "number": 2,
+        "name": null,
+        "amount": 996
+      },
+      {
+        "number": 3,
+        "name": null,
+        "amount": 996
+      },
+      {
+        "number": 4,
+        "name": null,
+        "amount": 995
+      },
+      {
+        "number": 5,
+        "name": null,
+        "amount": 995
+      },
+      {
+        "number": 6,
+        "name": null,
+        "amount": 996
+      },
+      {
+        "number": 7,
+        "name": null,
+        "amount": 995
+      },
+      {
+        "number": 8,
+        "name": null,
+        "amount": 995
+      },
+      {
+        "number": 9,
+        "name": null,
+        "amount": 995
+      },
+      {
+        "number": 10,
+        "name": null,
+        "amount": 996
+      },
+      {
+        "number": 11,
+        "name": null,
+        "amount": 997
+      }
+    ]
+  }
+}

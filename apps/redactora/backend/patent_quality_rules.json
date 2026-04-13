@@ -1,0 +1,380 @@
+{
+  "patent_quality_rules": {
+    "version": "2.0",
+    "target_score": 9.0,
+    "correction_profile": "USPTO_PROVISIONAL_STRICT",
+    
+    "terminology_precision": {
+      "eliminate_vague_terms": {
+        "enabled": true,
+        "priority": "CRITICAL",
+        "rules": [
+          {
+            "vague_term": "aproximadamente",
+            "replacement_strategy": "SPECIFIC_RANGE",
+            "examples": [
+              "aproximadamente 100 → 95-105",
+              "aproximadamente 5% → 4.5%-5.5%",
+              "aproximadamente 10 segundos → 8-12 segundos"
+            ],
+            "format": "{min_value}-{max_value} {unit}",
+            "tolerance_guidance": "±5% for percentages, ±10% for time/quantity"
+          },
+          {
+            "vague_term": "sustancialmente",
+            "replacement_strategy": "QUANTIFIED_THRESHOLD",
+            "examples": [
+              "sustancialmente similar → al menos 90% de similitud",
+              "sustancialmente todo → al menos 95% del total"
+            ]
+          },
+          {
+            "vague_term": "alrededor de",
+            "replacement_strategy": "SPECIFIC_RANGE",
+            "apply_same_as": "aproximadamente"
+          },
+          {
+            "vague_term": "generalmente",
+            "replacement_strategy": "STATISTICAL_FREQUENCY",
+            "examples": [
+              "generalmente ocurre → ocurre en al menos 80% de los casos",
+              "generalmente comprende → comprende en al menos 90% de las realizaciones"
+            ]
+          }
+        ]
+      },
+      
+      "modal_verb_precision": {
+        "enabled": true,
+        "priority": "MINOR",
+        "rules": [
+          {
+            "ambiguous_modal": "puede",
+            "context": "describing_capability",
+            "replacement": "está configurado para",
+            "example": "el sistema puede procesar → el sistema está configurado para procesar"
+          },
+          {
+            "ambiguous_modal": "podría",
+            "context": "describing_optional_feature",
+            "replacement": "opcionalmente está configurado para",
+            "example": "el módulo podría incluir → el módulo opcionalmente está configurado para incluir"
+          },
+          {
+            "ambiguous_modal": "puede ser",
+            "context": "describing_implementation",
+            "replacement": "se implementa como",
+            "example": "puede ser implementado → se implementa como"
+          }
+        ]
+      }
+    },
+    
+    "claims_specificity": {
+      "enabled": true,
+      "priority": "CRITICAL",
+      
+      "technical_implementation_details": {
+        "minimum_requirements": {
+          "system_claims": {
+            "processor_specs": "REQUIRED",
+            "memory_specs": "REQUIRED",
+            "network_specs": "REQUIRED_IF_DISTRIBUTED",
+            "performance_metrics": "REQUIRED"
+          },
+          "method_claims": {
+            "step_timing": "REQUIRED",
+            "input_output_formats": "REQUIRED",
+            "error_handling": "REQUIRED",
+            "quantified_improvements": "REQUIRED"
+          },
+          "module_claims": {
+            "interface_specifications": "REQUIRED",
+            "data_structures": "REQUIRED",
+            "algorithm_complexity": "RECOMMENDED",
+            "capacity_limits": "REQUIRED"
+          }
+        },
+        
+        "quantification_templates": {
+          "performance_metrics": [
+            "reduce latency from {baseline_ms} ms to {improved_ms} ms (at least {percentage}% reduction)",
+            "process at least {throughput} transactions per second",
+            "achieve {accuracy}% accuracy on a test set of at least {sample_size} samples",
+            "maintain {availability}% uptime over {time_period}"
+          ],
+          "capacity_specifications": [
+            "handle at least {min_capacity} concurrent {units}",
+            "store between {min_size} and {max_size} {data_unit}",
+            "scale horizontally to at least {multiplier}× baseline capacity"
+          ],
+          "timing_specifications": [
+            "complete within {min_time}-{max_time} {time_unit} for at least {percentile}% of operations",
+            "respond within {max_latency} ms under load of {concurrent_requests} requests per second"
+          ]
+        }
+      },
+      
+      "module_implementation_detail": {
+        "required_elements_per_module": [
+          "input data format (type, size range, schema)",
+          "output data format (type, size range, schema)",
+          "processing algorithm or model (name, version, parameters)",
+          "computational requirements (CPU, memory, storage)",
+          "interface protocol (API, message format, authentication)",
+          "error handling strategy (retry logic, fallback, logging)"
+        ],
+        
+        "example_template": {
+          "module_name": "NLP Engine (101)",
+          "description": "configured to tokenize text using byte-pair encoding with a vocabulary of at least 20,000 tokens, generate embeddings of dimension 768 using a BERT-base model with 12 layers and 12 attention heads, classify intent into one of at least 5 categories with confidence scores in range [0.0, 1.0], and output results within 500 milliseconds for input text of up to 5,000 characters"
+        }
+      }
+    },
+    
+    "description_completeness": {
+      "enabled": true,
+      "priority": "MINOR",
+      
+      "figure_explanations": {
+        "requirement": "EVERY_FIGURE_REFERENCED_AND_EXPLAINED",
+        "explanation_depth": {
+          "minimum_elements": [
+            "what the figure depicts (type: block diagram, flowchart, sequence, etc.)",
+            "all numbered components in the figure",
+            "relationships between components",
+            "data flow or control flow paths",
+            "at least one example or use case illustrated by the figure"
+          ],
+          "minimum_paragraph_length": "4-8 sentences per figure",
+          "location": "DETAILED_DESCRIPTION section, paragraphs 0018-0030"
+        },
+        
+        "cross_reference_format": {
+          "first_mention": "FIG. {number} illustrates {high_level_description}, showing {component_list} and their interactions.",
+          "detailed_explanation": "As shown in FIG. {number}, {component_X} ({reference_number}) {action} by {mechanism}. {Component_Y} ({reference_number}) {relationship} with {component_X}, {specific_detail}.",
+          "example": "FIG. 3 illustrates a runtime sequence (300). As shown in FIG. 3, a triggering event (301) is received by the connector framework module (105), which maps it to a workflow start event. The orchestration engine module (103) creates a new workflow instance record in Redis 7.0 (step 302) and enqueues a message (step 303) for the initial node. A worker service (104) dequeues the message (step 304), executes the node logic using the NLP engine (101) or other modules, and enqueues messages for successor nodes (step 305) based on evaluated conditions."
+        }
+      },
+      
+      "abstract_section": {
+        "requirement": "MANDATORY",
+        "location": "after CLAIMS, before DRAWINGS",
+        "content_requirements": {
+          "length": "150-250 words",
+          "structure": [
+            "1-2 sentences: technical field and problem addressed",
+            "2-3 sentences: core components and architecture",
+            "2-3 sentences: key technical features and innovations",
+            "1-2 sentences: quantified improvements and advantages"
+          ],
+          "must_include": [
+            "at least 3 numbered component references (e.g., module 101, engine 102)",
+            "at least 2 quantified performance metrics",
+            "clear statement of technical problem solved"
+          ]
+        },
+        
+        "template": "An {invention_type} for {purpose} comprising {component_1} configured to {function_1}, {component_2} configured to {function_2}, and {component_3} configured to {function_3}. The {key_innovation} enables {technical_benefit}, achieving {metric_1} and {metric_2} compared to {baseline}. In representative deployments, the system {performance_outcome}, thereby providing {technical_advantage}."
+      }
+    },
+    
+    "structural_requirements": {
+      "enabled": true,
+      "priority": "MAJOR",
+      
+      "mandatory_sections": {
+        "order": [
+          "HEADER",
+          "CROSS-REFERENCE TO RELATED APPLICATIONS",
+          "STATEMENT REGARDING FEDERALLY SPONSORED R&D",
+          "FIELD OF THE INVENTION",
+          "BACKGROUND",
+          "SUMMARY",
+          "DEFINITIONS (if needed)",
+          "BRIEF DESCRIPTION OF THE DRAWINGS",
+          "DETAILED DESCRIPTION OF EMBODIMENTS",
+          "CLAIMS",
+          "ABSTRACT"
+        ],
+        
+        "section_requirements": {
+          "FIELD_OF_THE_INVENTION": {
+            "minimum_paragraphs": 3,
+            "must_include": [
+              "technical field classification (CPC codes)",
+              "technical problem statement",
+              "scope of application and market context"
+            ]
+          },
+          "BACKGROUND": {
+            "minimum_paragraphs": 5,
+            "must_include": [
+              "description of existing solutions",
+              "technical limitations of prior art (with quantified metrics)",
+              "unmet needs in the field"
+            ]
+          },
+          "SUMMARY": {
+            "minimum_paragraphs": 4,
+            "must_include": [
+              "core innovation description",
+              "key components and their interactions",
+              "quantified improvements (at least 3 metrics)",
+              "technical advantages over prior art"
+            ]
+          },
+          "DETAILED_DESCRIPTION": {
+            "minimum_paragraphs": 10,
+            "must_include": [
+              "at least one complete worked example with numerical values",
+              "explanation of every figure referenced in BRIEF DESCRIPTION",
+              "multiple embodiments or variations",
+              "enablement details (algorithms, configurations, parameters)"
+            ]
+          }
+        }
+      }
+    },
+    
+    "numerical_precision": {
+      "enabled": true,
+      "priority": "HIGH",
+      
+      "measurement_standards": {
+        "performance_metrics": {
+          "latency": {
+            "unit": "milliseconds (ms) or seconds (s)",
+            "precision": "integer for ms, one decimal for seconds",
+            "context_required": "load condition, percentile (e.g., p95, p99)",
+            "example": "median latency of 180 ms under load of 2,500 concurrent instances"
+          },
+          "throughput": {
+            "unit": "operations/requests/transactions per second or per hour",
+            "precision": "integer",
+            "context_required": "resource configuration",
+            "example": "processes 50,000 node transitions per hour on 16 vCPU cores"
+          },
+          "accuracy": {
+            "unit": "percentage (%) or decimal [0.0-1.0]",
+            "precision": "one decimal for percentage, two decimals for ratio",
+            "context_required": "test set size, evaluation metric",
+            "example": "achieves 94.2% accuracy on a test set of 15,000 labeled tickets"
+          },
+          "improvement": {
+            "format": "from {baseline} to {improved} (at least {percentage}% {direction})",
+            "example": "reduces median latency from 420 ms to 180 ms (at least 57% reduction)"
+          }
+        },
+        
+        "resource_specifications": {
+          "cpu": "number of vCPU cores (integer)",
+          "memory": "GB or MB (integer)",
+          "storage": "GB or TB (integer or one decimal)",
+          "network": "Gbps or Mbps (integer)",
+          "example": "deployed as four Kubernetes pods, each with 4 vCPU cores and 8 GB of RAM"
+        }
+      }
+    },
+    
+    "consistency_checks": {
+      "enabled": true,
+      "priority": "HIGH",
+      
+      "cross_section_validation": {
+        "component_references": {
+          "rule": "every component mentioned in CLAIMS must be defined in DETAILED DESCRIPTION",
+          "numbering": "consistent reference numbers (e.g., 101, 102) across all sections",
+          "first_use": "full name with reference number in parentheses, then reference number only"
+        },
+        
+        "performance_claims": {
+          "rule": "every quantified claim in SUMMARY must be supported by example in DETAILED DESCRIPTION",
+          "requirement": "provide test conditions, sample size, and measurement method"
+        },
+        
+        "figure_coverage": {
+          "rule": "every figure listed in BRIEF DESCRIPTION must be explained in DETAILED DESCRIPTION",
+          "requirement": "at least one paragraph (4+ sentences) per figure"
+        }
+      }
+    },
+    
+    "language_clarity": {
+      "enabled": true,
+      "priority": "MINOR",
+      
+      "preferred_constructions": {
+        "capability": {
+          "use": "configured to, adapted to, operable to",
+          "avoid": "can, may, could, might"
+        },
+        "implementation": {
+          "use": "comprises, includes, consists of, implemented as",
+          "avoid": "may include, could comprise, might consist of"
+        },
+        "optionality": {
+          "use": "optionally comprises, in some embodiments, in one implementation",
+          "avoid": "may optionally, could also, might additionally"
+        }
+      },
+      
+      "sentence_structure": {
+        "maximum_length": "40 words for main clauses",
+        "complex_sentences": "use semicolons or split into multiple sentences",
+        "technical_terms": "define on first use in each major section"
+      }
+    },
+    
+    "review_checklist": {
+      "enabled": true,
+      "execute_before_submission": true,
+      
+      "automated_checks": [
+        {
+          "check": "vague_terms_scan",
+          "action": "flag all instances of: aproximadamente, sustancialmente, generalmente, alrededor de, puede, podría",
+          "threshold": "0 instances allowed in CLAIMS, max 5 instances in DETAILED DESCRIPTION"
+        },
+        {
+          "check": "figure_reference_completeness",
+          "action": "verify each FIG.X in BRIEF DESCRIPTION has explanation paragraph in DETAILED DESCRIPTION",
+          "threshold": "100% coverage required"
+        },
+        {
+          "check": "abstract_presence",
+          "action": "verify ABSTRACT section exists after CLAIMS",
+          "threshold": "mandatory"
+        },
+        {
+          "check": "numerical_precision",
+          "action": "verify all performance claims include: baseline, improved value, percentage change, test conditions",
+          "threshold": "100% of quantified claims"
+        },
+        {
+          "check": "component_definition",
+          "action": "verify each component in CLAIMS (101, 102, etc.) has detailed definition in DETAILED DESCRIPTION",
+          "threshold": "100% coverage required"
+        },
+        {
+          "check": "claim_specificity",
+          "action": "verify independent claims include: data formats, size ranges, timing constraints, performance thresholds",
+          "threshold": "at least 4 quantified parameters per independent claim"
+        }
+      ]
+    }
+  },
+  
+  "application_notes": {
+    "deployment_instructions": "Apply these rules during patent generation phase, before final review",
+    "priority_order": [
+      "1. Eliminate all vague terms in CLAIMS (CRITICAL)",
+      "2. Add technical implementation details to module descriptions (CRITICAL)",
+      "3. Complete figure explanations in DETAILED DESCRIPTION (MAJOR)",
+      "4. Add ABSTRACT section if missing (MAJOR)",
+      "5. Replace ambiguous modal verbs (MINOR)"
+    ],
+    "quality_target": "Achieve score ≥9.0 on evaluator scale by addressing all CRITICAL and MAJOR items",
+    "validation": "Run automated_checks before considering patent draft complete"
+  }
+}

@@ -1,0 +1,202 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+    "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+/* Navy Premium Theme Variables */
+@layer base {
+  :root {
+    /* Navy Premium Colors */
+    --navy-primary: 222 47% 11%;
+    --navy-secondary: 217 33% 17%;
+    --slate-text: 215 19% 35%;
+    --gold-primary: 38 47% 81%;
+    --gold-dark: 38 47% 60%;
+    --gold-subtle: 38 47% 91%;
+    
+    /* Shadcn UI Variables - Navy Premium Theme */
+    --background: 222 47% 11%;
+    --foreground: 38 47% 91%;
+    --card: 217 33% 17%;
+    --card-foreground: 38 47% 91%;
+    --popover: 217 33% 17%;
+    --popover-foreground: 38 47% 91%;
+    --primary: 38 47% 81%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 33% 22%;
+    --secondary-foreground: 38 47% 91%;
+    --muted: 217 33% 22%;
+    --muted-foreground: 215 19% 55%;
+    --accent: 38 47% 60%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 217 33% 25%;
+    --input: 217 33% 22%;
+    --ring: 38 47% 60%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-navy-primary text-gold-subtle;
+  }
+}
+
+@layer base {
+  [data-debug-wrapper="true"] {
+    display: contents !important;
+  }
+
+  [data-debug-wrapper="true"] > * {
+    margin-left: inherit;
+    margin-right: inherit;
+    margin-top: inherit;
+    margin-bottom: inherit;
+    padding-left: inherit;
+    padding-right: inherit;
+    padding-top: inherit;
+    padding-bottom: inherit;
+    column-gap: inherit;
+    row-gap: inherit;
+    gap: inherit;
+    border-left-width: inherit;
+    border-right-width: inherit;
+    border-top-width: inherit;
+    border-bottom-width: inherit;
+    border-left-style: inherit;
+    border-right-style: inherit;
+    border-top-style: inherit;
+    border-bottom-style: inherit;
+    border-left-color: inherit;
+    border-right-color: inherit;
+    border-top-color: inherit;
+    border-bottom-color: inherit;
+  }
+}
+
+/* Typography Classes */
+@layer components {
+  .font-display {
+    font-family: 'Fraunces', Georgia, serif;
+  }
+  
+  .text-gold-gradient {
+    background: linear-gradient(135deg, #E6D5B7 0%, #C9A96A 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  
+  /* Premium Card Styles */
+  .card-premium {
+    @apply bg-navy-secondary border border-navy-light/20 rounded-xl shadow-premium;
+  }
+  
+  .card-premium-hover {
+    @apply card-premium transition-all duration-300 hover:border-gold-dark/30 hover:shadow-gold;
+  }
+  
+  /* Gold Accent Border */
+  .border-gold-accent {
+    border-color: rgba(201, 169, 106, 0.3);
+  }
+  
+  /* Premium Button */
+  .btn-premium {
+    @apply bg-gold-primary text-navy-primary font-semibold px-6 py-3 rounded-lg 
+           transition-all duration-200 hover:bg-gold-dark active:scale-[0.98];
+  }
+  
+  .btn-premium-outline {
+    @apply border-2 border-gold-dark text-gold-primary font-semibold px-6 py-3 rounded-lg 
+           transition-all duration-200 hover:bg-gold-dark/10 active:scale-[0.98];
+  }
+  
+  /* Divider */
+  .divider-gold {
+    @apply h-px bg-gradient-to-r from-transparent via-gold-dark/30 to-transparent;
+  }
+}
+
+/* Custom animations */
+@keyframes scale-in {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.5s ease-out forwards;
+}
+
+/* Scrollbar styling for Navy Premium */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1E293B;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748B;
+}
+
+/* Hide scrollbar for horizontal scroll areas */
+.scrollbar-thin-h::-webkit-scrollbar {
+  height: 4px;
+}
+
+.scrollbar-thin-h::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin-h::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 2px;
+}
+
+/* Selection color */
+::selection {
+  background: rgba(201, 169, 106, 0.3);
+  color: #F1E8D8;
+}
+
+/* Focus ring */
+*:focus-visible {
+  outline: 2px solid #C9A96A;
+  outline-offset: 2px;
+}
