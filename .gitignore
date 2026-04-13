@@ -39,3 +39,4 @@ tmp/
 
 # Package locks (keep package-lock.json, ignore yarn.lock dupes)
 yarn.lock
+.claude/worktrees/

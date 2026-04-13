@@ -3971,7 +3971,7 @@ async def start_interactive_niw(input_data: BusinessPlanInput, current_user: Use
         doc['created_at'] = doc['created_at'].isoformat()
         doc['updated_at'] = doc['updated_at'].isoformat()
         
-        insert("niw_petitions", doc)
+        await db.niw_in_progress.insert_one(doc)
         
         return niw_in_progress
     except Exception as e:
@@ -3984,15 +3984,14 @@ async def generate_niw_section(niw_id: str, section_number: int, current_user: U
     try:
         # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
         # Try completed NIWs first (business_plans collection)
-        niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
-  db.business_plans.find_one(
+        niw = await db.business_plans.find_one(
             {"id": niw_id, "user_id": current_user.id},
             {"_id": 0}
         )
         
         # If not found, check in-progress NIWs
         if not niw:
-            niw = select("niw_petitions", filters={"id": niw_id, "user_id": current_user.id}, single=True)
+            niw = await db.niw_in_progress.find_one({"id": niw_id, "user_id": current_user.id})
         
         if not niw:
             raise HTTPException(status_code=404, detail="NIW proposal not found")
@@ -4241,8 +4240,7 @@ async def edit_niw_section(niw_id: str, request: EditSectionRequest, current_use
     try:
         # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
         # Try completed NIWs first (business_plans collection)
-        niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
-  db.business_plans.find_one(
+        niw = await db.business_plans.find_one(
             {"id": niw_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -4252,7 +4250,7 @@ async def edit_niw_section(niw_id: str, request: EditSectionRequest, current_use
         
         # If not found, check in-progress NIWs
         if not niw:
-            niw = select("niw_petitions", filters={"id": niw_id, "user_id": current_user.id}, single=True)
+            niw = await db.niw_in_progress.find_one({"id": niw_id, "user_id": current_user.id})
             if niw:
                 found_in_collection = "niw_in_progress"
         
@@ -4355,15 +4353,14 @@ async def edit_niw_section_bilingual(niw_id: str, request: EditSectionBilingualR
     try:
         # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
         # Try completed NIWs first (business_plans collection)
-        niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
-  db.business_plans.find_one(
+        niw = await db.business_plans.find_one(
             {"id": niw_id, "user_id": current_user.id},
             {"_id": 0}
         )
         
         # If not found, check in-progress NIWs
         if not niw:
-            niw = select("niw_petitions", filters={"id": niw_id, "user_id": current_user.id}, single=True)
+            niw = await db.niw_in_progress.find_one({"id": niw_id, "user_id": current_user.id})
         
         if not niw:
             raise HTTPException(status_code=404, detail="NIW proposal not found")
@@ -4464,8 +4461,7 @@ async def approve_niw_section(niw_id: str, section_data: dict, current_user: Use
     try:
         section_data['approved'] = True
         
-        result = # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.update_one(
+        result = await db.niw_in_progress.update_one(
             {"id": niw_id, "user_id": current_user.id},
             {
                 "$pull": {"sections": {"number": section_data['number']}},
@@ -4473,12 +4469,7 @@ async def approve_niw_section(niw_id: str, section_data: dict, current_user: Use
             }
         )
         
-        # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
-
-        
-        
-        
-        db.niw_in_progress.update_one(
+        await db.niw_in_progress.update_one(
             {"id": niw_id, "user_id": current_user.id},
             {
                 "$push": {"sections": section_data},
@@ -4511,15 +4502,14 @@ async def finalize_niw(niw_id: str, current_user: User = Depends(get_current_use
     try:
         # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
         # Try completed NIWs first (business_plans collection)
-        niw_in_progress = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
-  db.business_plans.find_one(
+        niw_in_progress = await db.business_plans.find_one(
             {"id": niw_id, "user_id": current_user.id},
             {"_id": 0}
         )
         
         # If not found, check in-progress NIWs
         if not niw_in_progress:
-            niw_in_progress = select("niw_petitions", filters={"id": niw_id, "user_id": current_user.id}, single=True)
+            niw_in_progress = await db.niw_in_progress.find_one({"id": niw_id, "user_id": current_user.id})
         
         if not niw_in_progress:
             raise HTTPException(status_code=404, detail="NIW proposal not found")
@@ -4564,7 +4554,7 @@ async def finalize_niw(niw_id: str, current_user: User = Depends(get_current_use
         doc['created_at'] = doc['created_at'].isoformat()
         doc['updated_at'] = doc['updated_at'].isoformat()
         
-        insert("business_plans", doc)
+        await db.business_plans.insert_one(doc)
         
         # Apply Gamma if requested
         if niw_in_progress['has_graphic_design'] and niw_in_progress.get('design_description'):
@@ -4576,10 +4566,7 @@ async def finalize_niw(niw_id: str, current_user: User = Depends(get_current_use
                 )
                 
                 if gamma_result.get('gamma_url'):
-                    # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
-
-                    
-                    db.business_plans.update_one(
+                    await db.business_plans.update_one(
                         {"id": plan.id},
                         {"$set": {
                             "gamma_url": gamma_result.get('gamma_url'),
@@ -4594,10 +4581,7 @@ async def finalize_niw(niw_id: str, current_user: User = Depends(get_current_use
                 logging.error(f"Gamma processing failed (non-critical): {str(gamma_error)}")
         
         # Mark in-progress as completed
-        # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
-
-        
-        db.niw_in_progress.update_one(
+        await db.niw_in_progress.update_one(
             {"id": niw_id},
             {"$set": {"status": "completed"}}
         )
@@ -4614,7 +4598,7 @@ async def finalize_niw(niw_id: str, current_user: User = Depends(get_current_use
         # Save to Supabase if client has supabase_id
         if plan.client_id:
             try:
-                client_doc = select("clients", filters={"id": plan.client_id}, {"_id": 0}, single=True)
+                client_doc = await db.clients.find_one({"id": plan.client_id}, {"_id": 0})
                 if client_doc and client_doc.get('supabase_id'):
                     document_data = {
                         "id": plan.id,
@@ -4645,15 +4629,14 @@ async def get_niw_in_progress(niw_id: str, current_user: User = Depends(get_curr
     """Get NIW proposal in progress"""
     # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
     # Try completed NIWs first (business_plans collection)
-    niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
-  db.business_plans.find_one(
+    niw = await db.business_plans.find_one(
         {"id": niw_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     # If not found, check in-progress NIWs
     if not niw:
-        niw = select("niw_petitions", filters={"id": niw_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+        niw = await db.niw_in_progress.find_one({"id": niw_id, "user_id": current_user.id}, {"_id": 0})
     
     if not niw:
         raise HTTPException(status_code=404, detail="NIW proposal not found")
@@ -4675,8 +4658,7 @@ async def get_niws_in_progress(
     if client_id:
         query["client_id"] = client_id
     
-    niws = # TODO: db.niw_in_progress.find needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
+    niws = await db.niw_in_progress.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
     
     for niw in niws:
         if isinstance(niw.get('created_at'), str):
@@ -4690,8 +4672,7 @@ async def get_niws_in_progress(
 @api_router.get("/business-plans/drafts", response_model=List[NIWInProgress])
 async def get_niw_drafts(current_user: User = Depends(get_current_user)):
     """Get all draft NIW proposals"""
-    drafts = # TODO: db.niw_in_progress.find needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.find(
+    drafts = await db.niw_in_progress.find(
         {"user_id": current_user.id, "status": "draft"},
         {"_id": 0}
     ).to_list(length=None)
@@ -4714,8 +4695,7 @@ async def get_business_plans(
     if client_id:
         query["client_id"] = client_id
     
-    plans = # TODO: db.business_plans.find needs manual conversion → table "business_plans"
-  db.business_plans.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    plans = await db.business_plans.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
     for plan in plans:
         if isinstance(plan['created_at'], str):
@@ -4727,15 +4707,15 @@ async def get_business_plans(
 async def get_business_plan(plan_id: str):
     """Get a specific business plan (searches both in_progress and completed)"""
     # First try completed collection
-    plan = select("business_plans", filters={"id": plan_id}, {"_id": 0}, single=True)
+    plan = await db.business_plans.find_one({"id": plan_id}, {"_id": 0})
     
     # If not found, try in_progress collection (niw_in_progress / business_plans_in_progress)
     if not plan:
-        plan = select("niw_petitions", filters={"id": plan_id}, {"_id": 0}, single=True)
+        plan = await db.niw_in_progress.find_one({"id": plan_id}, {"_id": 0})
     
     # Also try business_plans_in_progress
     if not plan:
-        plan = select("business_plans", filters={"id": plan_id}, {"_id": 0}, single=True)
+        plan = await db.business_plans_in_progress.find_one({"id": plan_id}, {"_id": 0})
     
     if not plan:
         raise HTTPException(status_code=404, detail="Business plan not found")
@@ -4766,13 +4746,13 @@ async def get_business_plan(plan_id: str):
 async def get_business_plan_sections(plan_id: str):
     """Get business plan broken down into sections (searches all collections)"""
     # Search in all collections (same as GET /{plan_id})
-    plan = select("business_plans", filters={"id": plan_id}, {"_id": 0}, single=True)
+    plan = await db.business_plans.find_one({"id": plan_id}, {"_id": 0})
     
     if not plan:
-        plan = select("niw_petitions", filters={"id": plan_id}, {"_id": 0}, single=True)
+        plan = await db.niw_in_progress.find_one({"id": plan_id}, {"_id": 0})
     
     if not plan:
-        plan = select("business_plans", filters={"id": plan_id}, {"_id": 0}, single=True)
+        plan = await db.business_plans_in_progress.find_one({"id": plan_id}, {"_id": 0})
     
     if not plan:
         raise HTTPException(status_code=404, detail="Business plan not found")
@@ -4868,7 +4848,7 @@ async def get_business_plan_sections(plan_id: str):
 async def update_business_plan_section(plan_id: str, section_number: int, request: EditSectionRequest):
     """Update a specific section of a finalized business plan"""
     try:
-        plan = select("business_plans", filters={"id": plan_id}, {"_id": 0}, single=True)
+        plan = await db.business_plans.find_one({"id": plan_id}, {"_id": 0})
         if not plan:
             raise HTTPException(status_code=404, detail="Business plan not found")
         
@@ -4928,10 +4908,7 @@ Format your response as:
             new_content = content[:section_start] + improved_section + '\n\n' + content[next_section_start:]
         
         # Update in database
-        # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
-
-        
-        db.business_plans.update_one(
+        await db.business_plans.update_one(
             {"id": plan_id},
             {"$set": {"content": new_content}}
         )
@@ -4951,8 +4928,7 @@ async def update_business_plan(
     """Update business plan content"""
     # 🔥 CRITICAL FIX: Check both collections and verify ownership
     # Try completed plans first
-    result = # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
-  db.business_plans.update_one(
+    result = await db.business_plans.update_one(
         {"id": plan_id, "user_id": current_user.id},
         {"$set": {
             "content": content,
@@ -4962,8 +4938,7 @@ async def update_business_plan(
     
     # If not found in completed, try in-progress
     if result.matched_count == 0:
-        result = # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.update_one(
+        result = await db.niw_in_progress.update_one(
             {"id": plan_id, "user_id": current_user.id},
             {"$set": {
                 "content": content,
@@ -4987,12 +4962,10 @@ async def delete_business_plan(plan_id: str, current_user: User = Depends(get_cu
     """Delete a business plan (both in-progress and completed)"""
     try:
         # Try to delete from both collections
-        result_progress = # TODO: db.niw_in_progress.delete_one needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.delete_one(
+        result_progress = await db.niw_in_progress.delete_one(
             {"id": plan_id, "user_id": current_user.id}
         )
-        result_completed = # TODO: db.business_plans.delete_one needs manual conversion → table "business_plans"
-  db.business_plans.delete_one(
+        result_completed = await db.business_plans.delete_one(
             {"id": plan_id, "user_id": current_user.id}
         )
         
@@ -5010,13 +4983,13 @@ async def delete_business_plan(plan_id: str, current_user: User = Depends(get_cu
 async def download_business_plan_pdf(plan_id: str, language: str = "es"):
     """Download business plan as PDF (searches all collections) - supports language parameter"""
     # Search in all collections (same as GET /{plan_id})
-    plan = select("business_plans", filters={"id": plan_id}, {"_id": 0}, single=True)
+    plan = await db.business_plans.find_one({"id": plan_id}, {"_id": 0})
     
     if not plan:
-        plan = select("niw_petitions", filters={"id": plan_id}, {"_id": 0}, single=True)
+        plan = await db.niw_in_progress.find_one({"id": plan_id}, {"_id": 0})
     
     if not plan:
-        plan = select("business_plans", filters={"id": plan_id}, {"_id": 0}, single=True)
+        plan = await db.business_plans_in_progress.find_one({"id": plan_id}, {"_id": 0})
     
     if not plan:
         raise HTTPException(status_code=404, detail="Business plan not found")
@@ -5431,7 +5404,7 @@ async def start_interactive_book(input_data: BookInput, current_user: User = Dep
         doc['updated_at'] = doc['updated_at'].isoformat()
         
         logging.info(f"📚 Attempting to insert book: {doc['id']}, Title: {doc['title']}")
-        result = insert("generated_documents", doc)
+        result = await db.books_in_progress.insert_one(doc)
         logging.info(f"✅ Book inserted successfully: {result.inserted_id}")
         
         return book_in_progress
@@ -5443,7 +5416,7 @@ async def start_interactive_book(input_data: BookInput, current_user: User = Dep
 async def generate_chapter(book_id: str, chapter_number: int, current_user: User = Depends(get_current_user)):
     """Generate a specific chapter"""
     try:
-        book = select("generated_documents", filters={"id": book_id, "user_id": current_user.id}, single=True)
+        book = await db.books_in_progress.find_one({"id": book_id, "user_id": current_user.id})
         if not book:
             raise HTTPException(status_code=404, detail="Book not found")
         
@@ -5722,7 +5695,7 @@ class EditChapterRequest(BaseModel):
 async def edit_chapter(book_id: str, request: EditChapterRequest, current_user: User = Depends(get_current_user)):
     """Regenerate chapter with edit instructions and automatic quality evaluation"""
     try:
-        book = select("generated_documents", filters={"id": book_id, "user_id": current_user.id}, single=True)
+        book = await db.books_in_progress.find_one({"id": book_id, "user_id": current_user.id})
         if not book:
             raise HTTPException(status_code=404, detail="Book not found")
         
@@ -5989,8 +5962,7 @@ async def approve_chapter(book_id: str, chapter_data: dict, current_user: User =
     try:
         chapter_data['approved'] = True
         
-        result = # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
-  db.books_in_progress.update_one(
+        result = await db.books_in_progress.update_one(
             {"id": book_id, "user_id": current_user.id},
             {
                 "$pull": {"chapters": {"number": chapter_data['number']}},
@@ -5998,12 +5970,7 @@ async def approve_chapter(book_id: str, chapter_data: dict, current_user: User =
             }
         )
         
-        # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
-
-        
-        
-        
-        db.books_in_progress.update_one(
+        await db.books_in_progress.update_one(
             {"id": book_id, "user_id": current_user.id},
             {
                 "$push": {"chapters": chapter_data},
@@ -6024,7 +5991,7 @@ async def approve_chapter(book_id: str, chapter_data: dict, current_user: User =
 async def finalize_book(book_id: str, current_user: User = Depends(get_current_user)):
     """Finalize book and move to completed books"""
     try:
-        book_in_progress = select("generated_documents", filters={"id": book_id, "user_id": current_user.id}, single=True)
+        book_in_progress = await db.books_in_progress.find_one({"id": book_id, "user_id": current_user.id})
         if not book_in_progress:
             raise HTTPException(status_code=404, detail="Book not found")
         
@@ -6050,7 +6017,7 @@ async def finalize_book(book_id: str, current_user: User = Depends(get_current_u
         doc = book.model_dump()
         doc['created_at'] = doc['created_at'].isoformat()
         
-        insert("generated_documents", doc)
+        await db.books.insert_one(doc)
         
         # Apply Gamma if requested
         if book_in_progress['has_graphic_design'] and book_in_progress.get('design_description'):
@@ -6062,10 +6029,7 @@ async def finalize_book(book_id: str, current_user: User = Depends(get_current_u
                 )
                 
                 if gamma_result.get('gamma_url'):
-                    # TODO: db.books.update_one needs manual conversion → table "generated_documents"
-
-                    
-                    db.books.update_one(
+                    await db.books.update_one(
                         {"id": book.id},
                         {"$set": {
                             "gamma_url": gamma_result.get('gamma_url'),
@@ -6080,10 +6044,7 @@ async def finalize_book(book_id: str, current_user: User = Depends(get_current_u
                 logging.error(f"Gamma processing failed (non-critical): {str(gamma_error)}")
         
         # Delete in-progress book
-        # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
-
-        
-        db.books_in_progress.update_one(
+        await db.books_in_progress.update_one(
             {"id": book_id},
             {"$set": {"status": "completed"}}
         )
@@ -6100,7 +6061,7 @@ async def finalize_book(book_id: str, current_user: User = Depends(get_current_u
         # Save to Supabase if client has supabase_id
         if book.client_id:
             try:
-                client_doc = select("clients", filters={"id": book.client_id}, {"_id": 0}, single=True)
+                client_doc = await db.clients.find_one({"id": book.client_id}, {"_id": 0})
                 if client_doc and client_doc.get('supabase_id'):
                     document_data = {
                         "id": book.id,
@@ -6132,18 +6093,16 @@ async def finalize_book(book_id: str, current_user: User = Depends(get_current_u
 async def test_books_count(current_user: User = Depends(get_current_user)):
     """Debug endpoint to check books count"""
     try:
-        books_in_progress = count("generated_documents", {"user_id": current_user.id})
-        books_completed = count("generated_documents", {"user_id": current_user.id})
+        books_in_progress = await db.books_in_progress.count_documents({"user_id": current_user.id})
+        books_completed = await db.books.count_documents({"user_id": current_user.id})
         
         # Get sample books
-        samples_in_progress = # TODO: db.books_in_progress.find needs manual conversion → table "generated_documents"
-  db.books_in_progress.find(
+        samples_in_progress = await db.books_in_progress.find(
             {"user_id": current_user.id}, 
             {"_id": 0, "id": 1, "title": 1, "created_at": 1}
         ).limit(5).to_list(5)
         
-        samples_completed = # TODO: db.books.find needs manual conversion → table "generated_documents"
-  db.books.find(
+        samples_completed = await db.books.find(
             {"user_id": current_user.id},
             {"_id": 0, "id": 1, "title": 1, "created_at": 1}
         ).limit(5).to_list(5)
@@ -6161,7 +6120,7 @@ async def test_books_count(current_user: User = Depends(get_current_user)):
 @api_router.get("/books/in-progress/{book_id}", response_model=BookInProgress)
 async def get_book_in_progress(book_id: str, current_user: User = Depends(get_current_user)):
     """Get book in progress"""
-    book = select("generated_documents", filters={"id": book_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+    book = await db.books_in_progress.find_one({"id": book_id, "user_id": current_user.id}, {"_id": 0})
     
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -6183,8 +6142,7 @@ async def get_books_in_progress(
     if client_id:
         query["client_id"] = client_id
     
-    books = # TODO: db.books_in_progress.find needs manual conversion → table "generated_documents"
-  db.books_in_progress.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
+    books = await db.books_in_progress.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
     
     for book in books:
         if isinstance(book.get('created_at'), str):
@@ -6198,8 +6156,7 @@ async def get_books_in_progress(
 @api_router.get("/books/drafts", response_model=List[BookInProgress])
 async def get_book_drafts(current_user: User = Depends(get_current_user)):
     """Get all draft books"""
-    drafts = # TODO: db.books_in_progress.find needs manual conversion → table "generated_documents"
-  db.books_in_progress.find(
+    drafts = await db.books_in_progress.find(
         {"user_id": current_user.id, "status": "draft"},
         {"_id": 0}
     ).to_list(length=None)
@@ -6222,8 +6179,7 @@ async def get_books(
     if client_id:
         query["client_id"] = client_id
     
-    books = # TODO: db.books.find needs manual conversion → table "generated_documents"
-  db.books.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    books = await db.books.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
     for book in books:
         if isinstance(book['created_at'], str):
@@ -6234,7 +6190,7 @@ async def get_books(
 @api_router.get("/books/{book_id}", response_model=Book)
 async def get_book(book_id: str):
     """Get a specific book"""
-    book = select("generated_documents", filters={"id": book_id}, {"_id": 0}, single=True)
+    book = await db.books.find_one({"id": book_id}, {"_id": 0})
     
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -6247,7 +6203,7 @@ async def get_book(book_id: str):
 @api_router.get("/books/{book_id}/chapters")
 async def get_book_chapters(book_id: str):
     """Get book broken down into chapters"""
-    book = select("generated_documents", filters={"id": book_id}, {"_id": 0}, single=True)
+    book = await db.books.find_one({"id": book_id}, {"_id": 0})
     
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -6312,7 +6268,7 @@ async def get_book_chapters(book_id: str):
 async def update_book_chapter(book_id: str, chapter_number: int, request: EditChapterRequest):
     """Update a specific chapter of a finalized book"""
     try:
-        book = select("generated_documents", filters={"id": book_id}, {"_id": 0}, single=True)
+        book = await db.books.find_one({"id": book_id}, {"_id": 0})
         if not book:
             raise HTTPException(status_code=404, detail="Book not found")
         
@@ -6371,10 +6327,7 @@ Format your response as:
             new_content = content[:chapter_start] + improved_chapter + '\n\n' + content[next_chapter_start:]
         
         # Update in database
-        # TODO: db.books.update_one needs manual conversion → table "generated_documents"
-
-        
-        db.books.update_one(
+        await db.books.update_one(
             {"id": book_id},
             {"$set": {"content": new_content}}
         )
@@ -6388,8 +6341,7 @@ Format your response as:
 @api_router.put("/books/{book_id}")
 async def update_book(book_id: str, content: str):
     """Update book content"""
-    result = # TODO: db.books.update_one needs manual conversion → table "generated_documents"
-  db.books.update_one(
+    result = await db.books.update_one(
         {"id": book_id},
         {"$set": {
             "content": content,
@@ -6400,7 +6352,7 @@ async def update_book(book_id: str, content: str):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Book not found")
     
-    book = select("generated_documents", filters={"id": book_id}, {"_id": 0}, single=True)
+    book = await db.books.find_one({"id": book_id}, {"_id": 0})
     if isinstance(book['created_at'], str):
         book['created_at'] = datetime.fromisoformat(book['created_at'])
     
@@ -6411,12 +6363,10 @@ async def delete_book(book_id: str, current_user: User = Depends(get_current_use
     """Delete a book (both in-progress and completed)"""
     try:
         # Try to delete from both collections
-        result_progress = # TODO: db.books_in_progress.delete_one needs manual conversion → table "generated_documents"
-  db.books_in_progress.delete_one(
+        result_progress = await db.books_in_progress.delete_one(
             {"id": book_id, "user_id": current_user.id}
         )
-        result_completed = # TODO: db.books.delete_one needs manual conversion → table "generated_documents"
-  db.books.delete_one(
+        result_completed = await db.books.delete_one(
             {"id": book_id, "user_id": current_user.id}
         )
         
@@ -6434,17 +6384,17 @@ async def delete_book(book_id: str, current_user: User = Depends(get_current_use
 async def generate_book_translation(book_id: str, current_user: User = Depends(get_current_user)):
     """Generate English translations for all book chapters and metadata"""
     # Try both collections - books (completed) and books_in_progress
-    book = select("generated_documents", filters={"id": book_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+    book = await db.books.find_one({"id": book_id, "user_id": current_user.id}, {"_id": 0})
     
     if not book:
         # Try in-progress collection
-        book = select("generated_documents", filters={"id": book_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+        book = await db.books_in_progress.find_one({"id": book_id, "user_id": current_user.id}, {"_id": 0})
     
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     
     # Determine which collection to update
-    collection = db.books if count("generated_documents", {"id": book_id}) > 0 else db.books_in_progress
+    collection = db.books if await db.books.count_documents({"id": book_id}) > 0 else db.books_in_progress
     
     update_data = {}
     
@@ -6604,7 +6554,7 @@ async def download_book_pdf(
     language: str = 'es'  # ⭐ Parámetro de idioma
 ):
     """Download book as PDF in specified language"""
-    book = select("generated_documents", filters={"id": book_id}, {"_id": 0}, single=True)
+    book = await db.books.find_one({"id": book_id}, {"_id": 0})
     
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -7157,7 +7107,7 @@ async def start_patent_interactive(input_data: PatentInput, current_user: User =
     if input_data.project_description:
         patent_dict['project_description'] = input_data.project_description
     
-    insert("patents", patent_dict)
+    await db.patents_in_progress.insert_one(patent_dict)
     
     return patent
 
@@ -7326,8 +7276,7 @@ async def generate_patent_section(
     # Reset token tracker for this section generation
     reset_token_tracker()
     
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+    patent = await db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -7814,8 +7763,7 @@ Please regenerate the section now, fixing ALL these problems."""
     # AUTO-SAVE SECTION IF IT PASSED EVALUATION (NEW PATENT EVALUATOR FIX)
     if evaluation_passed:
         # ⭐ CRITICAL FIX: Refresh patent from DB to get latest sections
-        patent_fresh = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+        patent_fresh = await db.patents_in_progress.find_one(
             {"id": patent_id},
             {"_id": 0}
         )
@@ -7851,8 +7799,7 @@ Please regenerate the section now, fixing ALL these problems."""
             logging.info(f"   content_en length: {len(section_to_save.get('content_en', ''))}")
         
         # Update patent in database
-        result = # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-  db.patents_in_progress.update_one(
+        result = await db.patents_in_progress.update_one(
             {"id": patent_id},
             {
                 "$set": {
@@ -7893,8 +7840,7 @@ async def generate_complete_patent(
     
     # Get patent data - try both collections and remember which one
     patent_collection = None
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+    patent = await db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -7903,8 +7849,7 @@ async def generate_complete_patent(
         patent_collection = db.patents_in_progress
     else:
         # Try in patents collection
-        patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+        patent = await db.patents.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -7917,7 +7862,7 @@ async def generate_complete_patent(
     # Get client data to populate inventor address information
     client_data = {}
     if patent.get('client_id'):
-        client = select("clients", filters={"id": patent['client_id']}, {"_id": 0}, single=True)
+        client = await db.clients.find_one({"id": patent['client_id']}, {"_id": 0})
         if client:
             client_data = {
                 'client_city': client.get('city', ''),
@@ -8015,8 +7960,7 @@ async def clean_patent_sections(
     current_user: User = Depends(get_current_user)
 ):
     """Clean existing sections from smart quotes and special characters"""
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+    patent = await db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -8038,10 +7982,7 @@ async def clean_patent_sections(
         cleaned_sections.append(cleaned_section)
     
     # Update in database
-    # TODO: db.patents.update_one needs manual conversion → table "patents"
-
-    
-    db.patents.update_one(
+    await db.patents.update_one(
         {"id": patent_id, "user_id": current_user.id},
         {"$set": {"sections": cleaned_sections}}
     )
@@ -8061,8 +8002,7 @@ async def approve_patent_section(
     logging.info(f"   Section title: {section.title}")
     logging.info(f"   Content length: {len(section.content) if section.content else 0}")
     
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+    patent = await db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -8088,10 +8028,7 @@ async def approve_patent_section(
         sections.append(section_dict)
     
     # Update patent
-    # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-    
-    db.patents_in_progress.update_one(
+    await db.patents_in_progress.update_one(
         {"id": patent_id},
         {
             "$set": {
@@ -8123,8 +8060,7 @@ async def edit_patent_section(
     """Edit a patent section with AI regeneration (for in-progress patents)"""
     try:
         # First check in-progress patents (during interactive creation)
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+        patent = await db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -8132,8 +8068,7 @@ async def edit_patent_section(
         is_in_progress = True
         if not patent:
             # Check completed patents
-            patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+            patent = await db.patents.find_one(
                 {"id": patent_id, "user_id": current_user.id},
                 {"_id": 0}
             )
@@ -8319,12 +8254,7 @@ Write all content {language_instruction} following USPTO standards. Keep content
             # Update in database
             updated_sections = [s if s['number'] != section_number else updated_section for s in sections]
             
-            # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-            
-            
-            
-            db.patents_in_progress.update_one(
+            await db.patents_in_progress.update_one(
                 {"id": patent_id},
                 {
                     "$set": {
@@ -8353,12 +8283,7 @@ Write all content {language_instruction} following USPTO standards. Keep content
             
             update_field["updated_at"] = datetime.now(timezone.utc).isoformat()
             
-            # TODO: db.patents.update_one needs manual conversion → table "patents"
-
-            
-            
-            
-            db.patents.update_one(
+            await db.patents.update_one(
                 {"id": patent_id},
                 {"$set": update_field}
             )
@@ -8706,8 +8631,7 @@ async def generate_patent_drawings(
     logging.info(f"🎨 Starting NEW diagram generation with GPT-4o for patent {patent_id}")
     
     # Try to find patent in both in_progress and completed collections
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+    patent = await db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -8715,8 +8639,7 @@ async def generate_patent_drawings(
     is_finalized = False
     if not patent:
         # Check in finalized patents
-        patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+        patent = await db.patents.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -8791,8 +8714,7 @@ async def generate_patent_drawings(
 @api_router.post("/patents/finalize/{patent_id}")
 async def finalize_patent(patent_id: str, current_user: User = Depends(get_current_user)):
     """Finalize patent application and create completed document"""
-    patent_progress = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+    patent_progress = await db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -8839,7 +8761,7 @@ async def finalize_patent(patent_id: str, current_user: User = Depends(get_curre
     if patent_progress.get('drawings_content_en'):
         patent_dict['drawings_content_en'] = patent_progress['drawings_content_en']
     
-    insert("patents", patent_dict)
+    await db.patents.insert_one(patent_dict)
     
     # Auto-save version for finalization
     await auto_save_version(
@@ -8853,7 +8775,7 @@ async def finalize_patent(patent_id: str, current_user: User = Depends(get_curre
     # Save to Supabase if client has supabase_id
     if patent.client_id:
         try:
-            client_doc = select("clients", filters={"id": patent.client_id}, {"_id": 0}, single=True)
+            client_doc = await db.clients.find_one({"id": patent.client_id}, {"_id": 0})
             if client_doc and client_doc.get('supabase_id'):
                 document_data = {
                     "id": patent.id,
@@ -8875,7 +8797,7 @@ async def finalize_patent(patent_id: str, current_user: User = Depends(get_curre
             logging.error(f"Error saving to Supabase (non-critical): {str(supabase_error)}")
     
     # Delete in-progress
-    delete("patents", {"id": patent_id})
+    await db.patents_in_progress.delete_one({"id": patent_id})
     
     return {
         "message": "Patent finalized successfully",
@@ -8886,8 +8808,7 @@ async def finalize_patent(patent_id: str, current_user: User = Depends(get_curre
 @api_router.get("/patents/in-progress/{patent_id}", response_model=PatentInProgress)
 async def get_patent_in_progress(patent_id: str, current_user: User = Depends(get_current_user)):
     """Get a patent in progress"""
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+    patent = await db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -8924,8 +8845,7 @@ async def get_patents_in_progress(
     # Complete patents should be fetched from /patents endpoint
     query["status"] = {"$ne": "complete"}
     
-    patents = # TODO: db.patents_in_progress.find needs manual conversion → table "patents"
-  db.patents_in_progress.find(query, {"_id": 0}).to_list(length=None)
+    patents = await db.patents_in_progress.find(query, {"_id": 0}).to_list(length=None)
     
     for patent in patents:
         if isinstance(patent.get('created_at'), str):
@@ -8946,8 +8866,7 @@ async def get_patents(
         query["client_id"] = client_id
     
     # Get completed patents from the patents collection
-    patents = # TODO: db.patents.find needs manual conversion → table "patents"
-  db.patents.find(query, {"_id": 0}).to_list(length=None)
+    patents = await db.patents.find(query, {"_id": 0}).to_list(length=None)
     
     # 🔥 FIX: Also get completed V2 patents from patents_in_progress collection
     # V2 patents stay in patents_in_progress but with status="complete"
@@ -8955,8 +8874,7 @@ async def get_patents(
     if client_id:
         query_complete_v2["client_id"] = client_id
     
-    completed_v2_patents = # TODO: db.patents_in_progress.find needs manual conversion → table "patents"
-  db.patents_in_progress.find(query_complete_v2, {"_id": 0}).to_list(length=None)
+    completed_v2_patents = await db.patents_in_progress.find(query_complete_v2, {"_id": 0}).to_list(length=None)
     
     # Merge both lists
     all_patents = patents + completed_v2_patents
@@ -8967,16 +8885,14 @@ async def get_patents(
 async def get_patent(patent_id: str, current_user: User = Depends(get_current_user)):
     """Get a specific patent (searches both completed and in-progress)"""
     # First check completed patents
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+    patent = await db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     # If not found, check in-progress patents
     if not patent:
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+        patent = await db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -9051,12 +8967,10 @@ async def delete_patent(patent_id: str, current_user: User = Depends(get_current
     """Delete a patent (both in-progress and completed)"""
     try:
         # Try to delete from both collections
-        result_progress = # TODO: db.patents_in_progress.delete_one needs manual conversion → table "patents"
-  db.patents_in_progress.delete_one(
+        result_progress = await db.patents_in_progress.delete_one(
             {"id": patent_id, "user_id": current_user.id}
         )
-        result_completed = # TODO: db.patents.delete_one needs manual conversion → table "patents"
-  db.patents.delete_one(
+        result_completed = await db.patents.delete_one(
             {"id": patent_id, "user_id": current_user.id}
         )
         
@@ -9229,8 +9143,7 @@ async def download_patent_specification(
     current_user: User = Depends(get_current_user)
 ):
     """Download patent specification as PDF in specified language"""
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+    patent = await db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -9374,8 +9287,7 @@ async def generate_patent_translation(
     current_user: User = Depends(get_current_user)
 ):
     """Generate English translation for existing patent sections using chunked translation"""
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+    patent = await db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -9509,10 +9421,7 @@ Keep the translations professional, technical, and concise."""
                 update_data["invention_description_en"] = patent.get('invention_description', '')
     
     # Update patent in database
-    # TODO: db.patents.update_one needs manual conversion → table "patents"
-
-    
-    db.patents.update_one(
+    await db.patents.update_one(
         {"id": patent_id},
         {"$set": update_data}
     )
@@ -9527,16 +9436,14 @@ async def download_patent_drawings(
 ):
     """Download patent drawings as PDF in specified language"""
     # Try to find in completed patents first
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+    patent = await db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     # If not found, try patents_in_progress
     if not patent:
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+        patent = await db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -9619,9 +9526,9 @@ async def generate_patent_content_parts(patent_id: str, language: str, user_id: 
     Returns: (patent, spec_content, drawings_content, drawings_objects, algorithm_content)
     """
     # Get patent
-    patent = select("patents", filters={"id": patent_id, "user_id": user_id}, {"_id": 0}, single=True)
+    patent = await db.patents.find_one({"id": patent_id, "user_id": user_id}, {"_id": 0})
     if not patent:
-        patent = select("patents", filters={"id": patent_id, "user_id": user_id}, {"_id": 0}, single=True)
+        patent = await db.patents_in_progress.find_one({"id": patent_id, "user_id": user_id}, {"_id": 0})
     if not patent:
         return None, None, None, None, None
     
@@ -9889,16 +9796,14 @@ async def download_patent_complete(
     logging.info(f"👤 User: {current_user.email}")
     
     # Try completed patents first
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+    patent = await db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     # If not found, check in-progress patents (V2 patents are stored here)
     if not patent:
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+        patent = await db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -9985,10 +9890,7 @@ async def download_patent_complete(
                             
                             # Save the translation to database for future use
                             try:
-                                # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-                                
-                                db.patents_in_progress.update_one(
+                                await db.patents_in_progress.update_one(
                                     {"id": patent['id'], "sections.number": section_number},
                                     {"$set": {"sections.$.content_en": section_content}}
                                 )
@@ -10593,8 +10495,7 @@ async def evaluate_patent(
     logging.info(f"👤 User: {current_user.email}")
     
     # Get the existing evaluation from database
-    evaluation = # TODO: db.patent_evaluations.find_one needs manual conversion → table "patent_evaluations"
-  db.patent_evaluations.find_one(
+    evaluation = await db.patent_evaluations.find_one(
         {"patent_id": patent_id},
         {"_id": 0},
         sort=[("created_at", -1)]
@@ -10617,8 +10518,7 @@ async def get_patent_evaluation(
     current_user: User = Depends(get_current_user)
 ):
     """Get the latest evaluation for a patent"""
-    evaluation = # TODO: db.patent_evaluations.find_one needs manual conversion → table "patent_evaluations"
-  db.patent_evaluations.find_one(
+    evaluation = await db.patent_evaluations.find_one(
         {"patent_id": patent_id},
         {"_id": 0},
         sort=[("created_at", -1)]
@@ -10637,8 +10537,7 @@ async def get_patent_evaluation(
     current_user: User = Depends(get_current_user)
 ):
     """Get the latest evaluation for a patent"""
-    evaluation = # TODO: db.patent_evaluations.find_one needs manual conversion → table "patent_evaluations"
-  db.patent_evaluations.find_one(
+    evaluation = await db.patent_evaluations.find_one(
         {"patent_id": patent_id},
         {"_id": 0},
         sort=[("created_at", -1)]
@@ -10658,16 +10557,14 @@ async def download_patent_numbered(
 ):
     """Download complete patent with USPTO-style line numbering (every line numbered, no blank lines)"""
     # Try completed patents first
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+    patent = await db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     # If not found, check in-progress patents (V2 patents are stored here)
     if not patent:
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+        patent = await db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -10766,8 +10663,7 @@ async def download_patent_draft(
     current_user: User = Depends(get_current_user)
 ):
     """Download patent draft as PDF (simplified version) in specified language"""
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
-  db.patents.find_one(
+    patent = await db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -11023,7 +10919,7 @@ Respond in JSON format:
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     
-    insert("econometric_studies", study)
+    await db.econometric_studies_in_progress.insert_one(study)
     
     return {
         "study_id": study_id,
@@ -11040,8 +10936,7 @@ async def generate_econometric_section(
     current_user: User = Depends(get_current_user)
 ):
     """Generate a specific section of the econometric study"""
-    study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies_in_progress.find_one(
+    study = await db.econometric_studies_in_progress.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -11382,10 +11277,7 @@ Write this section {language_instruction} with full academic rigor, ensuring it 
         }
     
     # Update study with new section
-    # TODO: db.econometric_studies_in_progress.update_one needs manual conversion → table "econometric_studies"
-
-    
-    db.econometric_studies_in_progress.update_one(
+    await db.econometric_studies_in_progress.update_one(
         {"id": study_id},
         {
             "$push": {"sections": section},
@@ -11411,8 +11303,7 @@ async def approve_econometric_section(
     current_user: User = Depends(get_current_user)
 ):
     """Approve a section and move to the next"""
-    study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies_in_progress.find_one(
+    study = await db.econometric_studies_in_progress.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -11430,10 +11321,7 @@ async def approve_econometric_section(
     section['status'] = 'approved'
     
     # Update in database
-    # TODO: db.econometric_studies_in_progress.update_one needs manual conversion → table "econometric_studies"
-
-    
-    db.econometric_studies_in_progress.update_one(
+    await db.econometric_studies_in_progress.update_one(
         {"id": study_id, "sections.number": section_number},
         {
             "$set": {
@@ -11468,8 +11356,8 @@ async def approve_econometric_section(
             "completed_at": datetime.now(timezone.utc).isoformat()
         }
         
-        insert("econometric_studies", final_study)
-        delete("econometric_studies", {"id": study_id})
+        await db.econometric_studies.insert_one(final_study)
+        await db.econometric_studies_in_progress.delete_one({"id": study_id})
         
         return {"message": "Study completed", "status": "completed"}
     
@@ -11489,16 +11377,14 @@ async def edit_econometric_section_with_ai(
 ):
     """Edit an econometric study section with AI instructions"""
     # Check both in-progress and completed studies
-    study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies_in_progress.find_one(
+    study = await db.econometric_studies_in_progress.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     collection = db.econometric_studies_in_progress
     if not study:
-        study = # TODO: db.econometric_studies.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies.find_one(
+        study = await db.econometric_studies.find_one(
             {"id": study_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -11567,15 +11453,13 @@ async def edit_econometric_section_direct(
 ):
     """Edit a section directly without AI (for manual edits)"""
     # Check both in-progress and completed studies
-    study = # TODO: db.econometric_studies.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies.find_one(
+    study = await db.econometric_studies.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     if not study:
-        study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies_in_progress.find_one(
+        study = await db.econometric_studies_in_progress.find_one(
             {"id": study_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -11605,17 +11489,12 @@ async def edit_econometric_section_direct(
     
     # If it's a completed study, also update full_content
     if collection == db.econometric_studies:
-        study = select("econometric_studies", filters={"id": study_id}, {"_id": 0}, single=True)
+        study = await db.econometric_studies.find_one({"id": study_id}, {"_id": 0})
         full_content = ""
         for s in sorted(study['sections'], key=lambda x: x['number']):
             full_content += f"<h2>Section {s['number']}: {s['title']}</h2>\n{s['content']}\n\n"
         
-        # TODO: db.econometric_studies.update_one needs manual conversion → table "econometric_studies"
-
-        
-        
-        
-        db.econometric_studies.update_one(
+        await db.econometric_studies.update_one(
             {"id": study_id},
             {"$set": {"full_content": full_content}}
         )
@@ -11625,8 +11504,7 @@ async def edit_econometric_section_direct(
 @api_router.get("/econometric-studies")
 async def list_econometric_studies(current_user: User = Depends(get_current_user)):
     """List all econometric studies for the current user (completed only)"""
-    studies = # TODO: db.econometric_studies.find needs manual conversion → table "econometric_studies"
-  db.econometric_studies.find(
+    studies = await db.econometric_studies.find(
         {"user_id": current_user.id},
         {"_id": 0}
     ).to_list(length=100)
@@ -11636,8 +11514,7 @@ async def list_econometric_studies(current_user: User = Depends(get_current_user
 @api_router.get("/econometric-studies/in-progress")
 async def list_econometric_studies_in_progress(current_user: User = Depends(get_current_user)):
     """List all econometric studies IN PROGRESS for the current user"""
-    studies = # TODO: db.econometric_studies_in_progress.find needs manual conversion → table "econometric_studies"
-  db.econometric_studies_in_progress.find(
+    studies = await db.econometric_studies_in_progress.find(
         {"user_id": current_user.id},
         {"_id": 0}
     ).to_list(length=100)
@@ -11651,16 +11528,14 @@ async def get_econometric_study(
 ):
     """Get a specific econometric study (completed or in progress)"""
     # Try completed studies first
-    study = # TODO: db.econometric_studies.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies.find_one(
+    study = await db.econometric_studies.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     # If not found, try in-progress studies
     if not study:
-        study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies_in_progress.find_one(
+        study = await db.econometric_studies_in_progress.find_one(
             {"id": study_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -11676,8 +11551,7 @@ async def download_econometric_study(
     current_user: User = Depends(get_current_user)
 ):
     """Download econometric study as PDF"""
-    study = # TODO: db.econometric_studies.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies.find_one(
+    study = await db.econometric_studies.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -11703,8 +11577,7 @@ async def delete_econometric_study(
     current_user: User = Depends(get_current_user)
 ):
     """Delete an econometric study"""
-    result = # TODO: db.econometric_studies.delete_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies.delete_one(
+    result = await db.econometric_studies.delete_one(
         {"id": study_id, "user_id": current_user.id}
     )
     
@@ -11717,8 +11590,7 @@ async def delete_econometric_study(
 @api_router.post("/econometric-studies/finalize/{study_id}")
 async def finalize_econometric_study(study_id: str, current_user: User = Depends(get_current_user)):
     """Finalize the econometric study"""
-    study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
-  db.econometric_studies_in_progress.find_one(
+    study = await db.econometric_studies_in_progress.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -11759,12 +11631,12 @@ async def finalize_econometric_study(study_id: str, current_user: User = Depends
     }
     
     # Save final econometric study
-    insert("econometric_studies", final_study)
+    await db.econometric_studies.insert_one(final_study)
     
     # Save to Supabase if client has supabase_id
     if final_study.get('client_id'):
         try:
-            client_doc = select("clients", filters={"id": final_study['client_id']}, {"_id": 0}, single=True)
+            client_doc = await db.clients.find_one({"id": final_study['client_id']}, {"_id": 0})
             if client_doc and client_doc.get('supabase_id'):
                 document_data = {
                     "id": final_study['id'],
@@ -11786,7 +11658,7 @@ async def finalize_econometric_study(study_id: str, current_user: User = Depends
             logging.error(f"Error saving to Supabase (non-critical): {str(supabase_error)}")
     
     # Remove from in-progress
-    delete("econometric_studies", {"id": study_id})
+    await db.econometric_studies_in_progress.delete_one({"id": study_id})
     
     return {
         "message": "Econometric study finalized successfully",
@@ -11855,7 +11727,7 @@ async def generate_recommendation_letter(
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
-        insert("recommendation_letters", letter_doc)
+        await db.recommendation_letters.insert_one(letter_doc)
         
         return {
             "letter_id": letter_id,
@@ -11877,8 +11749,7 @@ async def get_recommendation_letters(
     current_user: User = Depends(get_current_user)
 ):
     """Get all recommendation letters for the current user"""
-    letters = # TODO: db.recommendation_letters.find needs manual conversion → table "recommendation_letters"
-  db.recommendation_letters.find(
+    letters = await db.recommendation_letters.find(
         {"user_id": current_user.id},
         {"_id": 0}
     ).sort("created_at", -1).to_list(100)
@@ -11892,8 +11763,7 @@ async def get_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Get a specific recommendation letter"""
-    letter = # TODO: db.recommendation_letters.find_one needs manual conversion → table "recommendation_letters"
-  db.recommendation_letters.find_one(
+    letter = await db.recommendation_letters.find_one(
         {"id": letter_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -11911,8 +11781,7 @@ async def edit_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Edit a specific section or part of the recommendation letter"""
-    letter = # TODO: db.recommendation_letters.find_one needs manual conversion → table "recommendation_letters"
-  db.recommendation_letters.find_one(
+    letter = await db.recommendation_letters.find_one(
         {"id": letter_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -11950,10 +11819,7 @@ Generate the revised letter in **{letter.get('language', 'English')}**."""
         )
         
         # Update in database
-        # TODO: db.recommendation_letters.update_one needs manual conversion → table "recommendation_letters"
-
-        
-        db.recommendation_letters.update_one(
+        await db.recommendation_letters.update_one(
             {"id": letter_id, "user_id": current_user.id},
             {
                 "$set": {
@@ -11979,8 +11845,7 @@ async def translate_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Translate recommendation letter to Spanish (if not already translated)"""
-    letter = # TODO: db.recommendation_letters.find_one needs manual conversion → table "recommendation_letters"
-  db.recommendation_letters.find_one(
+    letter = await db.recommendation_letters.find_one(
         {"id": letter_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -12026,10 +11891,7 @@ Provide ONLY the translated letter, no explanations."""
         )
         
         # Update database with Spanish version
-        # TODO: db.recommendation_letters.update_one needs manual conversion → table "recommendation_letters"
-
-        
-        db.recommendation_letters.update_one(
+        await db.recommendation_letters.update_one(
             {"id": letter_id, "user_id": current_user.id},
             {
                 "$set": {
@@ -12055,8 +11917,7 @@ async def delete_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Delete a recommendation letter"""
-    result = # TODO: db.recommendation_letters.delete_one needs manual conversion → table "recommendation_letters"
-  db.recommendation_letters.delete_one(
+    result = await db.recommendation_letters.delete_one(
         {"id": letter_id, "user_id": current_user.id}
     )
     
@@ -12073,8 +11934,7 @@ async def download_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Download recommendation letter as PDF with Markdown formatting in specified language"""
-    letter_doc = # TODO: db.recommendation_letters.find_one needs manual conversion → table "recommendation_letters"
-  db.recommendation_letters.find_one(
+    letter_doc = await db.recommendation_letters.find_one(
         {"id": letter_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -12534,7 +12394,7 @@ async def upload_and_design_document(
         doc_dict = doc.model_dump()
         doc_dict['created_at'] = doc_dict['created_at'].isoformat()
         
-        insert("generated_documents", doc_dict)
+        await db.designed_documents.insert_one(doc_dict)
         
         return {
             "id": doc.id,
@@ -12551,7 +12411,7 @@ async def upload_and_design_document(
 @api_router.get("/designed-documents", response_model=List[DesignedDocument])
 async def get_designed_documents():
     """Get all designed documents"""
-    docs = select("generated_documents", filters={}, {"_id": 0}, order="created_at", order_desc=True)
+    docs = await db.designed_documents.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
     for doc in docs:
         if isinstance(doc['created_at'], str):
@@ -12562,7 +12422,7 @@ async def get_designed_documents():
 @api_router.get("/designed-documents/{doc_id}", response_model=DesignedDocument)
 async def get_designed_document(doc_id: str):
     """Get a specific designed document"""
-    doc = select("generated_documents", filters={"id": doc_id}, {"_id": 0}, single=True)
+    doc = await db.designed_documents.find_one({"id": doc_id}, {"_id": 0})
     
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -12575,7 +12435,7 @@ async def get_designed_document(doc_id: str):
 @api_router.delete("/designed-documents/{doc_id}")
 async def delete_designed_document(doc_id: str):
     """Delete a designed document"""
-    result = delete("generated_documents", {"id": doc_id})
+    result = await db.designed_documents.delete_one({"id": doc_id})
     
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -12585,7 +12445,7 @@ async def delete_designed_document(doc_id: str):
 @api_router.get("/designed-documents/{doc_id}/download")
 async def download_designed_document(doc_id: str):
     """Download designed document as PDF"""
-    doc = select("generated_documents", filters={"id": doc_id}, {"_id": 0}, single=True)
+    doc = await db.designed_documents.find_one({"id": doc_id}, {"_id": 0})
     
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -12621,7 +12481,7 @@ async def download_designed_document(doc_id: str):
 @api_router.get("/designed-documents/{doc_id}/gamma-url")
 async def get_gamma_url(doc_id: str):
     """Get Gamma URL for viewing online"""
-    doc = select("generated_documents", filters={"id": doc_id}, {"_id": 0}, single=True)
+    doc = await db.designed_documents.find_one({"id": doc_id}, {"_id": 0})
     
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -12641,24 +12501,20 @@ async def save_niw_as_draft(niw_id: str, current_user: User = Depends(get_curren
     """Save NIW proposal in-progress as draft"""
     # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
     # Try completed NIWs first (business_plans collection)
-    niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
-  db.business_plans.find_one(
+    niw = await db.business_plans.find_one(
         {"id": niw_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     # If not found, check in-progress NIWs
     if not niw:
-        niw = select("niw_petitions", filters={"id": niw_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+        niw = await db.niw_in_progress.find_one({"id": niw_id, "user_id": current_user.id}, {"_id": 0})
     
     if not niw:
         raise HTTPException(status_code=404, detail="NIW proposal not found")
     
     # Update status to draft
-    # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
-
-    
-    db.niw_in_progress.update_one(
+    await db.niw_in_progress.update_one(
         {"id": niw_id},
         {
             "$set": {
@@ -12673,16 +12529,13 @@ async def save_niw_as_draft(niw_id: str, current_user: User = Depends(get_curren
 @api_router.post("/books/save-draft/{book_id}")
 async def save_book_as_draft(book_id: str, current_user: User = Depends(get_current_user)):
     """Save book in-progress as draft"""
-    book = select("generated_documents", filters={"id": book_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+    book = await db.books_in_progress.find_one({"id": book_id, "user_id": current_user.id}, {"_id": 0})
     
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     
     # Update status to draft
-    # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
-
-    
-    db.books_in_progress.update_one(
+    await db.books_in_progress.update_one(
         {"id": book_id},
         {
             "$set": {
@@ -12701,16 +12554,14 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
     """Resume working on a draft NIW proposal"""
     # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
     # Try completed NIWs first (business_plans collection)
-    niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
-  db.business_plans.find_one(
+    niw = await db.business_plans.find_one(
         {"id": niw_id, "user_id": current_user.id, "status": "draft"},
         {"_id": 0}
     )
     
     # If not found, check in-progress NIWs
     if not niw:
-        niw = # TODO: db.niw_in_progress.find_one needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.find_one(
+        niw = await db.niw_in_progress.find_one(
             {"id": niw_id, "user_id": current_user.id, "status": "draft"},
             {"_id": 0}
         )
@@ -12719,10 +12570,7 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
         raise HTTPException(status_code=404, detail="Draft not found")
     
     # Update status to in_progress
-    # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
-
-    
-    db.niw_in_progress.update_one(
+    await db.niw_in_progress.update_one(
         {"id": niw_id},
         {
             "$set": {
@@ -12743,8 +12591,7 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
 @api_router.post("/books/resume-draft/{book_id}", response_model=BookInProgress)
 async def resume_book_draft(book_id: str, current_user: User = Depends(get_current_user)):
     """Resume working on a draft book"""
-    book = # TODO: db.books_in_progress.find_one needs manual conversion → table "generated_documents"
-  db.books_in_progress.find_one(
+    book = await db.books_in_progress.find_one(
         {"id": book_id, "user_id": current_user.id, "status": "draft"},
         {"_id": 0}
     )
@@ -12753,10 +12600,7 @@ async def resume_book_draft(book_id: str, current_user: User = Depends(get_curre
         raise HTTPException(status_code=404, detail="Draft not found")
     
     # Update status to in_progress
-    # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
-
-    
-    db.books_in_progress.update_one(
+    await db.books_in_progress.update_one(
         {"id": book_id},
         {
             "$set": {
@@ -12876,16 +12720,13 @@ Respond in {language} in this exact JSON format:
 @api_router.post("/business-plans/evaluate-final/{plan_id}")
 async def evaluate_niw_final(plan_id: str, current_user: User = Depends(get_current_user)):
     """Evaluate completed NIW proposal with 0-10 quality score"""
-    plan = select("business_plans", filters={"id": plan_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+    plan = await db.business_plans.find_one({"id": plan_id, "user_id": current_user.id}, {"_id": 0})
     
     if not plan:
         raise HTTPException(status_code=404, detail="Business plan not found")
     
     # Update status to evaluating
-    # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
-
-    
-    db.business_plans.update_one(
+    await db.business_plans.update_one(
         {"id": plan_id},
         {"$set": {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
@@ -12901,10 +12742,7 @@ async def evaluate_niw_final(plan_id: str, current_user: User = Depends(get_curr
     final_status = "completed" if evaluation.score >= 7.0 else "evaluating"
     
     # Update plan with evaluation results
-    # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
-
-    
-    db.business_plans.update_one(
+    await db.business_plans.update_one(
         {"id": plan_id},
         {
             "$set": {
@@ -12930,16 +12768,13 @@ async def evaluate_niw_final(plan_id: str, current_user: User = Depends(get_curr
 @api_router.post("/books/evaluate-final/{book_id}")
 async def evaluate_book_final(book_id: str, current_user: User = Depends(get_current_user)):
     """Evaluate completed book with 0-10 quality score"""
-    book = select("generated_documents", filters={"id": book_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+    book = await db.books.find_one({"id": book_id, "user_id": current_user.id}, {"_id": 0})
     
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     
     # Update status to evaluating
-    # TODO: db.books.update_one needs manual conversion → table "generated_documents"
-
-    
-    db.books.update_one(
+    await db.books.update_one(
         {"id": book_id},
         {"$set": {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
@@ -12955,10 +12790,7 @@ async def evaluate_book_final(book_id: str, current_user: User = Depends(get_cur
     final_status = "completed" if evaluation.score >= 7.0 else "evaluating"
     
     # Update book with evaluation results
-    # TODO: db.books.update_one needs manual conversion → table "generated_documents"
-
-    
-    db.books.update_one(
+    await db.books.update_one(
         {"id": book_id},
         {
             "$set": {
@@ -12984,16 +12816,13 @@ async def evaluate_book_final(book_id: str, current_user: User = Depends(get_cur
 @api_router.post("/patents/evaluate-final/{patent_id}")
 async def evaluate_patent_final(patent_id: str, current_user: User = Depends(get_current_user)):
     """Evaluate completed patent with 0-10 quality score"""
-    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, {"_id": 0}, single=True)
+    patent = await db.patents.find_one({"id": patent_id, "user_id": current_user.id}, {"_id": 0})
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
     
     # Update status to evaluating
-    # TODO: db.patents.update_one needs manual conversion → table "patents"
-
-    
-    db.patents.update_one(
+    await db.patents.update_one(
         {"id": patent_id},
         {"$set": {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
@@ -13013,10 +12842,7 @@ async def evaluate_patent_final(patent_id: str, current_user: User = Depends(get
     final_status = "completed" if evaluation.score >= 7.0 else "evaluating"
     
     # Update patent with evaluation results
-    # TODO: db.patents.update_one needs manual conversion → table "patents"
-
-    
-    db.patents.update_one(
+    await db.patents.update_one(
         {"id": patent_id},
         {
             "$set": {
@@ -13075,7 +12901,7 @@ async def start_patent_v2(input_data: PatentInput, current_user: User = Depends(
     patent_dict['created_at'] = patent_dict['created_at'].isoformat()
     patent_dict['updated_at'] = patent_dict['updated_at'].isoformat()
     
-    insert("patents", patent_dict)
+    await db.patents_in_progress.insert_one(patent_dict)
     logging.info(f"✅ Patent V2 created: {patent_id}")
     
     return patent
@@ -13186,8 +13012,7 @@ async def generate_complete_patent_v2(
     try:
         logging.info(f"🎯 [BUGFIX] Endpoint called for patent_id={patent_id}, user={current_user.email}")
         
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+        patent = await db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -13571,10 +13396,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
         
         logging.info(f"✅ Complete patent saved: EN={len(complete_patent_en)} chars, ES={len(complete_patent_es)} chars")
         # Update patent with all sections and complete specifications
-        # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-        
-        db.patents_in_progress.update_one(
+        await db.patents_in_progress.update_one(
             {"id": patent_id},
             {
                 "$set": {
@@ -13612,8 +13434,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
             try:
                 # extract_metrics_for_table and auto_generate_comparison_table imported at top
                 # Reload patent with all sections
-                complete_patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+                complete_patent = await db.patents_in_progress.find_one(
                     {"id": patent_id},
                     {"_id": 0}
                 )
@@ -13662,10 +13483,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
                             sections_with_table[summary_index]['content'] = updated_summary_en
                         
                         # Update database
-                        # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-                        
-                        db.patents_in_progress.update_one(
+                        await db.patents_in_progress.update_one(
                             {"id": patent_id},
                             {"$set": {
                                 "sections": sections_with_table,
@@ -13695,8 +13513,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
             import re
             
             # Reload patent to get latest sections
-            complete_patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+            complete_patent = await db.patents_in_progress.find_one(
                 {"id": patent_id},
                 {"_id": 0}
             )
@@ -13818,10 +13635,7 @@ Use USPTO format with paragraph markers."""
                                         sections_updated[claims_index]['content'] = new_claims_es
                                         
                                         # Update database
-                                        # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-                                        
-                                        db.patents_in_progress.update_one(
+                                        await db.patents_in_progress.update_one(
                                             {"id": patent_id},
                                             {"$set": {
                                                 "sections": sections_updated,
@@ -13855,8 +13669,7 @@ Use USPTO format with paragraph markers."""
         try:
             # scan_and_remove_spanish_entire_document imported at top
             # Get the FINAL patent with all sections, table, strengthened claims, and drawings
-            complete_patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+            complete_patent = await db.patents_in_progress.find_one(
                 {"id": patent_id},
                 {"_id": 0}
             )
@@ -13921,10 +13734,7 @@ Use USPTO format with paragraph markers."""
                 
                 if update_data:
                     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-                    
-                    db.patents_in_progress.update_one(
+                    await db.patents_in_progress.update_one(
                         {"id": patent_id},
                         {"$set": update_data}
                     )
@@ -13947,8 +13757,7 @@ Use USPTO format with paragraph markers."""
         logging.info(f"🏆 Starting automatic USPTO evaluation and correction for patent {patent_id}")
         
         # Get the complete specification for evaluation
-        complete_patent_for_eval = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+        complete_patent_for_eval = await db.patents_in_progress.find_one(
             {"id": patent_id},
             {"_id": 0}
         )
@@ -14023,7 +13832,7 @@ Use USPTO format with paragraph markers."""
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             
-            insert("patent_evaluations", evaluation_result)
+            await db.patent_evaluations.insert_one(evaluation_result)
             
             # Update patent with evaluation
             update_fields = {
@@ -14033,12 +13842,7 @@ Use USPTO format with paragraph markers."""
                 "last_evaluated_at": datetime.now(timezone.utc).isoformat()
             }
             
-            # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-            
-            
-            
-            db.patents_in_progress.update_one(
+            await db.patents_in_progress.update_one(
                 {"id": patent_id},
                 {"$set": update_fields}
             )
@@ -14090,7 +13894,7 @@ Use USPTO format with paragraph markers."""
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             
-            insert("patent_evaluations", evaluation_result)
+            await db.patent_evaluations.insert_one(evaluation_result)
             
             # Update patent
             update_fields = {
@@ -14103,21 +13907,13 @@ Use USPTO format with paragraph markers."""
             if all_corrections:
                 update_fields["complete_specification_en"] = current_content_en
             
-            # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-            
-            
-            
-            db.patents_in_progress.update_one(
+            await db.patents_in_progress.update_one(
                 {"id": patent_id},
                 {"$set": update_fields}
             )
         else:
             # If evaluation failed completely, just mark as completed
-            # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-            
-            db.patents_in_progress.update_one(
+            await db.patents_in_progress.update_one(
                 {"id": patent_id},
                 {"$set": {"status": "completed"}}
             )
@@ -14133,10 +13929,7 @@ Use USPTO format with paragraph markers."""
         
     except Exception as e:
         logging.error(f"❌ Error generating complete patent V2: {str(e)}")
-        # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-        
-        db.patents_in_progress.update_one(
+        await db.patents_in_progress.update_one(
             {"id": patent_id},
             {"$set": {"status": "error", "error_message": str(e)}}
         )
@@ -14153,8 +13946,7 @@ async def regenerate_patent(
     logging.info(f"🔄 Regenerating patent {patent_id}")
     
     # Get patent
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
-  db.patents_in_progress.find_one(
+    patent = await db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -14163,10 +13955,7 @@ async def regenerate_patent(
         raise HTTPException(status_code=404, detail="Patent not found")
     
     # Reset status to allow regeneration
-    # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-
-    
-    db.patents_in_progress.update_one(
+    await db.patents_in_progress.update_one(
         {"id": patent_id},
         {"$set": {
             "status": "regenerating",
@@ -14192,8 +13981,7 @@ async def get_patents_v2_in_progress(
     if client_id:
         query["client_id"] = client_id
     
-    patents = # TODO: db.patents_in_progress.find needs manual conversion → table "patents"
-  db.patents_in_progress.find(query, {"_id": 0}).to_list(1000)
+    patents = await db.patents_in_progress.find(query, {"_id": 0}).to_list(1000)
     return patents
 
 
@@ -14222,7 +14010,7 @@ async def start_whitepaper_interactive(whitepaper_input: WhitepaperInput, curren
     )
     
     # Insert into database
-    insert("generated_documents", whitepaper.model_dump())
+    await db.whitepapers_in_progress.insert_one(whitepaper.model_dump())
     
     return {
         "whitepaper_id": whitepaper.id,
@@ -14235,8 +14023,7 @@ async def start_whitepaper_interactive(whitepaper_input: WhitepaperInput, curren
 async def generate_whitepaper_section(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Generate a section for the technical white paper with AI evaluation"""
     
-    whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
-  db.whitepapers_in_progress.find_one(
+    whitepaper = await db.whitepapers_in_progress.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -14439,10 +14226,7 @@ Please regenerate the section now, addressing ALL these technical requirements."
             whitepaper_sections.append(section)
         
         # Update whitepaper in database
-        # TODO: db.whitepapers_in_progress.update_one needs manual conversion → table "generated_documents"
-
-        
-        db.whitepapers_in_progress.update_one(
+        await db.whitepapers_in_progress.update_one(
             {"id": whitepaper_id},
             {
                 "$set": {
@@ -14460,8 +14244,7 @@ Please regenerate the section now, addressing ALL these technical requirements."
 @api_router.post("/whitepapers/approve-section/{whitepaper_id}")
 async def approve_whitepaper_section(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Approve current section and move to next"""
-    whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
-  db.whitepapers_in_progress.find_one(
+    whitepaper = await db.whitepapers_in_progress.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -14480,10 +14263,7 @@ async def approve_whitepaper_section(whitepaper_id: str, current_user: User = De
     
     # Update whitepaper - cap next_section at 17 (after completing section 16)
     next_section = min(current_section_number + 1, 17)
-    # TODO: db.whitepapers_in_progress.update_one needs manual conversion → table "generated_documents"
-
-    
-    db.whitepapers_in_progress.update_one(
+    await db.whitepapers_in_progress.update_one(
         {"id": whitepaper_id},
         {
             "$set": {
@@ -14507,8 +14287,7 @@ async def edit_whitepaper_section(
     current_user: User = Depends(get_current_user)
 ):
     """Edit a section of the technical white paper"""
-    whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
-  db.whitepapers_in_progress.find_one(
+    whitepaper = await db.whitepapers_in_progress.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -14571,10 +14350,7 @@ Please provide the improved section content addressing the editing instructions 
             break
     
     # Update database
-    # TODO: db.whitepapers_in_progress.update_one needs manual conversion → table "generated_documents"
-
-    
-    db.whitepapers_in_progress.update_one(
+    await db.whitepapers_in_progress.update_one(
         {"id": whitepaper_id},
         {
             "$set": {
@@ -14589,8 +14365,7 @@ Please provide the improved section content addressing the editing instructions 
 @api_router.post("/whitepapers/finalize/{whitepaper_id}")
 async def finalize_whitepaper(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Finalize the technical white paper"""
-    whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
-  db.whitepapers_in_progress.find_one(
+    whitepaper = await db.whitepapers_in_progress.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
     )
@@ -14631,12 +14406,12 @@ async def finalize_whitepaper(whitepaper_id: str, current_user: User = Depends(g
     
     # Save final whitepaper
     whitepaper_dict = final_whitepaper.model_dump()
-    insert("generated_documents", whitepaper_dict)
+    await db.whitepapers.insert_one(whitepaper_dict)
     
     # Save to Supabase if client has supabase_id
     if final_whitepaper.client_id:
         try:
-            client_doc = select("clients", filters={"id": final_whitepaper.client_id}, {"_id": 0}, single=True)
+            client_doc = await db.clients.find_one({"id": final_whitepaper.client_id}, {"_id": 0})
             if client_doc and client_doc.get('supabase_id'):
                 document_data = {
                     "id": final_whitepaper.id,
@@ -14660,7 +14435,7 @@ async def finalize_whitepaper(whitepaper_id: str, current_user: User = Depends(g
             logging.error(f"Error saving to Supabase (non-critical): {str(supabase_error)}")
     
     # Remove from in-progress
-    delete("generated_documents", {"id": whitepaper_id})
+    await db.whitepapers_in_progress.delete_one({"id": whitepaper_id})
     
     return {
         "message": "Technical white paper finalized successfully",
@@ -14672,16 +14447,14 @@ async def finalize_whitepaper(whitepaper_id: str, current_user: User = Depends(g
 async def get_whitepaper(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Get a specific whitepaper (searches both completed and in-progress)"""
     # First check completed whitepapers
-    whitepaper = # TODO: db.whitepapers.find_one needs manual conversion → table "generated_documents"
-  db.whitepapers.find_one(
+    whitepaper = await db.whitepapers.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     # If not found, check in-progress whitepapers
     if not whitepaper:
-        whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
-  db.whitepapers_in_progress.find_one(
+        whitepaper = await db.whitepapers_in_progress.find_one(
             {"id": whitepaper_id, "user_id": current_user.id},
             {"_id": 0}
         )
@@ -14707,12 +14480,10 @@ async def delete_whitepaper(whitepaper_id: str, current_user: User = Depends(get
     """Delete a whitepaper (both in-progress and completed)"""
     try:
         # Try to delete from both collections
-        result_progress = # TODO: db.whitepapers_in_progress.delete_one needs manual conversion → table "generated_documents"
-  db.whitepapers_in_progress.delete_one(
+        result_progress = await db.whitepapers_in_progress.delete_one(
             {"id": whitepaper_id, "user_id": current_user.id}
         )
-        result_completed = # TODO: db.whitepapers.delete_one needs manual conversion → table "generated_documents"
-  db.whitepapers.delete_one(
+        result_completed = await db.whitepapers.delete_one(
             {"id": whitepaper_id, "user_id": current_user.id}
         )
         
@@ -14736,12 +14507,10 @@ async def list_whitepapers(client_id: Optional[str] = None, current_user: User =
         query["client_id"] = client_id
     
     # Get completed whitepapers
-    completed = # TODO: db.whitepapers.find needs manual conversion → table "generated_documents"
-  db.whitepapers.find(query, {"_id": 0}).to_list(1000)
+    completed = await db.whitepapers.find(query, {"_id": 0}).to_list(1000)
     
     # Get in-progress whitepapers
-    in_progress = # TODO: db.whitepapers_in_progress.find needs manual conversion → table "generated_documents"
-  db.whitepapers_in_progress.find(query, {"_id": 0}).to_list(1000)
+    in_progress = await db.whitepapers_in_progress.find(query, {"_id": 0}).to_list(1000)
     
     return {
         "completed": completed,
@@ -14996,7 +14765,7 @@ async def create_client(client_data: ClientInput, current_user: User = Depends(g
     """Crear nuevo cliente"""
     try:
         # Validar email único
-        existing = select("clients", filters={"email": client_data.email}, {"_id": 0}, single=True)
+        existing = await db.clients.find_one({"email": client_data.email}, {"_id": 0})
         if existing:
             raise HTTPException(status_code=400, detail="Email already exists")
         
@@ -15034,7 +14803,7 @@ async def create_client(client_data: ClientInput, current_user: User = Depends(g
             client_dict['supabase_id'] = None
             logging.warning(f"WARNING No se pudo vincular con Supabase para: {client_data.email}")
         
-        insert("clients", client_dict)
+        await db.clients.insert_one(client_dict)
         
         logger.info(f"Client created: {client_dict['id']} by operator {current_user.id}")
         
@@ -15076,15 +14845,13 @@ async def get_clients(
         skip = (page - 1) * limit
         
         # Query
-        clients = # TODO: db.clients.find needs manual conversion → table "clients"
-  db.clients.find(
+        clients = await db.clients.find(
             query,
             {"_id": 0}
         ).sort("created_at", -1).skip(skip).limit(limit).to_list(length=limit)
         
         # Total count
-        total = # TODO: db.clients.count_documents needs manual conversion → table "clients"
-  db.clients.count_documents(query)
+        total = await db.clients.count_documents(query)
         
         # Agregar contador de documentos para cada cliente
         for client in clients:
@@ -15130,8 +14897,7 @@ async def search_clients(
         skip = (page - 1) * limit
         
         # Query con projection
-        clients = # TODO: db.clients.find needs manual conversion → table "clients"
-  db.clients.find(
+        clients = await db.clients.find(
             query,
             {
                 "_id": 0,
@@ -15146,8 +14912,7 @@ async def search_clients(
         ).skip(skip).limit(limit).to_list(length=limit)
         
         # Total count
-        total = # TODO: db.clients.count_documents needs manual conversion → table "clients"
-  db.clients.count_documents(query)
+        total = await db.clients.count_documents(query)
         
         return {
             "clients": clients,
@@ -15168,8 +14933,7 @@ async def get_client(client_id: str, current_user: User = Depends(get_current_us
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        client = # TODO: db.clients.find_one needs manual conversion → table "clients"
-  db.clients.find_one(query, {"_id": 0})
+        client = await db.clients.find_one(query, {"_id": 0})
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -15193,8 +14957,7 @@ async def update_client(
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        client = # TODO: db.clients.find_one needs manual conversion → table "clients"
-  db.clients.find_one(query)
+        client = await db.clients.find_one(query)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -15209,12 +14972,7 @@ async def update_client(
             "updated_by_name": current_user.full_name
         })
         
-        # TODO: db.clients.update_one needs manual conversion → table "clients"
-
-        
-        
-        
-        db.clients.update_one(
+        await db.clients.update_one(
             {"id": client_id},
             {"$set": update_dict}
         )
@@ -15255,8 +15013,7 @@ async def delete_client(client_id: str, current_user: User = Depends(get_current
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        result = # TODO: db.clients.delete_one needs manual conversion → table "clients"
-  db.clients.delete_one(query)
+        result = await db.clients.delete_one(query)
         
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -15279,8 +15036,7 @@ async def get_client_stats(client_id: str, current_user: User = Depends(get_curr
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        client = # TODO: db.clients.find_one needs manual conversion → table "clients"
-  db.clients.find_one(query, {"_id": 0})
+        client = await db.clients.find_one(query, {"_id": 0})
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -15293,57 +15049,56 @@ async def get_client_stats(client_id: str, current_user: User = Depends(get_curr
         
         stats = {
             "client": client,
-            "niw_count": # TODO: db.niw_in_progress.count_documents needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.count_documents({
+            "niw_count": await db.niw_in_progress.count_documents({
                 "client_id": client_id,
                 "user_id": operator_id,  # Filter by operator/user
                 "status": {"$ne": "completed"}  # Exclude completed NIWs (they should be in business_plans)
             }),
-            "niw_completed": count("business_plans", {
+            "niw_completed": await db.business_plans.count_documents({
                 "client_id": client_id,
                 "user_id": operator_id
             }),
-            "patent_count": count("patents", {
+            "patent_count": await db.patents_in_progress.count_documents({
                 "client_id": client_id, 
                 "user_id": operator_id,  # Filter by operator/user
                 "status": {"$ne": "complete"}  # Solo patentes NO completas
             }),
             "patent_completed": (
-                count("patents", {
+                await db.patents.count_documents({
                     "client_id": client_id,
                     "user_id": operator_id
                 }) +
-                count("patents", {
+                await db.patents_in_progress.count_documents({
                     "client_id": client_id,
                     "user_id": operator_id,
                     "status": "complete"  # Patentes V2 completadas
                 })
             ),
-            "book_count": count("generated_documents", {
+            "book_count": await db.books_in_progress.count_documents({
                 "client_id": client_id,
                 "user_id": operator_id
             }),
-            "book_completed": count("generated_documents", {
+            "book_completed": await db.books.count_documents({
                 "client_id": client_id,
                 "user_id": operator_id
             }),
-            "whitepaper_count": count("generated_documents", {
+            "whitepaper_count": await db.whitepapers_in_progress.count_documents({
                 "client_id": client_id,
                 "user_id": operator_id
             }),
-            "whitepaper_completed": count("generated_documents", {
+            "whitepaper_completed": await db.whitepapers.count_documents({
                 "client_id": client_id,
                 "user_id": operator_id
             }),
-            "study_count": count("econometric_studies", {
+            "study_count": await db.econometric_studies_in_progress.count_documents({
                 "client_id": client_id,
                 "user_id": operator_id
             }),
-            "design_count": count("generated_documents", {
+            "design_count": await db.designed_documents.count_documents({
                 "client_id": client_id,
                 "user_id": operator_id
             }),
-            "recommendation_letter_count": count("recommendation_letters", {
+            "recommendation_letter_count": await db.recommendation_letters.count_documents({
                 "user_id": operator_id
             })
         }
@@ -15369,26 +15124,26 @@ async def get_client_documents_count(client_id: str) -> int:
     """Contar total de documentos de un cliente"""
     try:
         count = 0
-        count += count("niw_petitions", {"client_id": client_id})
-        count += count("business_plans", {"client_id": client_id})
+        count += await db.niw_in_progress.count_documents({"client_id": client_id})
+        count += await db.business_plans.count_documents({"client_id": client_id})
         # 🔥 FIX: Contar todas las patentes sin duplicar
         # Solo contar las in_progress que NO están completas
-        count += count("patents", {
+        count += await db.patents_in_progress.count_documents({
             "client_id": client_id,
             "status": {"$ne": "complete"}
         })
         # Contar las completadas (V1 en patents + V2 en patents_in_progress con status=complete)
-        count += count("patents", {"client_id": client_id})
-        count += count("patents", {
+        count += await db.patents.count_documents({"client_id": client_id})
+        count += await db.patents_in_progress.count_documents({
             "client_id": client_id,
             "status": "complete"
         })
-        count += count("generated_documents", {"client_id": client_id})
-        count += count("generated_documents", {"client_id": client_id})
-        count += count("generated_documents", {"client_id": client_id})
-        count += count("generated_documents", {"client_id": client_id})
-        count += count("econometric_studies", {"client_id": client_id})
-        count += count("generated_documents", {"client_id": client_id})
+        count += await db.books_in_progress.count_documents({"client_id": client_id})
+        count += await db.books.count_documents({"client_id": client_id})
+        count += await db.whitepapers_in_progress.count_documents({"client_id": client_id})
+        count += await db.whitepapers.count_documents({"client_id": client_id})
+        count += await db.econometric_studies_in_progress.count_documents({"client_id": client_id})
+        count += await db.designed_documents.count_documents({"client_id": client_id})
         return count
     except:
         return 0
@@ -15406,7 +15161,7 @@ async def get_dashboard_overview(current_user: User = Depends(get_current_user))
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        total_clients = count("clients", {**query, "status": "active"})
+        total_clients = await db.clients.count_documents({**query, "status": "active"})
         
         # Contar documentos del operador
         total_docs = 0
@@ -15416,28 +15171,21 @@ async def get_dashboard_overview(current_user: User = Depends(get_current_user))
             doc_query = {}
         
         # Count whitepapers (both completed and in progress)
-        whitepaper_count = # TODO: db.whitepapers_in_progress.count_documents needs manual conversion → table "generated_documents"
-  db.whitepapers_in_progress.count_documents(doc_query)
-        whitepaper_completed = # TODO: db.whitepapers.count_documents needs manual conversion → table "generated_documents"
-  db.whitepapers.count_documents(doc_query)
+        whitepaper_count = await db.whitepapers_in_progress.count_documents(doc_query)
+        whitepaper_completed = await db.whitepapers.count_documents(doc_query)
         total_docs += whitepaper_count + whitepaper_completed
-        total_docs += # TODO: db.business_plans.count_documents needs manual conversion → table "business_plans"
-  db.business_plans.count_documents(doc_query)
-        total_docs += # TODO: db.patents_in_progress.count_documents needs manual conversion → table "patents"
-  db.patents_in_progress.count_documents(doc_query)
-        total_docs += # TODO: db.books_in_progress.count_documents needs manual conversion → table "generated_documents"
-  db.books_in_progress.count_documents(doc_query)
-        total_docs += # TODO: db.books.count_documents needs manual conversion → table "generated_documents"
-  db.books.count_documents(doc_query)
-        total_docs += # TODO: db.econometric_studies_in_progress.count_documents needs manual conversion → table "econometric_studies"
-  db.econometric_studies_in_progress.count_documents(doc_query)
+        total_docs += await db.business_plans.count_documents(doc_query)
+        total_docs += await db.patents_in_progress.count_documents(doc_query)
+        total_docs += await db.books_in_progress.count_documents(doc_query)
+        total_docs += await db.books.count_documents(doc_query)
+        total_docs += await db.econometric_studies_in_progress.count_documents(doc_query)
         
         # Documentos en progreso (status = "in_progress")
         in_progress = 0
-        in_progress += count("niw_petitions", {**doc_query, "status": "in_progress"})
-        in_progress += count("patents", {**doc_query, "status": "in_progress"})
-        in_progress += count("generated_documents", {**doc_query, "status": "in_progress"})
-        in_progress += count("econometric_studies", {**doc_query, "status": "in_progress"})
+        in_progress += await db.niw_in_progress.count_documents({**doc_query, "status": "in_progress"})
+        in_progress += await db.patents_in_progress.count_documents({**doc_query, "status": "in_progress"})
+        in_progress += await db.books_in_progress.count_documents({**doc_query, "status": "in_progress"})
+        in_progress += await db.econometric_studies_in_progress.count_documents({**doc_query, "status": "in_progress"})
         
         return {
             "total_clients": total_clients,
@@ -15461,8 +15209,7 @@ async def get_recent_activity(
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        activities = # TODO: db.activity_logs.find needs manual conversion → table "activity_logs"
-  db.activity_logs.find(
+        activities = await db.activity_logs.find(
             query,
             {"_id": 0}
         ).sort("timestamp", -1).limit(limit).to_list(length=limit)
@@ -15481,24 +15228,23 @@ async def get_recent_activity(
 async def list_operators(current_admin: User = Depends(require_admin)):
     """Lista de todos los operadores con sus estadísticas"""
     try:
-        operators = # TODO: db.users.find needs manual conversion → table "clients"
-  db.users.find(
+        operators = await db.users.find(
             {"role": "operator"},
             {"_id": 0, "password": 0}
         ).to_list(length=1000)
         
         # Agregar stats de cada operador
         for op in operators:
-            op["clients_count"] = count("clients", {"operator_id": op["id"]})
+            op["clients_count"] = await db.clients.count_documents({"operator_id": op["id"]})
             
             # Contar documentos del operador
             total_docs = 0
-            total_docs += count("niw_petitions", {"user_id": op["id"]})
-            total_docs += count("business_plans", {"user_id": op["id"]})
-            total_docs += count("patents", {"user_id": op["id"]})
-            total_docs += count("generated_documents", {"user_id": op["id"]})
-            total_docs += count("generated_documents", {"user_id": op["id"]})
-            total_docs += count("econometric_studies", {"user_id": op["id"]})
+            total_docs += await db.niw_in_progress.count_documents({"user_id": op["id"]})
+            total_docs += await db.business_plans.count_documents({"user_id": op["id"]})
+            total_docs += await db.patents_in_progress.count_documents({"user_id": op["id"]})
+            total_docs += await db.books_in_progress.count_documents({"user_id": op["id"]})
+            total_docs += await db.books.count_documents({"user_id": op["id"]})
+            total_docs += await db.econometric_studies_in_progress.count_documents({"user_id": op["id"]})
             
             op["documents_count"] = total_docs
         
@@ -15515,7 +15261,7 @@ async def create_operator(
     """Crear nuevo operador"""
     try:
         # Validar email único
-        existing = select("clients", filters={"email": operator_data["email"]}, single=True)
+        existing = await db.users.find_one({"email": operator_data["email"]})
         if existing:
             raise HTTPException(status_code=400, detail="Email already exists")
         
@@ -15541,7 +15287,7 @@ async def create_operator(
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        insert("clients", operator)
+        await db.users.insert_one(operator)
         
         logger.info(f"Operator created: {operator['id']} by admin {current_admin.id}")
         
@@ -15579,16 +15325,11 @@ async def update_operator_status(
         if new_status not in ["active", "suspended", "inactive"]:
             raise HTTPException(status_code=400, detail="Invalid status. Must be: active, suspended, or inactive")
         
-        operator = select("clients", filters={"id": operator_id, "role": "operator"}, single=True)
+        operator = await db.users.find_one({"id": operator_id, "role": "operator"})
         if not operator:
             raise HTTPException(status_code=404, detail="Operator not found")
         
-        # TODO: db.users.update_one needs manual conversion → table "clients"
-
-        
-        
-        
-        db.users.update_one(
+        await db.users.update_one(
             {"id": operator_id},
             {"$set": {"status": new_status}}
         )
@@ -15620,15 +15361,12 @@ async def delete_operator(
 ):
     """Eliminar operador (cambiar a inactive)"""
     try:
-        operator = select("clients", filters={"id": operator_id, "role": "operator"}, single=True)
+        operator = await db.users.find_one({"id": operator_id, "role": "operator"})
         if not operator:
             raise HTTPException(status_code=404, detail="Operator not found")
         
         # No eliminar físicamente, solo cambiar status
-        # TODO: db.users.update_one needs manual conversion → table "clients"
-
-        
-        db.users.update_one(
+        await db.users.update_one(
             {"id": operator_id},
             {"$set": {"status": "inactive"}}
         )
@@ -15655,30 +15393,27 @@ async def transfer_client(
             raise HTTPException(status_code=400, detail="new_operator_id is required")
         
         # Validar cliente existe
-        client = select("clients", filters={"id": client_id}, single=True)
+        client = await db.clients.find_one({"id": client_id})
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
         # Validar nuevo operador existe y está activo
-        new_operator = select("clients", filters={
+        new_operator = await db.users.find_one({
             "id": new_operator_id,
             "role": "operator",
             "status": "active"
-        }, single=True)
+        })
         if not new_operator:
             raise HTTPException(status_code=404, detail="New operator not found or not active")
         
         old_operator_id = client["operator_id"]
         
         # Obtener nombre del operador anterior
-        old_operator = select("clients", filters={"id": old_operator_id}, single=True)
+        old_operator = await db.users.find_one({"id": old_operator_id})
         old_operator_name = old_operator["full_name"] if old_operator else "Unknown"
         
         # Actualizar cliente
-        # TODO: db.clients.update_one needs manual conversion → table "clients"
-
-        
-        db.clients.update_one(
+        await db.clients.update_one(
             {"id": client_id},
             {
                 "$set": {
@@ -15761,9 +15496,9 @@ async def transfer_client(
 async def get_admin_stats(current_admin: User = Depends(require_admin)):
     """Estadísticas generales del sistema para admin"""
     try:
-        total_operators = count("clients", {"role": "operator"})
-        active_operators = count("clients", {"role": "operator", "status": "active"})
-        total_clients = count("clients", {"status": "active"})
+        total_operators = await db.users.count_documents({"role": "operator"})
+        active_operators = await db.users.count_documents({"role": "operator", "status": "active"})
+        total_clients = await db.clients.count_documents({"status": "active"})
         total_documents = 0
         
         # Contar todos los documentos
@@ -15779,8 +15514,7 @@ async def get_admin_stats(current_admin: User = Depends(require_admin)):
             total_documents += await db[collection_name].count_documents({})
         
         # Top 3 operadores por documentos
-        operators = # TODO: db.users.find needs manual conversion → table "clients"
-  db.users.find(
+        operators = await db.users.find(
             {"role": "operator", "status": "active"},
             {"_id": 0, "id": 1, "full_name": 1, "email": 1}
         ).to_list(length=100)
@@ -15820,7 +15554,7 @@ async def create_conversation(
         if not user_email:
             raise HTTPException(status_code=401, detail="Invalid token")
         
-        user = select("clients", filters={"email": user_email}, {"_id": 0}, single=True)
+        user = await db.users.find_one({"email": user_email}, {"_id": 0})
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
@@ -15835,7 +15569,7 @@ async def create_conversation(
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
-        insert("redactora_chat_messages", conversation.copy())
+        await db.chat_conversations.insert_one(conversation.copy())
         
         return {
             "success": True,
@@ -15857,15 +15591,14 @@ async def get_conversations(
         if not user_email:
             raise HTTPException(status_code=401, detail="Invalid token")
         
-        user = select("clients", filters={"email": user_email}, {"_id": 0}, single=True)
+        user = await db.users.find_one({"email": user_email}, {"_id": 0})
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         user_id = user["id"]
         
         # Get all conversations
-        conversations = # TODO: db.chat_conversations.find needs manual conversion → table "redactora_chat_messages"
-  db.chat_conversations.find(
+        conversations = await db.chat_conversations.find(
             {"user_id": user_id},
             {"_id": 0}
         ).sort("updated_at", -1).to_list(length=100)
@@ -15891,15 +15624,14 @@ async def get_conversation_messages(
         if not user_email:
             raise HTTPException(status_code=401, detail="Invalid token")
         
-        user = select("clients", filters={"email": user_email}, {"_id": 0}, single=True)
+        user = await db.users.find_one({"email": user_email}, {"_id": 0})
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = # TODO: db.chat_conversations.find_one needs manual conversion → table "redactora_chat_messages"
-  db.chat_conversations.find_one(
+        conversation = await db.chat_conversations.find_one(
             {"id": conversation_id, "user_id": user_id},
             {"_id": 0}
         )
@@ -15908,8 +15640,7 @@ async def get_conversation_messages(
             raise HTTPException(status_code=404, detail="Conversation not found")
         
         # Get messages
-        messages = # TODO: db.chat_messages.find needs manual conversion → table "redactora_chat_messages"
-  db.chat_messages.find(
+        messages = await db.chat_messages.find(
             {"conversation_id": conversation_id},
             {"_id": 0}
         ).sort("timestamp", 1).to_list(length=1000)
@@ -15937,15 +15668,14 @@ async def send_message_to_conversation(
         if not user_email:
             raise HTTPException(status_code=401, detail="Invalid token")
         
-        user = select("clients", filters={"email": user_email}, {"_id": 0}, single=True)
+        user = await db.users.find_one({"email": user_email}, {"_id": 0})
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = # TODO: db.chat_conversations.find_one needs manual conversion → table "redactora_chat_messages"
-  db.chat_conversations.find_one(
+        conversation = await db.chat_conversations.find_one(
             {"id": conversation_id, "user_id": user_id},
             {"_id": 0}
         )
@@ -16035,26 +15765,20 @@ async def send_message_to_conversation(
             user_message["file"] = file_info
         
         # Save user message
-        insert("redactora_chat_messages", user_message.copy())
+        await db.chat_messages.insert_one(user_message.copy())
         
         # Update conversation title if it's the first message
-        message_count = count("redactora_chat_messages", {"conversation_id": conversation_id})
+        message_count = await db.chat_messages.count_documents({"conversation_id": conversation_id})
         if message_count == 1:
             # Generate title from first message (first 50 chars)
             title = message[:50] + "..." if len(message) > 50 else message
-            # TODO: db.chat_conversations.update_one needs manual conversion → table "redactora_chat_messages"
-
-            
-            db.chat_conversations.update_one(
+            await db.chat_conversations.update_one(
                 {"id": conversation_id},
                 {"$set": {"title": title, "updated_at": datetime.now(timezone.utc).isoformat()}}
             )
         else:
             # Just update timestamp
-            # TODO: db.chat_conversations.update_one needs manual conversion → table "redactora_chat_messages"
-
-            
-            db.chat_conversations.update_one(
+            await db.chat_conversations.update_one(
                 {"id": conversation_id},
                 {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
             )
@@ -16094,7 +15818,7 @@ basándote en ese contenido. Puedes extraer información, resumir, responder pre
         }
         
         # Save assistant message
-        insert("redactora_chat_messages", assistant_message.copy())
+        await db.chat_messages.insert_one(assistant_message.copy())
         
         return {
             "success": True,
@@ -16118,15 +15842,14 @@ async def delete_conversation(
         if not user_email:
             raise HTTPException(status_code=401, detail="Invalid token")
         
-        user = select("clients", filters={"email": user_email}, {"_id": 0}, single=True)
+        user = await db.users.find_one({"email": user_email}, {"_id": 0})
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = # TODO: db.chat_conversations.find_one needs manual conversion → table "redactora_chat_messages"
-  db.chat_conversations.find_one(
+        conversation = await db.chat_conversations.find_one(
             {"id": conversation_id, "user_id": user_id},
             {"_id": 0}
         )
@@ -16135,10 +15858,10 @@ async def delete_conversation(
             raise HTTPException(status_code=404, detail="Conversation not found")
         
         # Delete all messages
-        delete("redactora_chat_messages", {"conversation_id": conversation_id})
+        await db.chat_messages.delete_many({"conversation_id": conversation_id})
         
         # Delete conversation
-        delete("redactora_chat_messages", {"id": conversation_id})
+        await db.chat_conversations.delete_one({"id": conversation_id})
         
         return {
             "success": True
