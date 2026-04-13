@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  portal:
+    build: ./apps/portal
+    ports:
+      - "8001:8080"
+    env_file:
+      - .env
+    environment:
+      - APP_NAME=portal
+    restart: unless-stopped
+
+  redactora:
+    build: ./apps/redactora
+    ports:
+      - "8002:8080"
+    env_file:
+      - .env
+    environment:
+      - APP_NAME=redactora
+    restart: unless-stopped

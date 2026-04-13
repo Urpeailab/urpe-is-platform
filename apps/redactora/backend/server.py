@@ -16171,3 +16171,19 @@ logger = logging.getLogger(__name__)
 async def shutdown_db_client():
     # Supabase client does not require explicit close
     pass
+# === Serve React frontend build ===
+from pathlib import Path as _Path
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse as _FileResponse
+
+_frontend_build = _Path(__file__).parent.parent / "frontend" / "build"
+if _frontend_build.exists():
+    app.mount("/static", StaticFiles(directory=str(_frontend_build / "static")), name="frontend-static")
+
+    @app.get("/{path:path}")
+    async def serve_react_app(path: str):
+        """Catch-all: serve React app for any non-API route."""
+        file_path = _frontend_build / path
+        if file_path.exists() and file_path.is_file():
+            return _FileResponse(str(file_path))
+        return _FileResponse(str(_frontend_build / "index.html"))

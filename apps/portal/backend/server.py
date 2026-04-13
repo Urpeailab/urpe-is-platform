@@ -2657,7 +2657,7 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
             )
         
         # Find the case
-        case = select("visa_cases", filters={"id": case_id}, {"_id": 0}, single=True)
+        case = select("visa_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -2706,22 +2706,12 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
         
         # Update all selected stages
         for stage_number in stage_numbers:
-            # TODO: db.visa_stages.update_one needs manual conversion → table "visa_stages"
+            update("visa_stages",
+                   filters={"case_id": case_id, "stage_number": stage_number},
+                   data={"is_paid": True, "status": "unlocked", "paid_amount": amount_per_stage, "paid_date": payment_date})
 
-            
-            db.visa_stages.update_one(
-                {"caseId": case_id, "stageNumber": stage_number},
-                {"$set": {
-                    "isPaid": True,
-                    "status": "unlocked",
-                    "paidAmount": amount_per_stage,
-                    "paidDate": payment_date
-                }}
-            )
-        
         # Refresh stages to get updated data
-        stages = # TODO: db.visa_stages.find needs manual conversion → table "visa_stages"
-  db.visa_stages.find({"caseId": case_id}).to_list(100)
+        stages = select("visa_stages", filters={"case_id": case_id})
         
         # Calculate overall progress
         total_stages = len(stages)
@@ -2738,26 +2728,12 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
         overall_progress = min(base_progress + first_stage_percentage, 100)  # Cap at 100%
         
         # Update case with progress
-        # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
+        update("visa_cases", filters={"id": case_id}, data={"overall_progress": overall_progress})
 
-        
-        db.visa_cases.update_one(
-            {"id": case_id},
-            {"$set": {
-                "overallProgress": overall_progress
-            }}
-        )
-        
         # Auto-change status to 'en_proceso' if case has a payment and status is still default
         current_status = case.get("status", "proceso_venta")
         if current_status in ("proceso_venta", "elegibility_approved"):
-            # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
-
-            
-            db.visa_cases.update_one(
-                {"id": case_id},
-                {"$set": {"status": "en_proceso"}}
-            )
+            update("visa_cases", filters={"id": case_id}, data={"status": "en_proceso"})
             logger.info(f"Case {case_id} auto-changed to 'en_proceso' after payment")
         
         # 🔧 FIX: Update currentStage after payment
@@ -3050,47 +3026,38 @@ async def unmark_stage_as_paid(
             )
         
         # Find the stage
-        stage = select("visa_stages", filters={'_id': stage_id}, single=True)
-        if not stage:
-            # Try by id field
-            stage = select("visa_stages", filters={'id': stage_id}, single=True)
-        
+        stage = select("visa_stages", filters={"id": stage_id}, single=True)
+
         if not stage:
             raise HTTPException(
                 status_code=404,
                 detail=f"Etapa no encontrada: {stage_id}"
             )
-        
-        if not stage.get('isPaid'):
+
+        if not stage.get('is_paid') and not stage.get('isPaid'):
             raise HTTPException(
                 status_code=400,
-                detail="La etapa no está marcada como pagada"
+                detail="La etapa no esta marcada como pagada"
             )
-        
+
         # Get stage info for logging
         stage_info = {
-            'stageNumber': stage.get('stageNumber'),
-            'caseId': stage.get('caseId'),
-            'paidAmount': stage.get('paidAmount', 0)
+            'stageNumber': stage.get('stage_number') or stage.get('stageNumber'),
+            'caseId': stage.get('case_id') or stage.get('caseId'),
+            'paidAmount': stage.get('paid_amount') or stage.get('paidAmount', 0)
         }
-        
+
         # Unmark as paid
-        result = # TODO: db.visa_stages.update_one needs manual conversion → table "visa_stages"
-  db.visa_stages.update_one(
-            {'_id': stage_id} if stage.get('_id') == stage_id else {'id': stage_id},
-            {
-                '$set': {
-                    'isPaid': False,
-                    'paidAmount': 0,
-                    'paymentId': None,
-                    'paidAt': None,
-                    'unmarkedAsPaidBy': staff_info.get('email'),
-                    'unmarkedAsPaidAt': datetime.utcnow().isoformat()
-                }
-            }
-        )
-        
-        if result.modified_count == 0:
+        result = update("visa_stages", filters={"id": stage_id}, data={
+            "is_paid": False,
+            "paid_amount": 0,
+            "payment_id": None,
+            "paid_date": None,
+            "unmarked_as_paid_by": staff_info.get('email'),
+            "unmarked_as_paid_at": datetime.utcnow().isoformat()
+        })
+
+        if not result:
             raise HTTPException(
                 status_code=500,
                 detail="No se pudo actualizar la etapa"
@@ -3141,24 +3108,24 @@ async def register_payment(request: Request, staff_info: dict = Depends(verify_s
             )
         
         # Find the case
-        case = select("visa_cases", filters={"id": case_id}, {"_id": 0}, single=True)
+        case = select("visa_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Case not found"
             )
-        
+
         # Get userId from the case
-        user_id = case.get('userId')
+        user_id = case.get('client_id') or case.get('userId')
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Case does not have a valid userId"
             )
-        
+
         # Create payment record
         payment_id = str(uuid.uuid4())
-        
+
         # Create automatic note about stage
         automatic_note = f"Pago registrado para Etapa {stage_number}."
         final_notes = f"{automatic_note} {notes}" if notes else automatic_note
@@ -3185,27 +3152,18 @@ async def register_payment(request: Request, staff_info: dict = Depends(verify_s
         
         insert("payments", payment_record)
         
-        # Get stages from db.visa_stages collection using caseId
-        stages = # TODO: db.visa_stages.find needs manual conversion → table "visa_stages"
-  db.visa_stages.find({"caseId": case_id}).to_list(100)
-        logger.info(f"🔍 Found {len(stages)} stages for case {case_id}")
-        
+        # Get stages from visa_stages table using case_id
+        stages = select("visa_stages", filters={"case_id": case_id})
+        logger.info(f"Found {len(stages)} stages for case {case_id}")
+
         # Update the specific stage to mark as paid and unlock
-        update_result = # TODO: db.visa_stages.update_one needs manual conversion → table "visa_stages"
-  db.visa_stages.update_one(
-            {"caseId": case_id, "stageNumber": stage_number},
-            {"$set": {
-                "isPaid": True,
-                "status": "unlocked",
-                "paidAmount": float(amount),
-                "paidDate": payment_date
-            }}
-        )
-        logger.info(f"✏️ Stage update result: matched={update_result.matched_count}, modified={update_result.modified_count}")
-        
+        update_result = update("visa_stages",
+                              filters={"case_id": case_id, "stage_number": stage_number},
+                              data={"is_paid": True, "status": "unlocked", "paid_amount": float(amount), "paid_date": payment_date})
+        logger.info(f"Stage update result: {len(update_result) if update_result else 0} rows updated")
+
         # Refresh stages to get updated data
-        stages = # TODO: db.visa_stages.find needs manual conversion → table "visa_stages"
-  db.visa_stages.find({"caseId": case_id}).to_list(100)
+        stages = select("visa_stages", filters={"case_id": case_id})
         
         # Calculate overall progress
         # Count paid stages
@@ -3225,34 +3183,19 @@ async def register_payment(request: Request, staff_info: dict = Depends(verify_s
         logger.info(f"📊 Calculated: {paid_stages}/{total_stages} paid, base: {base_progress}% + stage 1: {first_stage_percentage}% = {overall_progress}%")
         
         # Update case with progress
-        # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
+        update("visa_cases", filters={"id": case_id}, data={"overall_progress": overall_progress})
 
-        
-        db.visa_cases.update_one(
-            {"id": case_id},
-            {"$set": {
-                "overallProgress": overall_progress
-            }}
-        )
-        
-        # 🔧 FIX: Update currentStage after payment
+        # Update currentStage after payment
         await update_case_current_stage(case_id)
-        
-        logger.info(f"✅ Payment registered for case {case_id}, stage {stage_number}")
+
+        logger.info(f"Payment registered for case {case_id}, stage {stage_number}")
         logger.info(f"📊 Progress updated: {paid_stages}/{total_stages} stages paid ({overall_progress}%)")
         
         # 📤 Notify webhook about stage payment
-        # Get client info - soporta tanto 'id' string como '_id' ObjectId
-        user_info = select("clients", filters={"id": user_id}, {"_id": 0, "name": 1, "email": 1, "phone": 1}, single=True)
-        if not user_info:
-            try:
-                user_info = select("clients", filters={"_id": ObjectId(user_id)}, single=True)
-            except Exception:
-                pass
-        if not user_info:
-            user_info = select("clients", filters={"_id": user_id}, {"_id": 0, "name": 1, "email": 1, "phone": 1}, single=True)
-        
-        case_info = select("visa_cases", filters={"id": case_id}, {"_id": 0, "visaType": 1, "status": 1}, single=True)
+        # Get client info
+        user_info = select("users", columns="name,email,phone", filters={"id": user_id}, single=True)
+
+        case_info = select("visa_cases", columns="visa_type,status", filters={"id": case_id}, single=True)
         
         client_name = user_info.get("name", "N/A") if user_info else "N/A"
         client_email = user_info.get("email", "") if user_info else ""
@@ -3340,8 +3283,7 @@ async def register_payment(request: Request, staff_info: dict = Depends(verify_s
 @api_router.get("/messages/user/{user_id}")
 async def get_user_messages(user_id: str):
     try:
-        messages = # TODO: db.messages.find needs manual conversion → table "redactora_chat_messages"
-  db.messages.find({"userId": user_id}, {"_id": 0}).to_list(100)
+        messages = select("redactora_chat_messages", filters={"user_id": user_id}, limit=100)
         
         for msg in messages:
             if isinstance(msg.get('timestamp'), str):
@@ -7895,13 +7837,7 @@ async def create_user_with_case(
         # Check if magic link already exists for this phone
         existing_link = select("magic_links", filters={'phone': request.phone}, single=True)
         if existing_link:
-            # TODO: db.magic_links.update_one needs manual conversion → table "magic_links"
-
-            
-            db.magic_links.update_one(
-                {'phone': request.phone},
-                {'$set': magic_link_doc}
-            )
+            update("magic_links", filters={"phone": request.phone}, data=magic_link_doc)
             logger.info(f"🔄 Updated magic link for: {request.phone}")
         else:
             insert("magic_links", magic_link_doc)
@@ -8213,8 +8149,7 @@ async def integration_upsert_client(
 
             # Copiar entregables del master
             stage_id_map = {s["stageNumber"]: s["_id"] for s in stages}
-            master_delivs = # TODO: db.visa_deliverables.find needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.find({"caseId": MASTER_CASE_ID}).to_list(None)
+            master_delivs = select("visa_deliverables", filters={"case_id": MASTER_CASE_ID})
             delivs = []
             for md in master_delivs:
                 did = str(uuid.uuid4())
@@ -8236,8 +8171,7 @@ async def integration_upsert_client(
                     insert("visa_deliverables", _doc)
 
             # Copiar documentos del master
-            master_docs = # TODO: db.visa_client_documents.find needs manual conversion → table "visa_documents"
-  db.visa_client_documents.find({"caseId": MASTER_CASE_ID}).to_list(None)
+            master_docs = select("visa_documents", filters={"case_id": MASTER_CASE_ID})
             docs = []
             for md in master_docs:
                 docid = str(uuid.uuid4())
@@ -8339,8 +8273,7 @@ async def create_visa_case(
         )
         
         case_dict = visa_case.model_dump()
-        case_dict['_id'] = case_dict['id']  # MongoDB necesita _id
-        case_dict['templateId'] = request.templateId or "eb2-niw"  # ⭐ NUEVO: Guardar template ID
+        case_dict['templateId'] = request.templateId or "eb2-niw"  # Guardar template ID
         case_dict['createdBy'] = {
             "id": staff_payload['id'],
             "name": staff_payload.get('name', 'Staff'),
@@ -8612,23 +8545,15 @@ async def get_all_visa_cases(
                 query['sellerId'] = 'NOT_FOUND_SELLER'
         
         # Filtro para casos sin coordinador asignado (solo admins)
-        # Solo casos que NO tienen coordinatorId O tienen coordinatorId vacío
-        if unassigned:
-            query['$or'] = [
-                {'coordinatorId': None},
-                {'coordinatorId': ''},
-                {'coordinatorId': {'$exists': False}}
-            ]
+        # Will be applied as post-filter since Supabase handles null differently
+        _filter_unassigned = unassigned
         
         # Si es coordinador o advisor, ver sus casos asignados (como coordinador O como vendedor)
         user_role = staff_payload.get('role', 'advisor')
         staff_id = staff_payload.get('id')
+        _filter_staff_assigned = None
         if user_role in ['coordinator', 'advisor'] and staff_id:
-            query['$or'] = [
-                {'coordinatorId': staff_id},
-                {'salesRepId': staff_id},
-                {'sellerId': staff_id}  # Support both field names
-            ]
+            _filter_staff_assigned = staff_id
         
         # Acreditador: solo ve casos con más de 1 etapa pagada (filtro post-query)
         is_acreditador = user_role == 'acreditador'
@@ -9365,11 +9290,11 @@ async def delete_visa_case(
             'success': True,
             'message': 'Caso eliminado exitosamente',
             'deletedItems': {
-                'stages': stages_result.deleted_count,
-                'deliverables': deliverables_result.deleted_count,
-                'documents': documents_result.deleted_count,
-                'payments': payments_result.deleted_count,
-                'meetings': meetings_result.deleted_count
+                'stages': len(stages_result) if stages_result else 0,
+                'deliverables': len(deliverables_result) if deliverables_result else 0,
+                'documents': len(documents_result) if documents_result else 0,
+                'payments': len(payments_result) if payments_result else 0,
+                'meetings': len(meetings_result) if meetings_result else 0
             }
         }
         
@@ -10342,7 +10267,7 @@ async def create_stage_template(
             "stage_number": new_stage_number,
             "name": stage_name,
             "description": stage_description,
-            "template_id": str(result.inserted_id),
+            "template_id": str(result.get('id', '')),
             "cases_affected": cases_affected
         }
         
@@ -12795,3 +12720,17 @@ async def start_classic_alerts_cron():
                 await _asyncio.sleep(60)
 
     _asyncio.ensure_future(classic_alerts_loop())
+
+# === Serve React frontend build ===
+from pathlib import Path as _Path
+_frontend_build = _Path(__file__).parent.parent / "frontend" / "build"
+if _frontend_build.exists():
+    app.mount("/static", StaticFiles(directory=str(_frontend_build / "static")), name="frontend-static")
+
+    @app.get("/{path:path}")
+    async def serve_react_app(path: str):
+        """Catch-all: serve React app for any non-API route."""
+        file_path = _frontend_build / path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(_frontend_build / "index.html"))
