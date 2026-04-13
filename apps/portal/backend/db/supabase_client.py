@@ -72,14 +72,21 @@ def update(table: str, filters: dict, data: dict) -> list:
     return result.data
 
 
-def delete(table: str, filters: dict) -> list:
-    """DELETE helper. Returns deleted rows."""
+class _DeleteResult(list):
+    """List subclass with deleted_count property for MongoDB compatibility."""
+    @property
+    def deleted_count(self):
+        return len(self)
+
+
+def delete(table: str, filters: dict) -> "_DeleteResult":
+    """DELETE helper. Returns deleted rows with .deleted_count property."""
     sb = get_supabase()
     q = sb.table(table).delete()
     for key, val in filters.items():
         q = q.eq(key, val)
     result = q.execute()
-    return result.data
+    return _DeleteResult(result.data)
 
 
 def upsert(table: str, data: dict, on_conflict: str = "id") -> dict:

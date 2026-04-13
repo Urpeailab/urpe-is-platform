@@ -4829,12 +4829,12 @@ async def change_admin_password(
         hashed_password = pwd_context.hash(password_data.newPassword)
         
         # Update password (update both fields for compatibility)
-  update("staff", {'id': admin_id}, {
-                'passwordHash': hashed_password,
-                'password': hashed_password  # For backward compatibility
-            })
-        
-        if result.modified_count == 0:
+        result = update("staff", {"id": admin_id}, {
+            "passwordHash": hashed_password,
+            "password": hashed_password  # For backward compatibility
+        })
+
+        if not result:
             raise HTTPException(status_code=500, detail="Failed to update password")
         
         # Log activity
@@ -4873,29 +4873,30 @@ async def get_all_staff(
         if not has_permission(user_role, 'view_all_staff') and not has_permission(user_role, 'view_department_staff'):
             raise HTTPException(status_code=403, detail="Insufficient permissions to view staff")
         
-        # Construir query
-        query = {}
-        if search:
-            query['$or'] = [
-                {'name': {'$regex': search, '$options': 'i'}},
-                {'email': {'$regex': search, '$options': 'i'}},
-                {'phone': {'$regex': search, '$options': 'i'}}
-            ]
+        # Build simple eq filters for Supabase; search done in Python
+        sb_filters = {}
         if role:
-            query['role'] = role
+            sb_filters['role'] = role
         if department and department != 'all':
-            query['department'] = department
-        
+            sb_filters['department'] = department
+
         # Si no tiene permiso para ver todo el staff, filtrar por departamento
         if not has_permission(user_role, 'view_all_staff'):
             if has_permission(user_role, 'view_department_staff'):
-                query['department'] = staff_payload.get('department')
-        
+                sb_filters['department'] = staff_payload.get('department')
+
+        all_staff = select("staff", filters=sb_filters if sb_filters else None)
+
+        # Apply search filter in Python (case-insensitive substring match)
+        if search:
+            _search_lower = search.lower()
+            all_staff = [s for s in all_staff if
+                         _search_lower in (s.get('name') or '').lower() or
+                         _search_lower in (s.get('email') or '').lower() or
+                         _search_lower in (s.get('phone') or '').lower()]
+
         # Paginación
         skip = (page - 1) * limit
-        
-        # Obtener staff y total
-        all_staff = select("staff", filters=query if query else None)
         total = len(all_staff)
         staff_list = all_staff[skip:skip + limit]
         
@@ -5484,7 +5485,7 @@ async def import_master_case(
         
         # Eliminar existente si force=true
         if existing_case and force:
-            delete("visa_cases", {'_id': 'master_case_eb2_niw'})
+            delete("visa_cases", {"id": "master_case_eb2_niw"})
             results['previousCaseDeleted'] = True
             
             stages_result = delete("visa_stages", {'caseId': 'master_case_eb2_niw'})
@@ -5631,7 +5632,7 @@ async def delete_user(
         deletion_summary["deleted"]["cases"] = cases_result.deleted_count
         
         # Eliminar usuario (usando el ID real)
-        delete("clients", {"_id": actual_user_id})
+        delete("clients", {"id": actual_user_id})
         
         logger.info(f"✅ User deleted by {staff_payload.get('email')}: {user_email} (ID: {user_id})")
         
@@ -6056,7 +6057,7 @@ async def delete_staff(
             raise HTTPException(status_code=403, detail="Cannot delete staff member with equal or higher role")
         
         # Eliminar
-        delete("staff", {'_id': staff_id})
+        delete("staff", {"id": staff_id})
         
         # Log de actividad
         log = ActivityLog.create_log(
@@ -6100,13 +6101,13 @@ async def transfer_staff_cases(
             raise HTTPException(status_code=404, detail="Staff destino no encontrado")
 
         # Transfer visa cases - coordinatorId
-  update("visa_cases", {"coordinatorId": staff_id}, {"coordinatorId": request.targetStaffId})
+        visa_coord = update("visa_cases", {"coordinatorId": staff_id}, {"coordinatorId": request.targetStaffId})
         # Transfer visa cases - salesRepId
-  update("visa_cases", {"salesRepId": staff_id}, {"salesRepId": request.targetStaffId})
+        visa_sales = update("visa_cases", {"salesRepId": staff_id}, {"salesRepId": request.targetStaffId})
         # Transfer classic cases - coordinatorId
-  update("classic_cases", {"coordinatorId": staff_id}, {"coordinatorId": request.targetStaffId})
+        classic_coord = update("classic_cases", {"coordinatorId": staff_id}, {"coordinatorId": request.targetStaffId})
 
-        total = visa_coord.modified_count + visa_sales.modified_count + classic_coord.modified_count
+        total = len(visa_coord or []) + len(visa_sales or []) + len(classic_coord or [])
 
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
@@ -7728,18 +7729,7 @@ async def create_visa_case(
         # No se requiere verificación de permisos específicos
         
         # Verificar que el usuario existe
-                user = None
-        try:
-            # Try with ObjectId first
-            user_id = ObjectId(request.userId)
-            user = select("clients", filters={"id": user_id}, single=True)
-        except Exception:
-            # If ObjectId conversion fails, try with string ID
-            user = select("clients", filters={"id": request.userId}, single=True)
-        
-        # Also try with 'id' field if not found
-        if not user:
-            user = select("clients", filters={'id': request.userId}, single=True)
+        user = select("clients", filters={"id": request.userId}, single=True)
             
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
@@ -8044,16 +8034,7 @@ async def get_all_visa_cases(
         
         # Si hay búsqueda, buscar en usuarios primero y luego en casos
         if search:
-            # Buscar usuarios por nombre, email o teléfono usando regex case-insensitive
-            user_query = {
-                '$or': [
-                    {'name': {'$regex': search, '$options': 'i'}},
-                    {'email': {'$regex': search, '$options': 'i'}},
-                    {'phone': {'$regex': search, '$options': 'i'}}
-                ]
-            }
-            
-            # Obtener IDs de usuarios que coinciden
+            # Obtener IDs de usuarios que coinciden con la busqueda
             sb = get_supabase()
             _su_result = sb.table("users").select("id").or_(
                 f"name.ilike.%{search}%,email.ilike.%{search}%,phone.ilike.%{search}%"
@@ -8460,10 +8441,9 @@ async def get_visa_case_detail(
             if max_paid_stage <= 1:
                 raise HTTPException(status_code=403, detail="No tienes acceso a este caso")
             # Find stage containing the "Acreditación de títulos" deliverable
-            acred_deliverable = select("visa_deliverables", filters={
-                'caseId': case_id,
-                'deliverableName': {'$regex': 'acreditaci', '$options': 'i'}
-            }, {'stageNumber': 1}, single=True)
+            # Search for acreditacion deliverable - fetch all for case and filter in Python
+            _case_deliverables = select("visa_deliverables", filters={"caseId": case_id}, columns="deliverableName,stageNumber")
+            acred_deliverable = next((d for d in _case_deliverables if 'acreditaci' in (d.get('deliverableName') or '').lower()), None)
             acred_stage = acred_deliverable.get('stageNumber') if acred_deliverable else None
             if acred_stage:
                 stages = [s for s in stages if s.get('stageNumber') == acred_stage]
@@ -8670,7 +8650,7 @@ async def delete_visa_case(
         meetings_result = delete("visa_meetings", {'caseId': case_id})
         
         # 6. Finally, delete the case itself
-        case_result = delete("visa_cases", {'_id': case_id})
+        case_result = delete("visa_cases", {"id": case_id})
         
         if case_result.deleted_count == 0:
             raise HTTPException(status_code=500, detail="Error al eliminar el caso")
@@ -8842,7 +8822,7 @@ async def delete_deliverable(
         if not deliverable:
             raise HTTPException(status_code=404, detail="Entregable no encontrado")
 
-        delete("visa_deliverables", {"_id": deliverable["_id"]})
+        delete("visa_deliverables", {"id": deliverable.get("id") or deliverable.get("_id")})
         logger.info(f"Deliverable deleted: {deliverable_id} by {staff_payload.get('email')}")
 
         return {"success": True, "message": "Entregable eliminado exitosamente"}
@@ -9973,7 +9953,7 @@ async def delete_stage_template(
             logger.info(f"Deleted stage {stage_number} from {cases_affected} cases")
         
         # Delete the template
-        delete("visa_stages", {"_id": template["_id"]})
+        delete("visa_stages", {"id": template.get("id") or template.get("_id")})
         
         # Log the activity
         log = ActivityLog.create_log(
@@ -11009,13 +10989,13 @@ async def update_stage_amount(
             )
         
         # Update the stage amount
-  update("visa_stages", {
-                'caseId': case_id,
-                'stageNumber': stage_number
-            }, {
-                    'amount': request.amount,
-                    'updatedAt': datetime.now(timezone.utc).isoformat()
-                })
+        update("visa_stages", {
+            "caseId": case_id,
+            "stageNumber": stage_number
+        }, {
+            "amount": request.amount,
+            "updatedAt": datetime.now(timezone.utc).isoformat()
+        })
         
         if result.modified_count == 0:
             raise HTTPException(status_code=500, detail="Failed to update stage amount")
@@ -11057,12 +11037,7 @@ async def verify_user_token(authorization: Annotated[str, Header()] = None):
             raise HTTPException(status_code=401, detail="Invalid token type")
         
         # Verificar que el usuario existe
-                try:
-            user_id = ObjectId(payload['id'])
-            user = select("clients", filters={"id": user_id}, single=True)
-        except Exception:
-            # If ObjectId conversion fails, try with string ID
-            user = select("clients", filters={"id": payload['id']}, single=True)
+        user = select("clients", filters={"id": payload['id']}, single=True)
         
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
@@ -11464,7 +11439,7 @@ async def delete_test_user(request: DeleteTestUserRequest):
             deletion_summary["deleted"]["cases"] = case_result.deleted_count
         
         # Delete user
-        delete("clients", {"_id": user['_id']})
+        delete("clients", {"id": user.get("id") or user.get("_id")})
         
         # Verify master case is intact
         master_case = select("visa_cases", filters={"caseId": "master_case_eb2_niw"}, single=True)
@@ -11621,17 +11596,11 @@ async def import_uscis_migration_data(
         if request.uscis_templates:
             for template in request.uscis_templates:
                 t_id = template.get('_id') or template.get('id')
+                template.pop('_id', None)  # Remove MongoDB _id
+                if not template.get('id'):
+                    template['id'] = t_id or str(uuid.uuid4())
                 if t_id:
-                    # Try to use ObjectId if it's a valid ObjectId string
-                    try:
-                        obj_id = ObjectId(t_id)
-
-                        
-                        update("uscis_templates", {'id': obj_id}, {**template, '_id': obj_id})
-                    except:
-
-                        
-                        update("uscis_templates", {'id': t_id}, {**template, '_id': t_id})
+                    update("uscis_templates", {"id": template["id"]}, template)
                 else:
                     insert("uscis_templates", template)
             results['uscis_templates'] = len(request.uscis_templates)
@@ -11644,7 +11613,8 @@ async def import_uscis_migration_data(
                 if s_id:
 
                     
-                    update("uscis_shared_forms", {'id': s_id}, {**shared, '_id': s_id})
+                    shared.pop('_id', None)
+                    update("uscis_submissions", {"id": s_id}, shared)
                 else:
                     insert("uscis_submissions", shared)
             results['uscis_shared_forms'] = len(request.uscis_shared_forms)
@@ -11657,7 +11627,8 @@ async def import_uscis_migration_data(
                 if sub_id:
 
                     
-                    update("uscis_submissions", {'id': sub_id}, {**submission, '_id': sub_id})
+                    submission.pop('_id', None)
+                    update("uscis_submissions", {"id": sub_id}, submission)
                 else:
                     insert("uscis_submissions", submission)
             results['uscis_submissions'] = len(request.uscis_submissions)

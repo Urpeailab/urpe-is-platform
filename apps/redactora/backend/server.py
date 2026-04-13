@@ -4881,19 +4881,19 @@ async def update_business_plan(
     """Update business plan content"""
     # 🔥 CRITICAL FIX: Check both collections and verify ownership
     # Try completed plans first
-  update("business_plans", {"id": plan_id, "user_id": current_user.id}, {
+    update("business_plans", {"id": plan_id, "user_id": current_user.id}, {
+        "content": content,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    })
+    
+    # If not found in completed, try in-progress
+    if not result:
+        result = update("business_plans", {"id": plan_id, "user_id": current_user.id}, {
             "content": content,
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
-    
-    # If not found in completed, try in-progress
-    if result.matched_count == 0:
-  update("niw_petitions", {"id": plan_id, "user_id": current_user.id}, {
-                "content": content,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            })
-    
-    if result.matched_count == 0:
+
+    if not result:
         raise HTTPException(status_code=404, detail="Business plan not found or you don't have permission")
     
     logging.info(f"✅ Business plan {plan_id} content updated successfully")
@@ -4908,11 +4908,11 @@ async def update_business_plan(
 async def delete_business_plan(plan_id: str, current_user: User = Depends(get_current_user)):
     """Delete a business plan (both in-progress and completed)"""
     try:
-        # Try to delete from both collections
-  delete("niw_petitions", {"id": plan_id, "user_id": current_user.id})
-  delete("business_plans", {"id": plan_id, "user_id": current_user.id})
-        
-        if result_progress.deleted_count == 0 and result_completed.deleted_count == 0:
+        # Try to delete from both tables
+        result_1 = delete("business_plans", {"id": plan_id, "user_id": current_user.id})
+        result_2 = delete("business_plans", {"id": plan_id, "user_id": current_user.id})
+
+        if not result_1 and not result_2:
             raise HTTPException(status_code=404, detail="Business plan not found")
         
         return {"message": "Business plan deleted successfully"}
@@ -5905,7 +5905,7 @@ async def approve_chapter(book_id: str, chapter_data: dict, current_user: User =
     try:
         chapter_data['approved'] = True
         
-  update("generated_documents", {"id": book_id, "user_id": current_user.id}, {"updated_at": datetime.now(timezone.utc).isoformat()})
+        update("generated_documents", {"id": book_id, "user_id": current_user.id}, {"updated_at": datetime.now(timezone.utc).isoformat()})
         
 
         
@@ -6264,7 +6264,7 @@ Format your response as:
 @api_router.put("/books/{book_id}")
 async def update_book(book_id: str, content: str):
     """Update book content"""
-  update("generated_documents", {"id": book_id}, {
+    update("generated_documents", {"id": book_id}, {
             "content": content,
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
@@ -7191,8 +7191,7 @@ async def generate_patent_section(
     # Reset token tracker for this section generation
     reset_token_tracker()
     
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -7676,8 +7675,7 @@ Please regenerate the section now, fixing ALL these problems."""
     # AUTO-SAVE SECTION IF IT PASSED EVALUATION (NEW PATENT EVALUATOR FIX)
     if evaluation_passed:
         # ⭐ CRITICAL FIX: Refresh patent from DB to get latest sections
-        patent_fresh = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id}, single=True)
+        patent_fresh = select("patents", filters={"id": patent_id}, single=True)
         
         if not patent_fresh:
             logging.error(f"❌ Could not refresh patent {patent_id} from database")
@@ -7710,7 +7708,7 @@ Please regenerate the section now, fixing ALL these problems."""
             logging.info(f"   content_en length: {len(section_to_save.get('content_en', ''))}")
         
         # Update patent in database
-  update("patents", {"id": patent_id}, {
+        update("patents", {"id": patent_id}, {
                     "sections": patent_sections,
                     "current_section": section_number + 1,
                     "updated_at": datetime.now(timezone.utc).isoformat()
@@ -7746,15 +7744,13 @@ async def generate_complete_patent(
     
     # Get patent data - try both collections and remember which one
     patent_collection = None
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if patent:
         patent_collection = db.patents_in_progress
     else:
         # Try in patents collection
-        patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
         if patent:
             patent_collection = db.patents
     
@@ -7862,8 +7858,7 @@ async def clean_patent_sections(
     current_user: User = Depends(get_current_user)
 ):
     """Clean existing sections from smart quotes and special characters"""
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -7901,8 +7896,7 @@ async def approve_patent_section(
     logging.info(f"   Section title: {section.title}")
     logging.info(f"   Content length: {len(section.content) if section.content else 0}")
     
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         logging.error(f"❌ Patent {patent_id} not found for user {current_user.id}")
@@ -7954,15 +7948,13 @@ async def edit_patent_section(
     """Edit a patent section with AI regeneration (for in-progress patents)"""
     try:
         # First check in-progress patents (during interactive creation)
-        patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
         
         is_in_progress = True
         if not patent:
             # Check completed patents
-            patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
-            is_in_progress = False
+            patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        is_in_progress = False
         
         if not patent:
             raise HTTPException(status_code=404, detail="Patent not found")
@@ -8521,14 +8513,12 @@ async def generate_patent_drawings(
     logging.info(f"🎨 Starting NEW diagram generation with GPT-4o for patent {patent_id}")
     
     # Try to find patent in both in_progress and completed collections
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     is_finalized = False
     if not patent:
         # Check in finalized patents
-        patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
         is_finalized = True
     
     if not patent:
@@ -8600,8 +8590,7 @@ async def generate_patent_drawings(
 @api_router.post("/patents/finalize/{patent_id}")
 async def finalize_patent(patent_id: str, current_user: User = Depends(get_current_user)):
     """Finalize patent application and create completed document"""
-    patent_progress = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent_progress = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent_progress:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -8692,8 +8681,7 @@ async def finalize_patent(patent_id: str, current_user: User = Depends(get_curre
 @api_router.get("/patents/in-progress/{patent_id}", response_model=PatentInProgress)
 async def get_patent_in_progress(patent_id: str, current_user: User = Depends(get_current_user)):
     """Get a patent in progress"""
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -8728,7 +8716,7 @@ async def get_patents_in_progress(
     query["status"] = {"$ne": "complete"}
     
     patents = select("patents")  # REVIEW: add filters
-  select("patents")
+    select("patents")
     
     for patent in patents:
         if isinstance(patent.get('created_at'), str):
@@ -8750,7 +8738,7 @@ async def get_patents(
     
     # Get completed patents from the patents collection
     patents = select("patents")  # REVIEW: add filters
-  select("patents")
+    select("patents")
     
     # 🔥 FIX: Also get completed V2 patents from patents_in_progress collection
     # V2 patents stay in patents_in_progress but with status="complete"
@@ -8759,7 +8747,7 @@ async def get_patents(
         query_complete_v2["client_id"] = client_id
     
     completed_v2_patents = select("patents")  # REVIEW: add filters
-  select("patents")
+    select("patents")
     
     # Merge both lists
     all_patents = patents + completed_v2_patents
@@ -8770,13 +8758,11 @@ async def get_patents(
 async def get_patent(patent_id: str, current_user: User = Depends(get_current_user)):
     """Get a specific patent (searches both completed and in-progress)"""
     # First check completed patents
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     # If not found, check in-progress patents
     if not patent:
-        patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -8848,8 +8834,8 @@ async def delete_patent(patent_id: str, current_user: User = Depends(get_current
     """Delete a patent (both in-progress and completed)"""
     try:
         # Try to delete from both collections
-  delete("patents", {"id": patent_id, "user_id": current_user.id})
-  delete("patents", {"id": patent_id, "user_id": current_user.id})
+        delete("patents", {"id": patent_id, "user_id": current_user.id})
+        delete("patents", {"id": patent_id, "user_id": current_user.id})
         
         if result_progress.deleted_count == 0 and result_completed.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Patent not found")
@@ -9020,8 +9006,7 @@ async def download_patent_specification(
     current_user: User = Depends(get_current_user)
 ):
     """Download patent specification as PDF in specified language"""
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -9162,8 +9147,7 @@ async def generate_patent_translation(
     current_user: User = Depends(get_current_user)
 ):
     """Generate English translation for existing patent sections using chunked translation"""
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -9308,13 +9292,11 @@ async def download_patent_drawings(
 ):
     """Download patent drawings as PDF in specified language"""
     # Try to find in completed patents first
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     # If not found, try patents_in_progress
     if not patent:
-        patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -9664,13 +9646,11 @@ async def download_patent_complete(
     logging.info(f"👤 User: {current_user.email}")
     
     # Try completed patents first
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     # If not found, check in-progress patents (V2 patents are stored here)
     if not patent:
-        patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -10358,8 +10338,7 @@ async def evaluate_patent(
     logging.info(f"👤 User: {current_user.email}")
     
     # Get the existing evaluation from database
-    evaluation = select("patent_evaluations", single=True)  # REVIEW: add filters
-  select("patent_evaluations", filters={"patent_id": patent_id}, single=True)
+    evaluation = select("patent_evaluations", filters={"patent_id": patent_id}, single=True)
     
     if not evaluation:
         raise HTTPException(
@@ -10378,8 +10357,7 @@ async def get_patent_evaluation(
     current_user: User = Depends(get_current_user)
 ):
     """Get the latest evaluation for a patent"""
-    evaluation = select("patent_evaluations", single=True)  # REVIEW: add filters
-  select("patent_evaluations", filters={"patent_id": patent_id}, single=True)
+    evaluation = select("patent_evaluations", filters={"patent_id": patent_id}, single=True)
     
     if not evaluation:
         raise HTTPException(status_code=404, detail="No evaluation found for this patent")
@@ -10394,8 +10372,7 @@ async def get_patent_evaluation(
     current_user: User = Depends(get_current_user)
 ):
     """Get the latest evaluation for a patent"""
-    evaluation = select("patent_evaluations", single=True)  # REVIEW: add filters
-  select("patent_evaluations", filters={"patent_id": patent_id}, single=True)
+    evaluation = select("patent_evaluations", filters={"patent_id": patent_id}, single=True)
     
     if not evaluation:
         raise HTTPException(status_code=404, detail="No evaluation found for this patent")
@@ -10411,13 +10388,11 @@ async def download_patent_numbered(
 ):
     """Download complete patent with USPTO-style line numbering (every line numbered, no blank lines)"""
     # Try completed patents first
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     # If not found, check in-progress patents (V2 patents are stored here)
     if not patent:
-        patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -10513,8 +10488,7 @@ async def download_patent_draft(
     current_user: User = Depends(get_current_user)
 ):
     """Download patent draft as PDF (simplified version) in specified language"""
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -10784,8 +10758,7 @@ async def generate_econometric_section(
     current_user: User = Depends(get_current_user)
 ):
     """Generate a specific section of the econometric study"""
-    study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+    study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
     if not study:
         raise HTTPException(status_code=404, detail="Study not found")
@@ -11145,8 +11118,7 @@ async def approve_econometric_section(
     current_user: User = Depends(get_current_user)
 ):
     """Approve a section and move to the next"""
-    study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+    study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
     if not study:
         raise HTTPException(status_code=404, detail="Study not found")
@@ -11214,13 +11186,11 @@ async def edit_econometric_section_with_ai(
 ):
     """Edit an econometric study section with AI instructions"""
     # Check both in-progress and completed studies
-    study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+    study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
     collection = db.econometric_studies_in_progress
     if not study:
-        study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+        study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
         collection = db.econometric_studies
     
     if not study:
@@ -11286,12 +11256,10 @@ async def edit_econometric_section_direct(
 ):
     """Edit a section directly without AI (for manual edits)"""
     # Check both in-progress and completed studies
-    study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+    study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
     if not study:
-        study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+        study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
         collection = db.econometric_studies_in_progress
     else:
         collection = db.econometric_studies
@@ -11335,7 +11303,7 @@ async def edit_econometric_section_direct(
 async def list_econometric_studies(current_user: User = Depends(get_current_user)):
     """List all econometric studies for the current user (completed only)"""
     studies = select("econometric_studies")  # REVIEW: add filters
-  select("econometric_studies", filters={"user_id": current_user.id})
+    select("econometric_studies", filters={"user_id": current_user.id})
     
     return {"studies": studies}
 
@@ -11343,7 +11311,7 @@ async def list_econometric_studies(current_user: User = Depends(get_current_user
 async def list_econometric_studies_in_progress(current_user: User = Depends(get_current_user)):
     """List all econometric studies IN PROGRESS for the current user"""
     studies = select("econometric_studies")  # REVIEW: add filters
-  select("econometric_studies", filters={"user_id": current_user.id})
+    select("econometric_studies", filters={"user_id": current_user.id})
     
     return studies
 
@@ -11354,13 +11322,11 @@ async def get_econometric_study(
 ):
     """Get a specific econometric study (completed or in progress)"""
     # Try completed studies first
-    study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+    study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
     # If not found, try in-progress studies
     if not study:
-        study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+        study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
     if not study:
         raise HTTPException(status_code=404, detail="Study not found")
@@ -11373,8 +11339,7 @@ async def download_econometric_study(
     current_user: User = Depends(get_current_user)
 ):
     """Download econometric study as PDF"""
-    study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+    study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
     if not study:
         raise HTTPException(status_code=404, detail="Study not found")
@@ -11397,7 +11362,7 @@ async def delete_econometric_study(
     current_user: User = Depends(get_current_user)
 ):
     """Delete an econometric study"""
-  delete("econometric_studies", {"id": study_id, "user_id": current_user.id})
+    delete("econometric_studies", {"id": study_id, "user_id": current_user.id})
     
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Study not found")
@@ -11408,8 +11373,7 @@ async def delete_econometric_study(
 @api_router.post("/econometric-studies/finalize/{study_id}")
 async def finalize_econometric_study(study_id: str, current_user: User = Depends(get_current_user)):
     """Finalize the econometric study"""
-    study = select("econometric_studies", single=True)  # REVIEW: add filters
-  select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
+    study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
     if not study:
         raise HTTPException(status_code=404, detail="Econometric study not found")
@@ -11566,7 +11530,7 @@ async def get_recommendation_letters(
 ):
     """Get all recommendation letters for the current user"""
     letters = select("recommendation_letters")  # REVIEW: add filters
-  select("recommendation_letters", filters={"user_id": current_user.id}, order="created_at", order_desc=True, limit=100)
+    select("recommendation_letters", filters={"user_id": current_user.id}, order="created_at", order_desc=True, limit=100)
     
     return {"letters": letters, "count": len(letters)}
 
@@ -11577,8 +11541,7 @@ async def get_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Get a specific recommendation letter"""
-    letter = select("recommendation_letters", single=True)  # REVIEW: add filters
-  select("recommendation_letters", filters={"id": letter_id, "user_id": current_user.id}, single=True)
+    letter = select("recommendation_letters", filters={"id": letter_id, "user_id": current_user.id}, single=True)
     
     if not letter:
         raise HTTPException(status_code=404, detail="Recommendation letter not found")
@@ -11593,8 +11556,7 @@ async def edit_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Edit a specific section or part of the recommendation letter"""
-    letter = select("recommendation_letters", single=True)  # REVIEW: add filters
-  select("recommendation_letters", filters={"id": letter_id, "user_id": current_user.id}, single=True)
+    letter = select("recommendation_letters", filters={"id": letter_id, "user_id": current_user.id}, single=True)
     
     if not letter:
         raise HTTPException(status_code=404, detail="Recommendation letter not found")
@@ -11652,8 +11614,7 @@ async def translate_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Translate recommendation letter to Spanish (if not already translated)"""
-    letter = select("recommendation_letters", single=True)  # REVIEW: add filters
-  select("recommendation_letters", filters={"id": letter_id, "user_id": current_user.id}, single=True)
+    letter = select("recommendation_letters", filters={"id": letter_id, "user_id": current_user.id}, single=True)
     
     if not letter:
         raise HTTPException(status_code=404, detail="Letter not found")
@@ -11719,7 +11680,7 @@ async def delete_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Delete a recommendation letter"""
-  delete("recommendation_letters", {"id": letter_id, "user_id": current_user.id})
+    delete("recommendation_letters", {"id": letter_id, "user_id": current_user.id})
     
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Letter not found")
@@ -11734,8 +11695,7 @@ async def download_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Download recommendation letter as PDF with Markdown formatting in specified language"""
-    letter_doc = select("recommendation_letters", single=True)  # REVIEW: add filters
-  select("recommendation_letters", filters={"id": letter_id, "user_id": current_user.id}, single=True)
+    letter_doc = select("recommendation_letters", filters={"id": letter_id, "user_id": current_user.id}, single=True)
     
     if not letter_doc:
         raise HTTPException(status_code=404, detail="Letter not found")
@@ -12209,7 +12169,7 @@ async def upload_and_design_document(
 @api_router.get("/designed-documents", response_model=List[DesignedDocument])
 async def get_designed_documents():
     """Get all designed documents"""
-    docs = select("generated_documents", filters={}, {"_id": 0}, order="created_at", order_desc=True)
+    docs = select("generated_documents", order="created_at", order_desc=True)
     
     for doc in docs:
         if isinstance(doc['created_at'], str):
@@ -12299,8 +12259,7 @@ async def save_niw_as_draft(niw_id: str, current_user: User = Depends(get_curren
     """Save NIW proposal in-progress as draft"""
     # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
     # Try completed NIWs first (business_plans collection)
-    niw = select("business_plans", single=True)  # REVIEW: add filters
-  select("business_plans", filters={"id": niw_id, "user_id": current_user.id}, single=True)
+    niw = select("business_plans", filters={"id": niw_id, "user_id": current_user.id}, single=True)
     
     # If not found, check in-progress NIWs
     if not niw:
@@ -12344,13 +12303,11 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
     """Resume working on a draft NIW proposal"""
     # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
     # Try completed NIWs first (business_plans collection)
-    niw = select("business_plans", single=True)  # REVIEW: add filters
-  select("business_plans", filters={"id": niw_id, "user_id": current_user.id, "status": "draft"}, single=True)
+    niw = select("business_plans", filters={"id": niw_id, "user_id": current_user.id, "status": "draft"}, single=True)
     
     # If not found, check in-progress NIWs
     if not niw:
-        niw = select("niw_petitions", single=True)  # REVIEW: add filters
-  select("niw_petitions", filters={"id": niw_id, "user_id": current_user.id, "status": "draft"}, single=True)
+        niw = select("niw_petitions", filters={"id": niw_id, "user_id": current_user.id, "status": "draft"}, single=True)
     
     if not niw:
         raise HTTPException(status_code=404, detail="Draft not found")
@@ -12374,8 +12331,7 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
 @api_router.post("/books/resume-draft/{book_id}", response_model=BookInProgress)
 async def resume_book_draft(book_id: str, current_user: User = Depends(get_current_user)):
     """Resume working on a draft book"""
-    book = select("generated_documents", single=True)  # REVIEW: add filters
-  select("generated_documents", filters={"id": book_id, "user_id": current_user.id, "status": "draft"}, single=True)
+    book = select("generated_documents", filters={"id": book_id, "user_id": current_user.id, "status": "draft"}, single=True)
     
     if not book:
         raise HTTPException(status_code=404, detail="Draft not found")
@@ -12778,8 +12734,7 @@ async def generate_complete_patent_v2(
     try:
         logging.info(f"🎯 [BUGFIX] Endpoint called for patent_id={patent_id}, user={current_user.email}")
         
-        patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+        patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
         
         if not patent:
             logging.error(f"❌ Patent not found: {patent_id}")
@@ -13195,8 +13150,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
             try:
                 # extract_metrics_for_table and auto_generate_comparison_table imported at top
                 # Reload patent with all sections
-                complete_patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id}, single=True)
+                complete_patent = select("patents", filters={"id": patent_id}, single=True)
                 
                 # Find Summary section (section 6: Resumen/Summary)
                 summary_section = None
@@ -13271,8 +13225,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
             import re
             
             # Reload patent to get latest sections
-            complete_patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id}, single=True)
+            complete_patent = select("patents", filters={"id": patent_id}, single=True)
             
             # Find Claims section (section 10: Reivindicaciones/Claims)
             claims_section = None
@@ -13424,8 +13377,7 @@ Use USPTO format with paragraph markers."""
         try:
             # scan_and_remove_spanish_entire_document imported at top
             # Get the FINAL patent with all sections, table, strengthened claims, and drawings
-            complete_patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id}, single=True)
+            complete_patent = select("patents", filters={"id": patent_id}, single=True)
             
             # Concatenate ALL English content for validation
             all_content_en = ""
@@ -13509,8 +13461,7 @@ Use USPTO format with paragraph markers."""
         logging.info(f"🏆 Starting automatic USPTO evaluation and correction for patent {patent_id}")
         
         # Get the complete specification for evaluation
-        complete_patent_for_eval = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id}, single=True)
+        complete_patent_for_eval = select("patents", filters={"id": patent_id}, single=True)
         
         # Concatenate all English content EXCEPT Drawings and Claims sections
         complete_specification_en = ""
@@ -13696,8 +13647,7 @@ async def regenerate_patent(
     logging.info(f"🔄 Regenerating patent {patent_id}")
     
     # Get patent
-    patent = select("patents", single=True)  # REVIEW: add filters
-  select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
+    patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -13729,7 +13679,7 @@ async def get_patents_v2_in_progress(
         query["client_id"] = client_id
     
     patents = select("patents")  # REVIEW: add filters
-  select("patents", limit=1000)
+    select("patents", limit=1000)
     return patents
 
 
@@ -13771,8 +13721,7 @@ async def start_whitepaper_interactive(whitepaper_input: WhitepaperInput, curren
 async def generate_whitepaper_section(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Generate a section for the technical white paper with AI evaluation"""
     
-    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
-  select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
+    whitepaper = select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
     
     if not whitepaper:
         raise HTTPException(status_code=404, detail="Whitepaper not found")
@@ -13987,8 +13936,7 @@ Please regenerate the section now, addressing ALL these technical requirements."
 @api_router.post("/whitepapers/approve-section/{whitepaper_id}")
 async def approve_whitepaper_section(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Approve current section and move to next"""
-    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
-  select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
+    whitepaper = select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
     
     if not whitepaper:
         raise HTTPException(status_code=404, detail="Whitepaper not found")
@@ -14025,8 +13973,7 @@ async def edit_whitepaper_section(
     current_user: User = Depends(get_current_user)
 ):
     """Edit a section of the technical white paper"""
-    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
-  select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
+    whitepaper = select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
     
     if not whitepaper:
         raise HTTPException(status_code=404, detail="Whitepaper not found")
@@ -14098,8 +14045,7 @@ Please provide the improved section content addressing the editing instructions 
 @api_router.post("/whitepapers/finalize/{whitepaper_id}")
 async def finalize_whitepaper(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Finalize the technical white paper"""
-    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
-  select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
+    whitepaper = select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
     
     if not whitepaper:
         raise HTTPException(status_code=404, detail="Whitepaper not found")
@@ -14178,13 +14124,11 @@ async def finalize_whitepaper(whitepaper_id: str, current_user: User = Depends(g
 async def get_whitepaper(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Get a specific whitepaper (searches both completed and in-progress)"""
     # First check completed whitepapers
-    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
-  select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
+    whitepaper = select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
     
     # If not found, check in-progress whitepapers
     if not whitepaper:
-        whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
-  select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
+        whitepaper = select("generated_documents", filters={"id": whitepaper_id, "user_id": current_user.id}, single=True)
     
     if not whitepaper:
         raise HTTPException(status_code=404, detail="Whitepaper not found")
@@ -14207,8 +14151,8 @@ async def delete_whitepaper(whitepaper_id: str, current_user: User = Depends(get
     """Delete a whitepaper (both in-progress and completed)"""
     try:
         # Try to delete from both collections
-  delete("generated_documents", {"id": whitepaper_id, "user_id": current_user.id})
-  delete("generated_documents", {"id": whitepaper_id, "user_id": current_user.id})
+        delete("generated_documents", {"id": whitepaper_id, "user_id": current_user.id})
+        delete("generated_documents", {"id": whitepaper_id, "user_id": current_user.id})
         
         if result_progress.deleted_count == 0 and result_completed.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Whitepaper not found")
@@ -14231,11 +14175,11 @@ async def list_whitepapers(client_id: Optional[str] = None, current_user: User =
     
     # Get completed whitepapers
     completed = select("generated_documents")  # REVIEW: add filters
-  select("generated_documents", limit=1000)
+    select("generated_documents", limit=1000)
     
     # Get in-progress whitepapers
     in_progress = select("generated_documents")  # REVIEW: add filters
-  select("generated_documents", limit=1000)
+    select("generated_documents", limit=1000)
     
     return {
         "completed": completed,
@@ -14571,10 +14515,10 @@ async def get_clients(
         
         # Query
         clients = select("clients")  # REVIEW: add filters
-  select("clients", filters={"id": 0}, order="created_at", order_desc=True).skip(skip).limit(limit).to_list(length=limit)
+        select("clients", filters={"id": 0}, order="created_at", order_desc=True).skip(skip).limit(limit).to_list(length=limit)
         
         # Total count
-  count("clients")
+        count("clients")
         
         # Agregar contador de documentos para cada cliente
         for client in clients:
@@ -14619,21 +14563,14 @@ async def search_clients(
         # Paginación
         skip = (page - 1) * limit
         
-        # Query con projection
-        clients = select("clients")  # REVIEW: add filters
-  select("clients", filters={
-                "id": 0,
-                "id": 1,
-                "name": 1,
-                "email": 1,
-                "company": 1,
-                "operator_id": 1,
-                "tags": 1,
-                "status": 1
-            })).skip(skip).limit(limit).to_list(length=limit)
-        
-        # Total count
-  count("clients")
+        # Query with pagination
+        all_clients = select("clients")
+        # Apply search filter in Python (was MongoDB $regex)
+        if q:
+            q_lower = q.lower()
+            all_clients = [c for c in all_clients if q_lower in (c.get("name", "") or "").lower() or q_lower in (c.get("email", "") or "").lower() or q_lower in (c.get("company", "") or "").lower()]
+        total = len(all_clients)
+        clients = all_clients[skip:skip + limit]
         
         return {
             "clients": clients,
@@ -14655,7 +14592,7 @@ async def get_client(client_id: str, current_user: User = Depends(get_current_us
             query["operator_id"] = current_user.id
         
         client = select("clients", single=True)  # REVIEW: add filters
-  select("clients", single=True)
+        select("clients", single=True)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -14680,7 +14617,7 @@ async def update_client(
             query["operator_id"] = current_user.id
         
         client = select("clients", single=True)  # REVIEW: add filters
-  select("clients", single=True)
+        select("clients", single=True)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -14761,7 +14698,7 @@ async def get_client_stats(client_id: str, current_user: User = Depends(get_curr
             query["operator_id"] = current_user.id
         
         client = select("clients", single=True)  # REVIEW: add filters
-  select("clients", single=True)
+        select("clients", single=True)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
         
@@ -14772,22 +14709,15 @@ async def get_client_stats(client_id: str, current_user: User = Depends(get_curr
         # Some documents have client_id=None, which would match ALL None client_ids across users
         operator_id = client.get("operator_id")
         
+        # Count with Python filtering for $ne (not supported in simple select)
+        all_niw = select("niw_petitions", filters={"client_id": client_id})
+        all_patents = select("patents", filters={"client_id": client_id})
+
         stats = {
             "client": client,
-  count("niw_petitions", {
-                "client_id": client_id,
-                "user_id": operator_id,  # Filter by operator/user
-                "status": {"$ne": "completed"}  # Exclude completed NIWs (they should be in business_plans)
-            }),
-            "niw_completed": count("business_plans", {
-                "client_id": client_id,
-                "user_id": operator_id
-            }),
-            "patent_count": count("patents", {
-                "client_id": client_id, 
-                "user_id": operator_id,  # Filter by operator/user
-                "status": {"$ne": "complete"}  # Solo patentes NO completas
-            }),
+            "niw_count": len([n for n in all_niw if n.get("status") != "completed"]),
+            "niw_completed": count("business_plans", {"client_id": client_id}),
+            "patent_count": len([p for p in all_patents if p.get("patent_status") != "complete"]),
             "patent_completed": (
                 count("patents", {
                     "client_id": client_id,
@@ -14896,14 +14826,14 @@ async def get_dashboard_overview(current_user: User = Depends(get_current_user))
             doc_query = {}
         
         # Count whitepapers (both completed and in progress)
-  count("generated_documents")
-  count("generated_documents")
+            count("generated_documents")
+        count("generated_documents")
         total_docs += whitepaper_count + whitepaper_completed
-  count("business_plans")
-  count("patents")
-  count("generated_documents")
-  count("generated_documents")
-  count("econometric_studies")
+        count("business_plans")
+        count("patents")
+        count("generated_documents")
+        count("generated_documents")
+        count("econometric_studies")
         
         # Documentos en progreso (status = "in_progress")
         in_progress = 0
@@ -14935,7 +14865,7 @@ async def get_recent_activity(
             query["operator_id"] = current_user.id
         
         activities = select("activity_logs")  # REVIEW: add filters
-  select("activity_logs", filters={"id": 0}, order="timestamp", order_desc=True).limit(limit).to_list(length=limit)
+        select("activity_logs", filters={"id": 0}, order="timestamp", order_desc=True).limit(limit).to_list(length=limit)
         
         return {"activities": activities}
     except Exception as e:
@@ -14952,7 +14882,7 @@ async def list_operators(current_admin: User = Depends(require_admin)):
     """Lista de todos los operadores con sus estadísticas"""
     try:
         operators = select("clients")  # REVIEW: add filters
-  select("clients", filters={"role": "operator"})
+        select("clients", filters={"role": "operator"})
         
         # Agregar stats de cada operador
         for op in operators:
@@ -15222,7 +15152,7 @@ async def get_admin_stats(current_admin: User = Depends(require_admin)):
         
         # Top 3 operadores por documentos
         operators = select("clients")  # REVIEW: add filters
-  select("clients", filters={"role": "operator", "status": "active"})
+        select("clients", filters={"role": "operator", "status": "active"})
         
         for op in operators:
             doc_count = 0
@@ -15304,7 +15234,7 @@ async def get_conversations(
         
         # Get all conversations
         conversations = select("redactora_chat_messages")  # REVIEW: add filters
-  select("redactora_chat_messages", filters={"user_id": user_id}, order="updated_at", order_desc=True)
+        select("redactora_chat_messages", filters={"user_id": user_id}, order="updated_at", order_desc=True)
         
         return {
             "success": True,
@@ -15334,15 +15264,14 @@ async def get_conversation_messages(
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = select("redactora_chat_messages", single=True)  # REVIEW: add filters
-  select("redactora_chat_messages", filters={"id": conversation_id, "user_id": user_id}, single=True)
+        conversation = select("redactora_chat_messages", filters={"id": conversation_id, "user_id": user_id}, single=True)
         
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
         
         # Get messages
         messages = select("redactora_chat_messages")  # REVIEW: add filters
-  select("redactora_chat_messages", filters={"conversation_id": conversation_id}, order="timestamp", order_desc=False)
+        select("redactora_chat_messages", filters={"conversation_id": conversation_id}, order="timestamp", order_desc=False)
         
         return {
             "success": True,
@@ -15374,8 +15303,7 @@ async def send_message_to_conversation(
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = select("redactora_chat_messages", single=True)  # REVIEW: add filters
-  select("redactora_chat_messages", filters={"id": conversation_id, "user_id": user_id}, single=True)
+        conversation = select("redactora_chat_messages", filters={"id": conversation_id, "user_id": user_id}, single=True)
         
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
@@ -15544,8 +15472,7 @@ async def delete_conversation(
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = select("redactora_chat_messages", single=True)  # REVIEW: add filters
-  select("redactora_chat_messages", filters={"id": conversation_id, "user_id": user_id}, single=True)
+        conversation = select("redactora_chat_messages", filters={"id": conversation_id, "user_id": user_id}, single=True)
         
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
