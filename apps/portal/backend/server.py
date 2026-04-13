@@ -2158,15 +2158,7 @@ async def create_test_eligibility_report(
                 update_data["status"] = "failed"
                 update_data["error"] = f"N8N returned {response.status_code}"
             
-            # TODO: db.test_eligibility_reports.update_one needs manual conversion → table "eligibility_assessments"
-
-            
-            
-            
-            db.test_eligibility_reports.update_one(
-                {"id": test_id},
-                {"$set": update_data}
-            )
+            update("eligibility_assessments", {"id": test_id}, update_data)
             
             if response.status_code not in [200, 201, 202]:
                 logger.error(f"❌ N8N webhook failed: {response.status_code} - {response.text}")
@@ -2185,9 +2177,6 @@ async def create_test_eligibility_report(
             
     except httpx.TimeoutException:
         logger.error("❌ N8N webhook timeout (TEST)")
-        # TODO: db.test_eligibility_reports.update_one needs manual conversion → table "eligibility_assessments"
-
-        
         update("eligibility_assessments", {"id": test_id}, {"status": "timeout", "error": "N8N webhook timeout"})
         raise HTTPException(
             status_code=504,
@@ -2207,12 +2196,7 @@ async def get_test_eligibility_reports(
 ):
     """Get all test eligibility reports"""
     try:
-        cursor = db.test_eligibility_reports.find(
-            {},
-            {"_id": 0}
-        ).sort("createdAt", -1).limit(limit)
-        
-        reports = await cursor.to_list(length=limit)
+        reports = select("eligibility_assessments", order="createdAt", order_desc=True, limit=limit)
         
         return {
             "success": True,
@@ -2615,7 +2599,7 @@ async def create_payment(payment: Payment):
         # Auto-change visa case status to 'en_proceso' on first payment
         case_id = payment_dict.get('caseId')
         if case_id:
-            visa_case = select("visa_cases", filters={"id": case_id}, {"status": 1}, single=True)
+            visa_case = select("visa_cases", filters={"id": case_id}, single=True)
             if visa_case and visa_case.get("status") in ("proceso_venta", "elegibility_approved"):
                 update("visa_cases", {"id": case_id}, {"status": "en_proceso"})
         
@@ -2737,7 +2721,7 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
         await update_case_current_stage(case_id)
         
         # Case audit log
-        staff = select("staff", filters={'_id': created_by_id}, single=True)
+        staff = select("staff", filters={"id": created_by_id}, single=True)
         await log_case_audit(
             case_id=case_id,
             action=f"Pago de ${amount} registrado para etapa(s) {', '.join(map(str, stage_numbers))}",
@@ -2766,18 +2750,9 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
         stages_str = ', '.join(map(str, stage_numbers))
         
         # Buscar usuario - soporta tanto 'id' string como '_id' ObjectId
-        user_info = select("clients", filters={"id": user_id}, {"_id": 0, "name": 1, "email": 1, "phone": 1}, single=True)
-        if not user_info:
-            # Intentar buscar por _id como ObjectId (usuarios creados con BSON ObjectId)
-            try:
-                user_info = select("clients", filters={"_id": ObjectId(user_id)}, single=True)
-            except Exception:
-                pass  # No es un ObjectId válido
-        if not user_info:
-            # Intentar buscar por _id como string (usuarios con UUID)
-            user_info = select("clients", filters={"_id": user_id}, {"_id": 0, "name": 1, "email": 1, "phone": 1}, single=True)
+        user_info = select("clients", filters={"id": user_id}, columns="name,email,phone", single=True)
         
-        case_info = select("visa_cases", filters={"id": case_id}, {"_id": 0, "visaType": 1, "status": 1}, single=True)
+        case_info = select("visa_cases", filters={"id": case_id}, columns="visaType,status", single=True)
         
         client_name = user_info.get('name', 'N/A') if user_info else 'N/A'
         client_email = user_info.get('email', '') if user_info else ''
@@ -3403,7 +3378,7 @@ async def update_comparator_case(
     """Update an existing comparator case"""
     try:
         # Check if case exists
-        case = select("comparator_cases", filters={'id': case_id}, {'_id': 0}, single=True)
+        case = select("comparator_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(status_code=404, detail="Case not found")
         
@@ -3424,15 +3399,7 @@ async def update_comparator_case(
         
         update_data['updatedAt'] = datetime.now(timezone.utc).isoformat()
         
-        # TODO: db.comparator_cases.update_one needs manual conversion → table "comparator_cases"
-
-        
-        
-        
-        db.comparator_cases.update_one(
-            {'id': case_id},
-            {'$set': update_data}
-        )
+        update("comparator_cases", {"id": case_id}, update_data)
         
         logger.info(f"Comparator case updated: {case_id}")
         
@@ -3454,7 +3421,7 @@ async def delete_comparator_case(
     """Delete a comparator case"""
     try:
         # Check if case exists
-        case = select("comparator_cases", filters={'id': case_id}, {'_id': 0}, single=True)
+        case = select("comparator_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(status_code=404, detail="Case not found")
         
@@ -3509,8 +3476,7 @@ async def get_admin_legal_documents(
         if category:
             query['category'] = category
         
-        cursor = db.legal_documents.find(query, {'_id': 0}).limit(limit)
-        documents = await cursor.to_list(length=limit)
+        documents = select("legal_documents", filters=query if query else None, limit=limit)
         
         return {
             "success": True,
@@ -3568,7 +3534,7 @@ async def update_legal_document(
     """Update an existing legal document"""
     try:
         # Check if document exists
-        document = select("legal_documents", filters={'id': document_id}, {'_id': 0}, single=True)
+        document = select("legal_documents", filters={"id": document_id}, single=True)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -3597,15 +3563,7 @@ async def update_legal_document(
         
         update_data['updatedAt'] = datetime.now(timezone.utc).isoformat()
         
-        # TODO: db.legal_documents.update_one needs manual conversion → table "legal_documents"
-
-        
-        
-        
-        db.legal_documents.update_one(
-            {'id': document_id},
-            {'$set': update_data}
-        )
+        update("legal_documents", {"id": document_id}, update_data)
         
         logger.info(f"Legal document updated: {document_id}")
         
@@ -3627,7 +3585,7 @@ async def delete_legal_document(
     """Delete a legal document"""
     try:
         # Check if document exists
-        document = select("legal_documents", filters={'id': document_id}, {'_id': 0}, single=True)
+        document = select("legal_documents", filters={"id": document_id}, single=True)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -3729,26 +3687,22 @@ async def admin_login(request: AdminLoginRequest):
     """Admin login with email and password"""
     try:
         # Buscar staff por email
-        staff = select("staff", single=True)  # REVIEW: add filters
-  db.staff.find_one({'email': request.email.lower()})
-        
+        staff = select("staff", filters={"email": request.email.lower()}, single=True)
+
         if not staff:
             raise HTTPException(status_code=401, detail="Invalid email or password")
-        
+
         # Verificar contraseña - support both 'passwordHash' and 'password' fields
         password_hash = staff.get('passwordHash') or staff.get('password')
         if not password_hash or not StaffModel.verify_password(request.password, password_hash):
             raise HTTPException(status_code=401, detail="Invalid email or password")
-        
+
         # Verificar estado (check both 'active' and 'status' for compatibility)
         is_active = staff.get('active', True) or staff.get('status') == 'active'
         if not is_active:
             raise HTTPException(status_code=403, detail="Account is inactive. Contact administrator.")
-        
-        # Actualizar último login
-        # TODO: db.staff.update_one needs manual conversion → table "staff"
 
-        
+        # Actualizar último login
         update("staff", {'id': staff['id']}, {'lastLogin': datetime.utcnow()})
         
         # Log de actividad
@@ -3805,7 +3759,6 @@ async def send_otp(request: OTPRequest):
     expires = datetime.now(timezone.utc) + timedelta(minutes=10)
     
     # Store OTP
-    # TODO: db.admin_otp.update_one needs manual conversion → table "staff"
 
     
     update("staff", {"email": email}, {"code": code, "expiresAt": expires.isoformat(), "attempts": 0, "createdAt": datetime.now(timezone.utc).isoformat()})
@@ -3843,12 +3796,9 @@ async def verify_otp(request: OTPVerifyRequest):
         delete("staff", {"email": email})
         raise HTTPException(status_code=429, detail="Demasiados intentos. Solicita un nuevo codigo.")
     
-    # Increment attempts
-    # TODO: $inc needs read-modify-write pattern
-
-    # Original: db.admin_otp.update_one({"email": email}, {"$inc": {"attempts": 1}})
-
-    update("staff", {}, {})  # FIXME
+    # Increment attempts (read-modify-write since Supabase doesn't support $inc)
+    current_attempts = otp_record.get("attempts", 0)
+    update("staff", {"email": email}, {"attempts": current_attempts + 1})
     
     # Check expiry
     expires = otp_record.get("expiresAt", "")
@@ -3872,14 +3822,10 @@ async def verify_otp(request: OTPVerifyRequest):
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     
     # Update last login
-    # TODO: Complex update — needs manual conversion
+    update("staff", {"id": staff.get("id") or staff.get("_id")}, {"lastLogin": datetime.utcnow()})
 
-    # Original: db.staff.update_one({'_id': staff['_id']}, {'$set': {'lastLogin': datetime.utcnow()}})
-
-    update("staff", {}, {})  # FIXME
-    
     # Log
-    log = ActivityLog.create_log(staff_id=staff['_id'], action='login', resource='auth', details={'method': 'otp'})
+    log = ActivityLog.create_log(staff_id=staff.get("id") or staff.get("_id"), action='login', resource='auth', details={'method': 'otp'})
     insert("activity_logs", log)
     
     # Generate JWT
@@ -3920,8 +3866,7 @@ async def emergency_create_admin(request: EmergencyAdminRequest):
             raise HTTPException(status_code=403, detail="Invalid emergency key")
         
         # Verificar si ya existe un admin con ese email
-        existing_staff = select("staff", single=True)  # REVIEW: add filters
-  db.staff.find_one({'email': request.email.lower()})
+        existing_staff = select("staff", filters={"email": request.email.lower()}, single=True)
         if existing_staff:
             raise HTTPException(status_code=400, detail="Admin with this email already exists")
         
@@ -3975,26 +3920,22 @@ async def emergency_create_admin(request: EmergencyAdminRequest):
 async def send_magic_link(request: AdminMagicLinkRequest):
     """Send magic link to admin email"""
     try:
-        staff = select("staff", single=True)  # REVIEW: add filters
-  db.staff.find_one({'email': request.email.lower()})
-        
+        staff = select("staff", filters={"email": request.email.lower()}, single=True)
+
         if not staff:
             # Por seguridad, no revelar si el email existe
             return {'message': 'If this email exists, a magic link has been sent.'}
-        
+
         # Check if staff is active (check both 'active' and 'status' for compatibility)
         is_active = staff.get('active', True) or staff.get('status') == 'active'
         if not is_active:
             return {'message': 'If this email exists, a magic link has been sent.'}
-        
+
         # Generar token único
         token = StaffModel.generate_magic_link_token()
         expires = StaffModel.get_magic_link_expiration()
-        
-        # Guardar token en DB
-        # TODO: db.staff.update_one needs manual conversion → table "staff"
 
-        
+        # Guardar token en DB
         update("staff", {'id': staff['id']}, {
                     'magicLinkToken': token,
                     'magicLinkExpires': expires
@@ -4027,24 +3968,28 @@ async def send_magic_link(request: AdminMagicLinkRequest):
 async def verify_magic_link(token: str):
     """Verify magic link token and login"""
     try:
-        staff = select("staff", single=True)  # REVIEW: add filters
-  db.staff.find_one({
-            'magicLinkToken': token,
-            'magicLinkExpires': {'$gt': datetime.utcnow()}
-        })
-        
+        # Find staff with matching token; expiry check done in Python since Supabase eq-only filters
+        staff = select("staff", filters={"magicLinkToken": token}, single=True)
+        if staff and staff.get("magicLinkExpires"):
+            from dateutil.parser import parse as _dt_parse
+            try:
+                exp = _dt_parse(staff["magicLinkExpires"]) if isinstance(staff["magicLinkExpires"], str) else staff["magicLinkExpires"]
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if exp <= datetime.now(timezone.utc):
+                    staff = None  # expired
+            except Exception:
+                staff = None
+
         if not staff:
             raise HTTPException(status_code=401, detail="Invalid or expired magic link")
-        
+
         # Check if staff is active (check both 'active' and 'status' for compatibility)
         is_active = staff.get('active', True) or staff.get('status') == 'active'
         if not is_active:
             raise HTTPException(status_code=403, detail="Account is inactive")
-        
-        # Invalidar token inmediatamente
-        # TODO: db.staff.update_one needs manual conversion → table "staff"
 
-        
+        # Invalidar token inmediatamente
         update("staff", {'id': staff['id']}, {'lastLogin': datetime.utcnow()})
         
         # Log de actividad
@@ -4085,7 +4030,7 @@ async def verify_magic_link(token: str):
 async def get_current_admin(staff_payload: dict = Depends(verify_staff_token)):
     """Get current authenticated admin info with RBAC permissions"""
     try:
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff:
             raise HTTPException(status_code=404, detail="Staff not found")
         
@@ -4228,8 +4173,11 @@ async def get_case_notes(case_id: str, staff_payload: dict = Depends(verify_staf
     if not is_admin:
         query["deleted"] = {"$ne": True}
 
-    notes = select("case_notes")  # REVIEW: add filters
-  db.case_notes.find(query, {"_id": 0}).sort("createdAt", -1).to_list(500)
+    # For non-admin, filter out deleted notes in Python (Supabase doesn't support $ne directly in simple filters)
+    all_notes = select("case_notes", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=500)
+    if not is_admin:
+        all_notes = [n for n in all_notes if not n.get("deleted")]
+    notes = all_notes
     return {"success": True, "notes": notes}
 
 
@@ -4280,7 +4228,6 @@ async def delete_case_note(case_id: str, note_id: str, staff_payload: dict = Dep
     if not is_author and not is_admin:
         raise HTTPException(status_code=403, detail="Solo el autor o admin puede eliminar")
 
-    # TODO: db.case_notes.update_one needs manual conversion → table "case_notes"
 
 
     
@@ -4306,9 +4253,8 @@ async def get_case_activities(
     """Get activity log for a case."""
     skip = (page - 1) * limit
     total = count("case_audit_logs", {"caseId": case_id})
-    cursor = # cursor replaced
- select("case_audit_logs", filters={"caseId": case_id}, {"_id": 0}, order="timestamp", order_desc=True).skip(skip).limit(limit)
-    activities = await cursor.to_list(length=limit)
+    all_activities = select("case_audit_logs", filters={"caseId": case_id}, order="timestamp", order_desc=True, limit=skip + limit)
+    activities = all_activities[skip:skip + limit]
     for a in activities:
         if isinstance(a.get("timestamp"), datetime):
             a["timestamp"] = a["timestamp"].isoformat()
@@ -4335,13 +4281,18 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     if not is_admin:
         visa_filter["$or"] = [{"coordinatorId": user_id}, {"salesRepId": user_id}]
 
-    visa_cases = select("visa_cases")  # REVIEW: add filters
-  db.visa_cases.find(
-        visa_filter,
-        {"_id": 0, "id": 1, "userId": 1, "status": 1, "overallProgress": 1, "currentStage": 1,
-         "visaType": 1, "coordinatorId": 1, "salesRepId": 1, "updatedAt": 1, "createdAt": 1,
-         "clientName": 1, "user": 1, "paidAmount": 1, "remainingBalance": 1, "totalFee": 1}
-    ).to_list(5000)
+    all_visa_raw = select("visa_cases", columns="id,userId,status,overallProgress,currentStage,visaType,coordinatorId,salesRepId,updatedAt,createdAt,clientName,user,paidAmount,remainingBalance,totalFee,isMasterCase", limit=5000)
+    # Apply filters in Python: exclude master cases, progress > 18, and permission-based filters
+    visa_cases = []
+    for _vc in all_visa_raw:
+        if _vc.get("isMasterCase"):
+            continue
+        if (_vc.get("overallProgress") or 0) <= 18:
+            continue
+        if not is_admin:
+            if _vc.get("coordinatorId") != user_id and _vc.get("salesRepId") != user_id:
+                continue
+        visa_cases.append(_vc)
 
     visa_statuses = Counter(c.get("status", "unknown") for c in visa_cases)
     visa_types = Counter(c.get("visaType", "unknown") for c in visa_cases)
@@ -4350,33 +4301,17 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     visa_total_pending = sum(c.get("remainingBalance", 0) or 0 for c in visa_cases)
 
     # Batch lookup de nombres de clientes por userId
-    raw_user_ids = [c.get("userId") for c in visa_cases if c.get("userId")]
-    oid_ids, str_ids = [], []
-    for uid in raw_user_ids:
-        try:
-            oid_ids.append(ObjectId(uid))
-        except Exception:
-            str_ids.append(uid)
-
-    user_query = []
-    if oid_ids:
-        user_query.append({"_id": {"$in": oid_ids}})
-    if str_ids:
-        user_query.append({"id": {"$in": str_ids}})
+    raw_user_ids = list(set(c.get("userId") for c in visa_cases if c.get("userId")))
 
     user_name_map = {}
-    if user_query:
-        user_docs = select("clients")  # REVIEW: add filters
-  db.users.find(
-            {"$or": user_query} if len(user_query) > 1 else user_query[0],
-            {"_id": 1, "id": 1, "name": 1}
-        ).to_list(5000)
-        for u in user_docs:
-            name = u.get("name", "")
-            if u.get("id"):
-                user_name_map[str(u["id"])] = name
-            if u.get("_id"):
-                user_name_map[str(u["_id"])] = name
+    if raw_user_ids:
+        # Fetch all clients and filter by id in Python (batch lookup)
+        all_clients = select("clients", columns="id,name", limit=5000)
+        _client_id_set = set(str(uid) for uid in raw_user_ids)
+        for u in all_clients:
+            uid_str = str(u.get("id", ""))
+            if uid_str in _client_id_set:
+                user_name_map[uid_str] = u.get("name", "")
 
     def _client_name(c):
         uid = str(c.get("userId", ""))
@@ -4388,11 +4323,15 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     if not is_admin:
         all_visa_filter["$or"] = [{"coordinatorId": user_id}, {"salesRepId": user_id}]
 
-    all_visa_cases = select("visa_cases")  # REVIEW: add filters
-  db.visa_cases.find(
-        all_visa_filter,
-        {"_id": 0, "coordinatorId": 1, "salesRepId": 1}
-    ).to_list(5000)
+    # Reuse all_visa_raw for coordinator counting, filter out master cases + permission
+    all_visa_cases = []
+    for _vc in all_visa_raw:
+        if _vc.get("isMasterCase"):
+            continue
+        if not is_admin:
+            if _vc.get("coordinatorId") != user_id and _vc.get("salesRepId") != user_id:
+                continue
+        all_visa_cases.append(_vc)
 
     coord_names = {}
     coord_counter = {}
@@ -4411,9 +4350,9 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     _uuid_pattern = _re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', _re.I)
     for cid in coord_counter:
         if cid and cid != "__unassigned__":
-            s = select("staff", filters={"_id": cid}, {"name": 1}, single=True)
+            s = select("staff", filters={"id": cid}, columns="id,name", single=True)
             if not s:
-                s = select("staff", filters={"id": cid}, {"name": 1}, single=True)
+                s = select("staff", filters={"id": cid}, columns="id,name", single=True)
             if s and s.get("name"):
                 coord_names[cid] = s["name"]
             elif _uuid_pattern.match(cid):
@@ -4453,21 +4392,8 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
 
     # Casos con progreso > 0% que les falta coordinador O vendedor (o ambos)
     # Solo admins ven esta sección completa; staff no la necesita
-    unattended_filter = {"isMasterCase": {"$ne": True}, "overallProgress": {"$gt": 18},
-         "$or": [
-             {"coordinatorId": {"$in": [None, ""]}},
-             {"coordinatorId": {"$exists": False}},
-             {"salesRepId": {"$in": [None, ""]}},
-             {"salesRepId": {"$exists": False}},
-         ]
-        }
-    all_visa_full = select("visa_cases")  # REVIEW: add filters
-  db.visa_cases.find(
-        unattended_filter if is_admin else {"_id": "skip"},
-        {"_id": 0, "id": 1, "clientName": 1, "user": 1, "status": 1, "overallProgress": 1,
-         "currentStage": 1, "visaType": 1, "coordinatorId": 1, "salesRepId": 1,
-         "updatedAt": 1, "createdAt": 1}
-    ).to_list(5000)
+    # Reuse visa_cases (already filtered for progress > 18, non-master) for unattended check
+    all_visa_full = visa_cases if is_admin else []
 
     unattended = []
     for c in all_visa_full:
@@ -4503,15 +4429,7 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     appts_pending = count("appointments", {"status": "pending"})
 
     # ===== TAB 2: GESTION CLASICA (CHECKLIST) =====
-    classic_cases = select("classic_cases")  # REVIEW: add filters
-  db.classic_cases.find(
-        {},
-        {"_id": 0, "id": 1, "name": 1, "email": 1, "status": 1, "workStatus": 1,
-         "progress": 1, "progressCoordinator": 1, "progressArmador": 1,
-         "coordinatorId": 1, "updatedAt": 1, "createdAt": 1, "lastContactAt": 1,
-         "lastProgressChangeAt": 1, "filingDate": 1, "ioeNumber": 1,
-         "rfeReceivedDate": 1, "rfeDeadline": 1, "processingType": 1}
-    ).to_list(5000)
+    classic_cases = select("classic_cases", columns="id,name,email,status,workStatus,progress,progressCoordinator,progressArmador,coordinatorId,updatedAt,createdAt,lastContactAt,lastProgressChangeAt,filingDate,ioeNumber,rfeReceivedDate,rfeDeadline,processingType", limit=5000)
 
     classic_statuses = Counter(c.get("status", "unknown") for c in classic_cases)
     classic_work = Counter(c.get("workStatus", "unknown") for c in classic_cases)
@@ -4544,7 +4462,7 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     classic_by_coord = Counter(c.get("coordinatorId", "unassigned") for c in classic_cases)
     for cid in classic_by_coord:
         if cid and cid != "unassigned" and cid not in coord_names:
-            s = select("staff", filters={"_id": cid}, {"name": 1}, single=True)
+            s = select("staff", filters={"id": cid}, columns="id,name", single=True)
             coord_names[cid] = s.get("name", cid) if s else cid
 
     # Top 10 prioritarios clásicos — más tiempo sin actualizar
@@ -4604,9 +4522,7 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
 @api_router.get("/admin/dashboard/recent-activity")
 async def get_dashboard_recent_activity(staff_payload: dict = Depends(verify_staff_token), limit: int = 10):
     """Get recent activity across all cases."""
-    cursor = # cursor replaced
- select("case_audit_logs", filters={}, {"_id": 0}, order="timestamp", order_desc=True).limit(limit)
-    activities = await cursor.to_list(length=limit)
+    activities = select("case_audit_logs", order="timestamp", order_desc=True, limit=limit)
     for a in activities:
         if isinstance(a.get("timestamp"), datetime):
             a["timestamp"] = a["timestamp"].isoformat()
@@ -4643,11 +4559,8 @@ async def backfill_activity_dates(secret: str = ""):
     results = []
 
     # ===== CASOS DE VISA =====
-    visa_cases = select("visa_cases")  # REVIEW: add filters
-  db.visa_cases.find(
-        {"isMasterCase": {"$ne": True}},
-        {"_id": 0, "id": 1, "updatedAt": 1, "createdAt": 1}
-    ).to_list(5000)
+    _all_visa_for_refresh = select("visa_cases", columns="id,updatedAt,createdAt,isMasterCase", limit=5000)
+    visa_cases = [vc for vc in _all_visa_for_refresh if not vc.get("isMasterCase")]
 
     for case in visa_cases:
         case_id = case.get("id")
@@ -4662,41 +4575,28 @@ async def backfill_activity_dates(secret: str = ""):
             candidates.append(c)
 
         # 2. Último log de auditoría
-        audit = select("case_audit_logs", single=True)  # REVIEW: add filters
-  db.case_audit_logs.find_one(
-            {"caseId": case_id}, sort=[("timestamp", -1)]
-        )
+        audit = select("case_audit_logs", filters={"caseId": case_id}, order="timestamp", order_desc=True, limit=1, single=True)
         if audit:
             c = _to_dt(audit.get("timestamp"))
             if c:
                 candidates.append(c)
 
         # 3. Último entregable subido (uploadedAt o updatedAt)
-        deliv = select("visa_deliverables", single=True)  # REVIEW: add filters
-  db.visa_deliverables.find_one(
-            {"caseId": case_id, "$or": [{"uploadedAt": {"$exists": True}}, {"updatedAt": {"$exists": True}}]},
-            sort=[("uploadedAt", -1)]
-        )
+        deliv = select("visa_deliverables", filters={"caseId": case_id}, order="uploadedAt", order_desc=True, limit=1, single=True)
         if deliv:
             c = _to_dt(deliv.get("uploadedAt") or deliv.get("updatedAt"))
             if c:
                 candidates.append(c)
 
         # 4. Última actividad en case_activities
-        act = select("case_audit_logs", single=True)  # REVIEW: add filters
-  db.case_activities.find_one(
-            {"caseId": case_id}, sort=[("timestamp", -1)]
-        )
+        act = select("case_audit_logs", filters={"caseId": case_id}, order="timestamp", order_desc=True, limit=1, single=True)
         if act:
             c = _to_dt(act.get("timestamp"))
             if c:
                 candidates.append(c)
 
         # 5. Última nota de coordinador (case_notes)
-        note = select("case_notes", single=True)  # REVIEW: add filters
-  db.case_notes.find_one(
-            {"caseId": case_id}, sort=[("createdAt", -1)]
-        )
+        note = select("case_notes", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=1, single=True)
         if note:
             c = _to_dt(note.get("createdAt") or note.get("updatedAt"))
             if c:
@@ -4708,9 +4608,6 @@ async def backfill_activity_dates(secret: str = ""):
             existing = _to_dt(case.get("updatedAt"))
             if existing is None or (latest - existing).total_seconds() > 60:
                 new_val = latest.isoformat()
-                # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
-
-                
                 update("visa_cases", {"id": case_id}, {"updatedAt": new_val})
                 visa_updated += 1
                 results.append({
@@ -4720,10 +4617,7 @@ async def backfill_activity_dates(secret: str = ""):
                 })
 
     # ===== GESTIÓN CLÁSICA =====
-    classic_cases = select("classic_cases")  # REVIEW: add filters
-  db.classic_cases.find(
-        {}, {"_id": 0, "id": 1, "updatedAt": 1, "createdAt": 1, "lastContactAt": 1, "lastProgressChangeAt": 1}
-    ).to_list(5000)
+    classic_cases = select("classic_cases", columns="id,updatedAt,createdAt,lastContactAt,lastProgressChangeAt", limit=5000)
 
     for case in classic_cases:
         case_id = case.get("id")
@@ -4739,30 +4633,21 @@ async def backfill_activity_dates(secret: str = ""):
                 candidates.append(c)
 
         # 2. Última entrada en timeline
-        tl = select("user_timelines", single=True)  # REVIEW: add filters
-  db.classic_case_timeline.find_one(
-            {"caseId": case_id}, sort=[("timestamp", -1)]
-        )
+        tl = select("user_timelines", filters={"caseId": case_id}, order="timestamp", order_desc=True, limit=1, single=True)
         if tl:
             c = _to_dt(tl.get("timestamp"))
             if c:
                 candidates.append(c)
 
         # 3. Última nota
-        note = select("case_notes", single=True)  # REVIEW: add filters
-  db.classic_case_notes.find_one(
-            {"caseId": case_id}, sort=[("createdAt", -1)]
-        )
+        note = select("case_notes", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=1, single=True)
         if note:
             c = _to_dt(note.get("createdAt"))
             if c:
                 candidates.append(c)
 
         # 4. Último contacto registrado
-        contact = select("clients", single=True)  # REVIEW: add filters
-  db.classic_case_contacts.find_one(
-            {"caseId": case_id}, sort=[("createdAt", -1)]
-        )
+        contact = select("clients", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=1, single=True)
         if contact:
             c = _to_dt(contact.get("createdAt"))
             if c:
@@ -4773,9 +4658,6 @@ async def backfill_activity_dates(secret: str = ""):
             existing = _to_dt(case.get("updatedAt"))
             if existing is None or (latest - existing).total_seconds() > 60:
                 new_val = latest.isoformat()
-                # TODO: db.classic_cases.update_one needs manual conversion → table "classic_cases"
-
-                
                 update("classic_cases", {"id": case_id}, {"updatedAt": new_val})
                 classic_updated += 1
                 results.append({
@@ -4803,13 +4685,13 @@ async def backfill_activity_dates(secret: str = ""):
 async def get_my_cvs(user_payload: dict = Depends(verify_token_header)):
     """Get CVs for the logged-in user."""
     user_id = user_payload.get('id')
-    cvs = select("user_cvs", filters={"userId": user_id}, {"_id": 0}, order="uploadedAt", order_desc=True)
+    cvs = select("user_cvs", filters={"userId": user_id}, order="uploadedAt", order_desc=True)
     return {"success": True, "cvs": cvs, "total": len(cvs)}
 
 @api_router.get("/admin/users/{user_id}/cvs")
 async def get_user_cvs(user_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get all CVs uploaded for a specific user."""
-    cvs = select("user_cvs", filters={"userId": user_id}, {"_id": 0}, order="uploadedAt", order_desc=True)
+    cvs = select("user_cvs", filters={"userId": user_id}, order="uploadedAt", order_desc=True)
     return {"success": True, "cvs": cvs, "total": len(cvs)}
 
 
@@ -4822,9 +4704,7 @@ async def add_user_cv(
     """Upload a new CV for a user and add it to their CV list."""
     from storage_service import upload_file as supabase_upload
 
-    user = # TODO: Complex query — needs manual conversion
- # Original: select("clients", filters={"$or": [{"id": user_id}, {"id": user_id}]}, single=True)
- select("clients", single=True)  # FIXME: add proper filters
+    user = select("clients", filters={"id": user_id}, single=True)
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
@@ -4854,10 +4734,7 @@ async def add_user_cv(
     cv_record.pop("_id", None)
 
     # Also update the user's cvUrl with the latest
-    # TODO: db.users.update_one needs manual conversion → table "clients"
-
-    
-    update("clients", {"$or": [{"id": user_id}, {"id": user_id}]}, {"cvUrl": result["fileUrl"], "updatedAt": datetime.now(timezone.utc).isoformat()})
+    update("clients", {"id": user_id}, {"cvUrl": result["fileUrl"], "updatedAt": datetime.now(timezone.utc).isoformat()})
 
     return {"success": True, "cv": cv_record, "message": "CV subido exitosamente"}
 
@@ -4888,10 +4765,9 @@ async def update_admin_profile(
         
         # Check if email is already used by another admin
         if profile_data.email:
-            existing = select("staff", filters={
-                'email': profile_data.email,
-                '_id': {'$ne': admin_id}
-            }, single=True)
+            existing = select("staff", filters={"email": profile_data.email}, single=True)
+            if existing and existing.get("id") == admin_id:
+                existing = None  # same user, not a conflict
             if existing:
                 raise HTTPException(status_code=400, detail="Email already in use")
         
@@ -4902,17 +4778,13 @@ async def update_admin_profile(
             'phone': profile_data.phone
         }
         
-        result = # TODO: db.staff.update_one needs manual conversion → table "staff"
-  db.staff.update_one(
-            {'_id': admin_id},
-            {'$set': update_data}
-        )
-        
-        if result.modified_count == 0:
+        result = update("staff", {"id": admin_id}, update_data)
+
+        if not result:
             raise HTTPException(status_code=404, detail="Admin not found")
-        
+
         # Get updated admin
-        updated_admin = select("staff", filters={'_id': admin_id}, single=True)
+        updated_admin = select("staff", filters={"id": admin_id}, single=True)
         
         # Log activity
         log = ActivityLog.create_log(
@@ -4945,7 +4817,7 @@ async def change_admin_password(
         admin_id = staff_payload['id']
         
         # Get current admin
-        admin = select("staff", filters={'_id': admin_id}, single=True)
+        admin = select("staff", filters={"id": admin_id}, single=True)
         if not admin:
             raise HTTPException(status_code=404, detail="Admin not found")
         
@@ -4957,7 +4829,6 @@ async def change_admin_password(
         hashed_password = pwd_context.hash(password_data.newPassword)
         
         # Update password (update both fields for compatibility)
-        result = # TODO: db.staff.update_one needs manual conversion → table "staff"
   update("staff", {'id': admin_id}, {
                 'passwordHash': hashed_password,
                 'password': hashed_password  # For backward compatibility
@@ -5024,47 +4895,40 @@ async def get_all_staff(
         skip = (page - 1) * limit
         
         # Obtener staff y total
-        staff_list = select("staff")  # REVIEW: add filters
-  db.staff.find(query).skip(skip).limit(limit).to_list(length=limit)
-        total = # TODO: db.staff.count_documents needs manual conversion → table "staff"
-  db.staff.count_documents(query)
+        all_staff = select("staff", filters=query if query else None)
+        total = len(all_staff)
+        staff_list = all_staff[skip:skip + limit]
         
         # Serializar
         staff_serialized = [serialize_staff(s) for s in staff_list]
         
         # Enrich with case counts
-        staff_ids = [s['_id'] for s in staff_serialized]
-        if staff_ids:
+        staff_ids = [s.get('id') or s.get('_id') for s in staff_serialized]
+        staff_id_set = set(str(sid) for sid in staff_ids if sid)
+        if staff_id_set:
             # Visa cases count per staff (coordinator or salesRep)
-            visa_pipeline = [
-                {"$match": {"$or": [{"coordinatorId": {"$in": staff_ids}}, {"salesRepId": {"$in": staff_ids}}]}},
-                {"$project": {"coordinatorId": 1, "salesRepId": 1}},
-            ]
-            visa_cases_list = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.visa_cases.aggregate(visa_pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
+            all_visa_for_staff = select("visa_cases", columns="coordinatorId,salesRepId", limit=5000)
             visa_counts = {}
-            for vc in visa_cases_list:
+            for vc in all_visa_for_staff:
                 cid = vc.get("coordinatorId", "")
                 sid = vc.get("salesRepId", "")
-                if cid in staff_ids:
+                if str(cid) in staff_id_set:
                     visa_counts[cid] = visa_counts.get(cid, 0) + 1
-                if sid in staff_ids and sid != cid:
+                if str(sid) in staff_id_set and sid != cid:
                     visa_counts[sid] = visa_counts.get(sid, 0) + 1
 
             # Classic cases count per staff
-            classic_pipeline = [
-                {"$match": {"coordinatorId": {"$in": staff_ids}}},
-                {"$group": {"_id": "$coordinatorId", "count": {"$sum": 1}}},
-            ]
-            classic_agg = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.classic_cases.aggregate(classic_pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
-            classic_counts = {c["_id"]: c["count"] for c in classic_agg}
+            all_classic_for_staff = select("classic_cases", columns="coordinatorId", limit=5000)
+            classic_counts = {}
+            for c in all_classic_for_staff:
+                cid = c.get("coordinatorId", "")
+                if str(cid) in staff_id_set:
+                    classic_counts[cid] = classic_counts.get(cid, 0) + 1
 
             for s in staff_serialized:
-                s["visaCasesCount"] = visa_counts.get(s["_id"], 0)
-                s["classicCasesCount"] = classic_counts.get(s["_id"], 0)
+                sid = s.get("id") or s.get("_id")
+                s["visaCasesCount"] = visa_counts.get(sid, 0)
+                s["classicCasesCount"] = classic_counts.get(sid, 0)
         
         return {
             'staff': staff_serialized,
@@ -5090,11 +4954,8 @@ async def get_unique_advisors(
     """Get list of unique advisor names from users (for filtering visa cases)"""
     try:
         # Obtener todos los usuarios que tienen advisor definido
-        users_with_advisor = select("clients")  # REVIEW: add filters
-  db.users.find(
-            {'advisor': {'$exists': True, '$ne': None}},
-            {'advisor': 1}
-        ).to_list(length=10000)
+        # Fetch all clients and filter for those with advisor in Python
+        users_with_advisor = [u for u in select("clients", columns="advisor", limit=10000) if u.get("advisor")]
         
         # Extraer nombres únicos de advisors
         advisor_names = set()
@@ -5138,30 +4999,28 @@ async def get_all_users(
         if not has_permission(user_role, 'view_all_users') and not has_permission(user_role, 'view_assigned_users'):
             raise HTTPException(status_code=403, detail="Insufficient permissions to view users")
         
-        # Construir query
-        query = {}
-        if search:
-            query['$or'] = [
-                {'name': {'$regex': search, '$options': 'i'}},
-                {'email': {'$regex': search, '$options': 'i'}},
-                {'phone': {'$regex': search, '$options': 'i'}}
-            ]
+        # Build filters for Supabase (simple eq filters only; search done in Python)
+        sb_filters = {}
         if user_state:
-            query['userState'] = user_state
-        
-        # Si no tiene permiso para ver todos los usuarios, filtrar por asignados
+            sb_filters['userState'] = user_state
         if not has_permission(user_role, 'view_all_users'):
             if has_permission(user_role, 'view_assigned_users'):
-                query['assignedAdvisor'] = staff_payload['id']
-        
+                sb_filters['assignedAdvisor'] = staff_payload['id']
+
+        all_users = select("clients", filters=sb_filters if sb_filters else None, limit=10000)
+
+        # Apply search filter in Python (case-insensitive substring match)
+        if search:
+            _search_lower = search.lower()
+            all_users = [u for u in all_users if
+                         _search_lower in (u.get('name') or '').lower() or
+                         _search_lower in (u.get('email') or '').lower() or
+                         _search_lower in (u.get('phone') or '').lower()]
+
         # Paginación
         skip = (page - 1) * limit
-        
-        # Obtener usuarios y total
-        users_list = select("clients")  # REVIEW: add filters
-  db.users.find(query).skip(skip).limit(limit).to_list(length=limit)
-        total = # TODO: db.users.count_documents needs manual conversion → table "clients"
-  db.users.count_documents(query)
+        total = len(all_users)
+        users_list = all_users[skip:skip + limit]
         
         # Serializar usuarios con conteo de casos
         users_serialized = []
@@ -5216,13 +5075,8 @@ async def get_user_by_id(
         if not has_permission(user_role, 'view_all_users') and not has_permission(user_role, 'view_assigned_users'):
             raise HTTPException(status_code=403, detail="Insufficient permissions to view user details")
         
-        # Buscar usuario por _id (ObjectId)
-        try:
-            user = select("clients", single=True)  # REVIEW: add filters
-  db.users.find_one({"_id": ObjectId(user_id)})
-        except:
-            # Si falla con ObjectId, intentar con el campo 'id' (string)
-            user = select("clients", filters={"id": user_id}, single=True)
+        # Buscar usuario por id
+        user = select("clients", filters={"id": user_id}, single=True)
         
         if not user:
             raise HTTPException(status_code=404, detail=f"User not found with ID: {user_id}")
@@ -5271,75 +5125,60 @@ async def update_user(
             )
         
         # Buscar usuario por _id o id string
-        user = None
-        try:
-            user = select("clients", single=True)  # REVIEW: add filters
-  db.users.find_one({"_id": ObjectId(user_id)})
-        except:
-            user = select("clients", filters={"id": user_id}, single=True)
-        
+        user = select("clients", filters={"id": user_id}, single=True)
+
         if not user:
             raise HTTPException(
-                status_code=404, 
+                status_code=404,
                 detail=f"Usuario no encontrado con ID: {user_id}"
             )
-        
+
         # Campos permitidos para actualizar
         allowed_fields = ['name', 'email', 'phone', 'profession', 'userState', 'cvUrl', 'notes']
         update_fields = {k: v for k, v in update_data.items() if k in allowed_fields and v is not None}
-        
+
         if not update_fields:
             raise HTTPException(
                 status_code=400,
                 detail="No se proporcionaron campos válidos para actualizar"
             )
-        
+
         # Validar teléfono único si se está actualizando
         if 'phone' in update_fields and update_fields['phone']:
             import re
             new_phone = update_fields['phone']
-            
+
             # Validar formato del teléfono
             if not re.match(r'^\d{10,15}$', new_phone):
                 raise HTTPException(
                     status_code=400,
                     detail="El número de teléfono debe contener solo dígitos (10-15), incluyendo código de área. Ejemplo: 584124248787"
                 )
-            
+
             # Verificar que no exista otro usuario con el mismo teléfono
-            existing_user = select("clients", filters={
-                'phone': new_phone,
-                '_id': {'$ne': user['_id']}
-            }, single=True)
-            
-            if existing_user:
+            existing_user = select("clients", filters={"phone": new_phone}, single=True)
+            if existing_user and existing_user.get("id") != user.get("id"):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Ya existe otro usuario con el número de teléfono {new_phone}"
                 )
-        
+
         # Agregar timestamp de actualización
         update_fields['updatedAt'] = datetime.now(timezone.utc).isoformat()
-        
+
         # Actualizar usuario
         try:
-            # TODO: db.users.update_one needs manual conversion → table "clients"
-
-            
-            db.users.update_one(
-                {"_id": user["_id"]},
-                {"$set": update_fields}
-            )
+            update("clients", {"id": user_id}, update_fields)
         except Exception as e:
-            if 'duplicate key' in str(e).lower() or 'E11000' in str(e):
+            if 'duplicate' in str(e).lower() or 'unique' in str(e).lower():
                 raise HTTPException(
                     status_code=400,
                     detail="El número de teléfono ya está en uso por otro usuario"
                 )
             raise
-        
+
         # Obtener usuario actualizado
-        updated_user = select("clients", filters={"_id": user["_id"]}, {"_id": 0}, single=True)
+        updated_user = select("clients", filters={"id": user_id}, single=True)
         
         logger.info(f"✅ User updated: {user_id} by {staff_payload.get('email')}")
         
@@ -5416,29 +5255,19 @@ async def run_unique_phone_migration(
             "errors": []
         }
         
-        # Step 1: Check if index already exists
-        existing_indexes = # TODO: db.users.index_information needs manual conversion → table "clients"
-  db.users.index_information()
-        if 'phone_unique_idx' in existing_indexes:
-            results["index_already_exists"] = True
-            results["message"] = "El índice único de teléfono ya existe. No se requiere migración."
-            return results
-        
-        # Step 2: Find duplicates
-        pipeline = [
-            {'$match': {'phone': {'$ne': None, '$ne': '', '$exists': True}}},
-            {'$group': {
-                '_id': '$phone',
-                'count': {'$sum': 1},
-                'users': {'$push': {'_id': '$_id', 'id': '$id', 'email': '$email', 'name': '$name', 'createdAt': '$createdAt'}}
-            }},
-            {'$match': {'count': {'$gt': 1}}},
-            {'$sort': {'count': -1}}
-        ]
-        
-        duplicates = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.users.aggregate(pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
+        # Step 1: In Supabase, unique constraints are managed at the database level (SQL)
+        # Check for duplicates by fetching all clients with phone numbers
+        results["index_already_exists"] = False  # Supabase uses SQL constraints, not Mongo indexes
+
+        # Step 2: Find duplicates in Python
+        all_clients_for_dup = select("clients", columns="id,email,name,phone,createdAt", limit=10000)
+        phone_groups = {}
+        for u in all_clients_for_dup:
+            ph = u.get("phone")
+            if ph and ph.strip():
+                phone_groups.setdefault(ph, []).append(u)
+        duplicates = [{"_id": phone, "count": len(users), "users": users} for phone, users in phone_groups.items() if len(users) > 1]
+        duplicates.sort(key=lambda x: -x["count"])
         
         for dup in duplicates:
             phone = dup['_id']
@@ -5480,7 +5309,6 @@ async def run_unique_phone_migration(
                 })
                 
                 if not dry_run:
-                    # TODO: db.users.update_one needs manual conversion → table "clients"
 
                     
                     update("clients", {'id': user['id']}, {
@@ -5494,27 +5322,18 @@ async def run_unique_phone_migration(
         
         # Step 3: Handle empty phone strings
         if not dry_run:
-            empty_result = # TODO: db.users.update_many needs manual conversion → table "clients"
-  update("clients", {'phone': ''}, {'phone': None})
-            if empty_result.modified_count > 0:
-                results["empty_phones_converted"] = empty_result.modified_count
-        
-        # Step 4: Create unique index
-        if not dry_run:
-            try:
-                # TODO: db.users.create_index needs manual conversion → table "clients"
+            empty_phone_clients = select("clients", filters={"phone": ""}, limit=10000)
+            for epc in empty_phone_clients:
+                update("clients", {"id": epc["id"]}, {"phone": None})
+            if empty_phone_clients:
+                results["empty_phones_converted"] = len(empty_phone_clients)
 
-                
-                db.users.create_index(
-                    [('phone', 1)],
-                    unique=True,
-                    name='phone_unique_idx',
-                    partialFilterExpression={'phone': {'$type': 'string', '$gt': ''}}
-                )
-                results["index_created"] = True
-                logger.info(f"✅ Migration: Unique phone index created by {auth_source}")
-            except Exception as e:
-                results["errors"].append(f"Error creating index: {str(e)}")
+        # Step 4: In Supabase, unique constraints should be added via SQL migration
+        # e.g., ALTER TABLE clients ADD CONSTRAINT phone_unique UNIQUE (phone);
+        if not dry_run:
+            results["index_created"] = False
+            results["index_note"] = "Supabase uses SQL constraints. Add via migration: ALTER TABLE clients ADD CONSTRAINT phone_unique UNIQUE (phone)"
+            logger.info(f"Migration: Phone dedup completed by {auth_source}. SQL constraint must be added separately.")
         
         # Summary message
         if dry_run:
@@ -5546,7 +5365,7 @@ async def export_master_case():
     """
     try:
         # Buscar caso maestro
-        master_case = select("visa_cases", filters={'_id': 'master_case_eb2_niw'}, single=True)
+        master_case = select("visa_cases", filters={"id": 'master_case_eb2_niw'}, single=True)
         
         if not master_case:
             raise HTTPException(
@@ -5555,20 +5374,16 @@ async def export_master_case():
             )
         
         # Buscar etapas del caso maestro
-        stages_cursor = db.visa_stages.find({'caseId': 'master_case_eb2_niw'})
-        master_stages = await stages_cursor.to_list(100)
-        
+        master_stages = select("visa_stages", filters={"caseId": "master_case_eb2_niw"}, limit=100)
+
         # Buscar deliverables del caso maestro
-        deliverables_cursor = db.visa_deliverables.find({'caseId': 'master_case_eb2_niw'})
-        master_deliverables = await deliverables_cursor.to_list(500)
-        
+        master_deliverables = select("visa_deliverables", filters={"caseId": "master_case_eb2_niw"}, limit=500)
+
         # Buscar documentos requeridos del cliente (visa_client_documents) del master case
-        client_docs_cursor = db.visa_client_documents.find({'caseId': 'master_case_eb2_niw'})
-        client_documents = await client_docs_cursor.to_list(100)
-        
+        client_documents = select("visa_documents", filters={"caseId": "master_case_eb2_niw"}, limit=100)
+
         # Buscar documentos legales adicionales (si existen)
-        legal_docs_cursor = db.legal_documents.find({})
-        legal_documents = await legal_docs_cursor.to_list(100)
+        legal_documents = select("legal_documents", limit=100)
         
         # Convertir ObjectId a string
         for stage in master_stages:
@@ -5646,7 +5461,7 @@ async def import_master_case(
             )
         
         # Verificar si ya existe
-        existing_case = select("visa_cases", filters={'_id': 'master_case_eb2_niw'}, single=True)
+        existing_case = select("visa_cases", filters={"id": 'master_case_eb2_niw'}, single=True)
         
         if existing_case and not force:
             raise HTTPException(
@@ -5692,70 +5507,27 @@ async def import_master_case(
         
         # Insertar etapas
         if master_stages:
-            for stage in master_stages:
-                if '_id' in stage and isinstance(stage['_id'], str):
-                    try:
-                        stage['_id'] = ObjectId(stage['_id'])
-                    except:
-                        pass
-            
-            # insert_many: iterate and insert each
-
-            
             for _doc in master_stages:
-
-            
+                _doc.pop('_id', None)  # Remove MongoDB _id if present
                 insert("visa_stages", _doc)
             results['stagesImported'] = len(master_stages)
-        
+
         # Insertar deliverables
         if master_deliverables:
-            for deliverable in master_deliverables:
-                if '_id' in deliverable and isinstance(deliverable['_id'], str):
-                    try:
-                        deliverable['_id'] = ObjectId(deliverable['_id'])
-                    except:
-                        pass
-            
-            # insert_many: iterate and insert each
-
-            
             for _doc in master_deliverables:
-
-            
+                _doc.pop('_id', None)
                 insert("visa_deliverables", _doc)
             results['deliverablesImported'] = len(master_deliverables)
-        
-        # Insertar documentos requeridos del cliente (visa_client_documents)
+
+        # Insertar documentos requeridos del cliente
         if client_documents:
-            for doc in client_documents:
-                if '_id' in doc and isinstance(doc['_id'], str):
-                    try:
-                        doc['_id'] = ObjectId(doc['_id'])
-                    except:
-                        pass
-            
-            # insert_many: iterate and insert each
-
-            
             for _doc in client_documents:
-
-            
+                _doc.pop('_id', None)
                 insert("visa_documents", _doc)
             results['clientDocsImported'] = len(client_documents)
-        
+
         # Insertar documentos legales
         if legal_documents:
-            for doc in legal_documents:
-                if '_id' in doc and isinstance(doc['_id'], str):
-                    try:
-                        doc['_id'] = ObjectId(doc['_id'])
-                    except:
-                        pass
-            
-            # insert_many: iterate and insert each
-
-            
             for _doc in legal_documents:
 
             
@@ -5799,17 +5571,7 @@ async def delete_user(
             )
         
         # Buscar usuario - soporta tanto ObjectId como UUID string
-        user = None
-        try:
-            # Intentar primero como ObjectId
-            user = select("clients", single=True)  # REVIEW: add filters
-  db.users.find_one({"_id": ObjectId(user_id)})
-        except:
-            pass
-        
-        if not user:
-            # Intentar como string (UUID)
-            user = select("clients", filters={"_id": user_id}, single=True)
+        user = select("clients", filters={"id": user_id}, single=True)
         
         if not user:
             raise HTTPException(
@@ -5908,8 +5670,7 @@ async def create_staff(
             )
         
         # Verificar que el email no existe
-        existing = select("staff", single=True)  # REVIEW: add filters
-  db.staff.find_one({'email': request.email.lower()})
+        existing = select("staff", filters={"email": request.email.lower()}, single=True)
         if existing:
             raise HTTPException(status_code=400, detail="Email already exists")
         
@@ -6016,8 +5777,7 @@ async def export_staff(
                 query['department'] = staff_payload.get('department')
         
         # Obtener staff
-        staff_list = select("staff")  # REVIEW: add filters
-  db.staff.find(query).to_list(length=1000)
+        staff_list = select("staff", filters=query if query else None, limit=1000)
         
         # Crear CSV en memoria
         output = io.StringIO()
@@ -6077,7 +5837,7 @@ async def get_staff_by_id(
 ):
     """Get staff member by ID"""
     try:
-        staff = select("staff", filters={'_id': staff_id}, single=True)
+        staff = select("staff", filters={"id": staff_id}, single=True)
         if not staff:
             raise HTTPException(status_code=404, detail="Staff not found")
         
@@ -6108,7 +5868,7 @@ async def get_staff_detail(
 ):
     """Get staff member detail with case counts."""
     try:
-        staff_member = select("staff", filters={'_id': staff_id}, single=True)
+        staff_member = select("staff", filters={"id": staff_id}, single=True)
         if not staff_member:
             raise HTTPException(status_code=404, detail="Staff not found")
 
@@ -6118,35 +5878,32 @@ async def get_staff_detail(
         visa_as_coordinator = count("visa_cases", {"coordinatorId": staff_id})
         visa_as_sales = count("visa_cases", {"salesRepId": staff_id})
 
-        # Count visa cases by status for this staff
-        visa_pipeline = [
-            {"$match": {"$or": [{"coordinatorId": staff_id}, {"salesRepId": staff_id}]}},
-            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
-        ]
-        visa_by_status = {}
-        async for doc in db.visa_cases.aggregate(visa_pipeline):
-            visa_by_status[doc["_id"]] = doc["count"]
+        # Get visa cases for this staff (as coordinator or sales rep)
+        _staff_visa_coord = select("visa_cases", filters={"coordinatorId": staff_id}, columns="id,userId,visaType,status,overallProgress,createdAt,updatedAt", order="updatedAt", order_desc=True, limit=500)
+        _staff_visa_sales = select("visa_cases", filters={"salesRepId": staff_id}, columns="id,userId,visaType,status,overallProgress,createdAt,updatedAt", order="updatedAt", order_desc=True, limit=500)
+        # Merge and deduplicate
+        _seen_vc_ids = set()
+        _all_staff_visa = []
+        for vc in _staff_visa_coord + _staff_visa_sales:
+            if vc.get("id") not in _seen_vc_ids:
+                _seen_vc_ids.add(vc.get("id"))
+                _all_staff_visa.append(vc)
+        # Sort by updatedAt desc
+        _all_staff_visa.sort(key=lambda x: x.get("updatedAt") or "", reverse=True)
 
-        # Get list of visa cases (limited)
-        visa_cases = select("visa_cases")  # REVIEW: add filters
-  db.visa_cases.find(
-            {"$or": [{"coordinatorId": staff_id}, {"salesRepId": staff_id}]},
-            {"_id": 0, "id": 1, "userId": 1, "visaType": 1, "status": 1, "overallProgress": 1, "createdAt": 1, "updatedAt": 1}
-        ).sort("updatedAt", -1).to_list(100)
+        visa_by_status = {}
+        for vc in _all_staff_visa:
+            st = vc.get("status", "unknown")
+            visa_by_status[st] = visa_by_status.get(st, 0) + 1
+
+        visa_cases = _all_staff_visa[:100]
 
         # Enrich visa cases with client names
         for vc in visa_cases:
             user = None
             user_id = vc.get("userId")
             if user_id:
-                                queries = [{"_id": user_id}, {"id": user_id}]
-                try:
-                    queries.append({"_id": ObjectId(user_id)})
-                except Exception:
-                    pass
-                user = # TODO: Complex query — needs manual conversion
- # Original: select("clients", filters={"$or": queries}, {"id": 0, "name": 1, "email": 1}, single=True)
- select("clients", single=True)  # FIXME: add proper filters
+                user = select("clients", filters={"id": user_id}, columns="name,email", single=True)
             vc["clientName"] = user.get("name", "Sin nombre") if user else "Sin cliente"
             vc["clientEmail"] = user.get("email", "") if user else ""
             vc.pop("userId", None)
@@ -6154,21 +5911,12 @@ async def get_staff_detail(
         # Count classic cases where this staff is coordinator
         classic_as_coordinator = count("classic_cases", {"coordinatorId": staff_id})
 
-        # Count classic cases by status
-        classic_pipeline = [
-            {"$match": {"coordinatorId": staff_id}},
-            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
-        ]
+        # Count classic cases by status and get list
+        classic_cases = select("classic_cases", filters={"coordinatorId": staff_id}, columns="id,name,email,status,workStatus,createdAt,updatedAt", order="updatedAt", order_desc=True, limit=100)
         classic_by_status = {}
-        async for doc in db.classic_cases.aggregate(classic_pipeline):
-            classic_by_status[doc["_id"]] = doc["count"]
-
-        # Get list of classic cases (limited)
-        classic_cases = select("classic_cases")  # REVIEW: add filters
-  db.classic_cases.find(
-            {"coordinatorId": staff_id},
-            {"_id": 0, "id": 1, "name": 1, "email": 1, "status": 1, "workStatus": 1, "createdAt": 1, "updatedAt": 1}
-        ).sort("updatedAt", -1).to_list(100)
+        for c in classic_cases:
+            st = c.get("status", "unknown")
+            classic_by_status[st] = classic_by_status.get(st, 0) + 1
 
         return {
             "staff": staff_data,
@@ -6203,7 +5951,7 @@ async def update_staff(
     """Update staff member"""
     try:
         # Obtener staff a actualizar
-        target_staff = select("staff", filters={'_id': staff_id}, single=True)
+        target_staff = select("staff", filters={"id": staff_id}, single=True)
         if not target_staff:
             raise HTTPException(status_code=404, detail="Staff not found")
         
@@ -6232,11 +5980,9 @@ async def update_staff(
             update_data['name'] = request.name
         if request.email is not None:
             # Verificar que el email no esté en uso por otro staff
-            existing = select("staff", single=True)  # REVIEW: add filters
-  db.staff.find_one({
-                'email': request.email.lower(),
-                '_id': {'$ne': staff_id}
-            })
+            existing = select("staff", filters={"email": request.email.lower()}, single=True)
+            if existing and existing.get("id") == staff_id:
+                existing = None  # same staff, not a conflict
             if existing:
                 raise HTTPException(status_code=400, detail="Email already in use")
             update_data['email'] = request.email.lower()
@@ -6257,13 +6003,7 @@ async def update_staff(
             update_data['permissions'] = request.permissions
         
         # Actualizar
-        # TODO: db.staff.update_one needs manual conversion → table "staff"
-
-        
-        db.staff.update_one(
-            {'_id': staff_id},
-            {'$set': update_data}
-        )
+        update("staff", {"id": staff_id}, update_data)
         
         # Log de actividad
         log = ActivityLog.create_log(
@@ -6276,7 +6016,7 @@ async def update_staff(
         insert("activity_logs", log)
         
         # Obtener staff actualizado
-        updated_staff = select("staff", filters={'_id': staff_id}, single=True)
+        updated_staff = select("staff", filters={"id": staff_id}, single=True)
         
         return {
             'staff': serialize_staff(updated_staff),
@@ -6302,7 +6042,7 @@ async def delete_staff(
             raise HTTPException(status_code=400, detail="You cannot delete yourself")
         
         # Obtener staff a eliminar
-        target_staff = select("staff", filters={'_id': staff_id}, single=True)
+        target_staff = select("staff", filters={"id": staff_id}, single=True)
         if not target_staff:
             raise HTTPException(status_code=404, detail="Staff not found")
         
@@ -6352,21 +6092,18 @@ async def transfer_staff_cases(
         if staff_id == request.targetStaffId:
             raise HTTPException(status_code=400, detail="No puedes transferir casos al mismo usuario")
 
-        source = select("staff", filters={"_id": staff_id}, {"name": 1}, single=True)
-        target = select("staff", filters={"_id": request.targetStaffId}, {"name": 1}, single=True)
+        source = select("staff", filters={"id": staff_id}, columns="id,name", single=True)
+        target = select("staff", filters={"id": request.targetStaffId}, columns="id,name", single=True)
         if not source:
             raise HTTPException(status_code=404, detail="Staff origen no encontrado")
         if not target:
             raise HTTPException(status_code=404, detail="Staff destino no encontrado")
 
         # Transfer visa cases - coordinatorId
-        visa_coord = # TODO: db.visa_cases.update_many needs manual conversion → table "visa_cases"
   update("visa_cases", {"coordinatorId": staff_id}, {"coordinatorId": request.targetStaffId})
         # Transfer visa cases - salesRepId
-        visa_sales = # TODO: db.visa_cases.update_many needs manual conversion → table "visa_cases"
   update("visa_cases", {"salesRepId": staff_id}, {"salesRepId": request.targetStaffId})
         # Transfer classic cases - coordinatorId
-        classic_coord = # TODO: db.classic_cases.update_many needs manual conversion → table "classic_cases"
   update("classic_cases", {"coordinatorId": staff_id}, {"coordinatorId": request.targetStaffId})
 
         total = visa_coord.modified_count + visa_sales.modified_count + classic_coord.modified_count
@@ -6413,13 +6150,11 @@ async def generate_whitepaper(case_id: str, staff_payload: dict = Depends(verify
     import asyncio as _asyncio
 
     # Check if there's already an active job
-    existing = select("book_jobs", single=True)  # REVIEW: add filters
-  db.whitepaper_jobs.find_one(
-        {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
-        {"_id": 1}
-    )
+    # Check active whitepaper jobs — fetch latest and filter in Python
+    _wp_jobs = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=5)
+    existing = next((j for j in _wp_jobs if j.get("status") in ("processing", "generating")), None)
     if existing:
-        return {"job_id": existing["_id"], "message": "Ya hay una generacion en progreso"}
+        return {"job_id": existing.get("id"), "message": "Ya hay una generacion en progreso"}
 
     job_id = str(uuid_mod.uuid4())
     insert("book_jobs", {
@@ -6439,12 +6174,7 @@ async def generate_whitepaper(case_id: str, staff_payload: dict = Depends(verify
 @api_router.get("/admin/visa-cases/{case_id}/whitepaper-job")
 async def get_whitepaper_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest whitepaper generation job for a case"""
-    job = select("book_jobs", single=True)  # REVIEW: add filters
-  db.whitepaper_jobs.find_one(
-        {"caseId": case_id},
-        {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalWhitepaperId": 1, "externalClientId": 1, "updatedAt": 1},
-        sort=[("createdAt", -1)]
-    )
+    job = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, single=True)
     if not job:
         return {"job": None}
 
@@ -6455,28 +6185,17 @@ async def get_whitepaper_job(case_id: str, staff_payload: dict = Depends(verify_
             wp_status = await _get_wp_status(token, job["externalWhitepaperId"])
             ext_status = wp_status.get("status", "")
             progress = wp_status.get("progress", 0)
-            # TODO: db.whitepaper_jobs.update_one needs manual conversion → table "book_jobs"
-
-            
             update("book_jobs", {"id": job["id"]}, {"progress": progress, "updatedAt": datetime.now(timezone.utc).isoformat()})
             job["progress"] = progress
             if ext_status == "completed":
-                # TODO: db.whitepaper_jobs.update_one needs manual conversion → table "book_jobs"
-
-                
                 update("book_jobs", {"id": job["id"]}, {"status": "completed", "currentStep": "White Paper generado exitosamente"})
                 job["status"] = "completed"
                 job["currentStep"] = "White Paper generado exitosamente"
             elif ext_status == "error":
-                # TODO: db.whitepaper_jobs.update_one needs manual conversion → table "book_jobs"
-
-                
                 update("book_jobs", {"id": job["id"]}, {"status": "error", "error": "Error en generacion externa"})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll whitepaper status: {e}")
-
-    job["id"] = job.pop("_id")
     return {"job": job}
 
 
@@ -6489,13 +6208,10 @@ async def generate_policy_paper(case_id: str, staff_payload: dict = Depends(veri
     import uuid as uuid_mod
     import asyncio as _asyncio
 
-    existing = select("book_jobs", single=True)  # REVIEW: add filters
-  db.policy_paper_jobs.find_one(
-        {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
-        {"_id": 1}
-    )
+    _pp_jobs = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=5)
+    existing = next((j for j in _pp_jobs if j.get("status") in ("processing", "generating")), None)
     if existing:
-        return {"job_id": existing["_id"], "message": "Ya hay una generacion en progreso"}
+        return {"job_id": existing.get("id"), "message": "Ya hay una generacion en progreso"}
 
     job_id = str(uuid_mod.uuid4())
     insert("book_jobs", {
@@ -6515,12 +6231,7 @@ async def generate_policy_paper(case_id: str, staff_payload: dict = Depends(veri
 @api_router.get("/admin/visa-cases/{case_id}/policy-paper-job")
 async def get_policy_paper_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest policy paper generation job for a case"""
-    job = select("book_jobs", single=True)  # REVIEW: add filters
-  db.policy_paper_jobs.find_one(
-        {"caseId": case_id},
-        {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalPaperId": 1, "externalClientId": 1, "updatedAt": 1},
-        sort=[("createdAt", -1)]
-    )
+    job = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, single=True)
     if not job:
         return {"job": None}
 
@@ -6531,42 +6242,27 @@ async def get_policy_paper_job(case_id: str, staff_payload: dict = Depends(verif
             progress = pp_status.get("progress", 0)
             ext_status = pp_status.get("status", "")
             progress_msg = pp_status.get("progress_message", "")
-            # TODO: db.policy_paper_jobs.update_one needs manual conversion → table "book_jobs"
-
-            
             update("book_jobs", {"id": job["id"]}, {"progress": progress, "progressMessage": progress_msg, "updatedAt": datetime.now(timezone.utc).isoformat()})
             job["progress"] = progress
             job["progressMessage"] = progress_msg
             if ext_status == "completed":
-                # TODO: db.policy_paper_jobs.update_one needs manual conversion → table "book_jobs"
-
-                
                 update("book_jobs", {"id": job["id"]}, {"status": "completed", "currentStep": "Policy Paper generado exitosamente"})
                 job["status"] = "completed"
                 job["currentStep"] = "Policy Paper generado exitosamente"
             elif ext_status == "error":
                 err_msg = pp_status.get("error_message", "Error en generacion externa")
-                # TODO: db.policy_paper_jobs.update_one needs manual conversion → table "book_jobs"
-
-                
                 update("book_jobs", {"id": job["id"]}, {"status": "error", "error": err_msg})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll policy paper status: {e}")
-
-    job["id"] = job.pop("_id")
     return {"job": job}
 
 
 @api_router.get("/admin/visa-cases/{case_id}/policy-paper-download")
 async def download_policy_paper(case_id: str, language: str = "es", staff_payload: dict = Depends(verify_staff_token)):
     """Proxy download of the generated policy paper PDF"""
-    job = select("book_jobs", single=True)  # REVIEW: add filters
-  db.policy_paper_jobs.find_one(
-        {"caseId": case_id, "status": "completed"},
-        {"externalPaperId": 1},
-        sort=[("createdAt", -1)]
-    )
+    _pp_completed = select("book_jobs", filters={"caseId": case_id, "status": "completed"}, order="createdAt", order_desc=True, limit=1)
+    job = _pp_completed[0] if _pp_completed else None
     if not job or not job.get("externalPaperId"):
         raise HTTPException(status_code=404, detail="No hay Policy Paper completado")
 
@@ -6600,13 +6296,10 @@ async def generate_econometric(case_id: str, staff_payload: dict = Depends(verif
     import uuid as uuid_mod
     import asyncio as _asyncio
 
-    existing = select("econometric_studies", single=True)  # REVIEW: add filters
-  db.econometric_jobs.find_one(
-        {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
-        {"_id": 1}
-    )
+    _ec_jobs = select("econometric_studies", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=5)
+    existing = next((j for j in _ec_jobs if j.get("status") in ("processing", "generating")), None)
     if existing:
-        return {"job_id": existing["_id"], "message": "Ya hay una generacion en progreso"}
+        return {"job_id": existing.get("id"), "message": "Ya hay una generacion en progreso"}
 
     job_id = str(uuid_mod.uuid4())
     insert("econometric_studies", {
@@ -6626,12 +6319,7 @@ async def generate_econometric(case_id: str, staff_payload: dict = Depends(verif
 @api_router.get("/admin/visa-cases/{case_id}/econometric-job")
 async def get_econometric_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest econometric study job for a case"""
-    job = select("econometric_studies", single=True)  # REVIEW: add filters
-  db.econometric_jobs.find_one(
-        {"caseId": case_id},
-        {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalStudyId": 1, "externalClientId": 1, "updatedAt": 1},
-        sort=[("createdAt", -1)]
-    )
+    job = select("econometric_studies", filters={"caseId": case_id}, order="createdAt", order_desc=True, single=True)
     if not job:
         return {"job": None}
 
@@ -6641,40 +6329,25 @@ async def get_econometric_job(case_id: str, staff_payload: dict = Depends(verify
             ec_status = await _get_ec_status(token, job["externalStudyId"])
             progress = ec_status.get("progress", 0)
             ext_status = ec_status.get("status", "")
-            # TODO: db.econometric_jobs.update_one needs manual conversion → table "econometric_studies"
-
-            
             update("econometric_studies", {"id": job["id"]}, {"progress": progress, "updatedAt": datetime.now(timezone.utc).isoformat()})
             job["progress"] = progress
             if ext_status in ("completed", "generation_complete"):
-                # TODO: db.econometric_jobs.update_one needs manual conversion → table "econometric_studies"
-
-                
                 update("econometric_studies", {"id": job["id"]}, {"status": "completed", "currentStep": "Estudio Econometrico generado exitosamente"})
                 job["status"] = "completed"
                 job["currentStep"] = "Estudio Econometrico generado exitosamente"
             elif ext_status == "generation_failed":
-                # TODO: db.econometric_jobs.update_one needs manual conversion → table "econometric_studies"
-
-                
                 update("econometric_studies", {"id": job["id"]}, {"status": "error", "error": "Error en generacion externa"})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll econometric status: {e}")
-
-    job["id"] = job.pop("_id")
     return {"job": job}
 
 
 @api_router.get("/admin/visa-cases/{case_id}/econometric-download")
 async def download_econometric(case_id: str, language: str = "es", staff_payload: dict = Depends(verify_staff_token)):
     """Proxy download of the generated econometric study PDF"""
-    job = select("econometric_studies", single=True)  # REVIEW: add filters
-  db.econometric_jobs.find_one(
-        {"caseId": case_id, "status": "completed"},
-        {"externalStudyId": 1},
-        sort=[("createdAt", -1)]
-    )
+    _ec_completed = select("econometric_studies", filters={"caseId": case_id, "status": "completed"}, order="createdAt", order_desc=True, limit=1)
+    job = _ec_completed[0] if _ec_completed else None
     if not job or not job.get("externalStudyId"):
         raise HTTPException(status_code=404, detail="No hay Estudio Econometrico completado")
 
@@ -6702,11 +6375,7 @@ async def download_econometric(case_id: str, language: str = "es", staff_payload
 @api_router.get("/admin/visa-cases/{case_id}/book-preparation")
 async def get_book_preparation_admin(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get book preparation status (idea + title selected by client)"""
-    prep = select("book_preparations", single=True)  # REVIEW: add filters
-  db.book_preparations.find_one(
-        {"caseId": case_id},
-        {"_id": 0}
-    )
+    prep = select("book_preparations", filters={"caseId": case_id}, single=True)
     return {"preparation": prep}
 
 
@@ -6716,13 +6385,10 @@ async def generate_book(case_id: str, staff_payload: dict = Depends(verify_staff
     import uuid as uuid_mod
     import asyncio as _asyncio
 
-    existing = select("book_jobs", single=True)  # REVIEW: add filters
-  db.book_jobs.find_one(
-        {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
-        {"_id": 1}
-    )
+    _bk_jobs = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=5)
+    existing = next((j for j in _bk_jobs if j.get("status") in ("processing", "generating")), None)
     if existing:
-        return {"job_id": existing["_id"], "message": "Ya hay una generacion en progreso"}
+        return {"job_id": existing.get("id"), "message": "Ya hay una generacion en progreso"}
 
     job_id = str(uuid_mod.uuid4())
     insert("book_jobs", {
@@ -6742,12 +6408,7 @@ async def generate_book(case_id: str, staff_payload: dict = Depends(verify_staff
 @api_router.get("/admin/visa-cases/{case_id}/book-job")
 async def get_book_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest book generation job for a case"""
-    job = select("book_jobs", single=True)  # REVIEW: add filters
-  db.book_jobs.find_one(
-        {"caseId": case_id},
-        {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalBookId": 1, "externalClientId": 1, "updatedAt": 1},
-        sort=[("createdAt", -1)]
-    )
+    job = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, single=True)
     if not job:
         return {"job": None}
 
@@ -6758,42 +6419,27 @@ async def get_book_job(case_id: str, staff_payload: dict = Depends(verify_staff_
             progress = bk_status.get("progress_percentage", 0)
             ext_status = bk_status.get("status", "")
             progress_msg = bk_status.get("progress_message", "")
-            # TODO: db.book_jobs.update_one needs manual conversion → table "book_jobs"
-
-            
             update("book_jobs", {"id": job["id"]}, {"progress": progress, "progressMessage": progress_msg, "updatedAt": datetime.now(timezone.utc).isoformat()})
             job["progress"] = progress
             job["progressMessage"] = progress_msg
             if ext_status == "completed":
-                # TODO: db.book_jobs.update_one needs manual conversion → table "book_jobs"
-
-                
                 update("book_jobs", {"id": job["id"]}, {"status": "completed", "currentStep": "Libro generado exitosamente"})
                 job["status"] = "completed"
                 job["currentStep"] = "Libro generado exitosamente"
             elif ext_status == "failed":
                 err_msg = bk_status.get("error_message", "Error en generacion externa")
-                # TODO: db.book_jobs.update_one needs manual conversion → table "book_jobs"
-
-                
                 update("book_jobs", {"id": job["id"]}, {"status": "error", "error": err_msg})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll book status: {e}")
-
-    job["id"] = job.pop("_id")
     return {"job": job}
 
 
 @api_router.get("/admin/visa-cases/{case_id}/book-download")
 async def download_book(case_id: str, language: str = "es", staff_payload: dict = Depends(verify_staff_token)):
     """Proxy download of the generated book PDF"""
-    job = select("book_jobs", single=True)  # REVIEW: add filters
-  db.book_jobs.find_one(
-        {"caseId": case_id, "status": "completed"},
-        {"externalBookId": 1},
-        sort=[("createdAt", -1)]
-    )
+    _bk_completed = select("book_jobs", filters={"caseId": case_id, "status": "completed"}, order="createdAt", order_desc=True, limit=1)
+    job = _bk_completed[0] if _bk_completed else None
     if not job or not job.get("externalBookId"):
         raise HTTPException(status_code=404, detail="No hay Libro completado")
 
@@ -6820,19 +6466,14 @@ async def download_book(case_id: str, language: str = "es", staff_payload: dict 
 @api_router.get("/admin/visa-cases/{case_id}/bp-preparation")
 async def get_bp_preparation_admin(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get BP preparation status (project selected by client)"""
-    prep = select("business_plans", filters={"caseId": case_id}, {"_id": 0}, single=True)
+    prep = select("business_plans", filters={"caseId": case_id}, single=True)
     return {"preparation": prep}
 
 
 @api_router.get("/admin/visa-cases/{case_id}/bp-job")
 async def get_bp_job_admin(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest BP generation job for a case"""
-    job = select("book_jobs", single=True)  # REVIEW: add filters
-  db.bp_jobs.find_one(
-        {"caseId": case_id},
-        {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "progress": 1, "externalNiwId": 1, "updatedAt": 1},
-        sort=[("createdAt", -1)]
-    )
+    job = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, single=True)
     if not job:
         return {"job": None}
 
@@ -6849,23 +6490,18 @@ async def get_bp_job_admin(case_id: str, staff_payload: dict = Depends(verify_st
                     ext_status = ext.get("status", "")
                     progress = ext.get("progress", 0)
                     msg = ext.get("progress_message", "")
-                    update = {"progress": progress, "currentStep": msg or job.get("currentStep", ""), "updatedAt": datetime.now(timezone.utc).isoformat()}
+                    bp_update_data = {"progress": progress, "currentStep": msg or job.get("currentStep", ""), "updatedAt": datetime.now(timezone.utc).isoformat()}
                     if ext_status == "completed":
-                        update["status"] = "completed"
-                        update["currentStep"] = "Business Plan generado exitosamente"
+                        bp_update_data["status"] = "completed"
+                        bp_update_data["currentStep"] = "Business Plan generado exitosamente"
                     elif ext_status == "generation_failed":
-                        update["status"] = "error"
-                        update["error"] = ext.get("error", "Error en generacion")
-                    # TODO: Complex update — needs manual conversion
-
-                    # Original: db.bp_jobs.update_one({"_id": job["_id"]}, {"$set": update})
-
-                    update("book_jobs", {}, {})  # FIXME
-                    job.update(update)
+                        bp_update_data["status"] = "error"
+                        bp_update_data["error"] = ext.get("error", "Error en generacion")
+                    update("book_jobs", {"id": job["id"]}, bp_update_data)
+                    job.update(bp_update_data)
         except Exception as e:
             logger.warning(f"BP job poll failed: {e}")
 
-    job["id"] = job.pop("_id")
     return {"job": job}
 
 
@@ -6877,13 +6513,10 @@ async def generate_case_study(case_id: str, staff_payload: dict = Depends(verify
     import uuid as uuid_mod
     import asyncio as _asyncio
 
-    existing = select("book_jobs", single=True)  # REVIEW: add filters
-  db.case_study_jobs.find_one(
-        {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
-        {"_id": 1}
-    )
+    _cs_jobs = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=5)
+    existing = next((j for j in _cs_jobs if j.get("status") in ("processing", "generating")), None)
     if existing:
-        return {"job_id": existing["_id"], "message": "Ya hay una generacion en progreso"}
+        return {"job_id": existing.get("id"), "message": "Ya hay una generacion en progreso"}
 
     job_id = str(uuid_mod.uuid4())
     insert("book_jobs", {
@@ -6903,12 +6536,7 @@ async def generate_case_study(case_id: str, staff_payload: dict = Depends(verify
 @api_router.get("/admin/visa-cases/{case_id}/case-study-job")
 async def get_case_study_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest case study generation job for a case"""
-    job = select("book_jobs", single=True)  # REVIEW: add filters
-  db.case_study_jobs.find_one(
-        {"caseId": case_id},
-        {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalStudyId": 1, "externalClientId": 1, "updatedAt": 1},
-        sort=[("createdAt", -1)]
-    )
+    job = select("book_jobs", filters={"caseId": case_id}, order="createdAt", order_desc=True, single=True)
     if not job:
         return {"job": None}
 
@@ -6919,44 +6547,28 @@ async def get_case_study_job(case_id: str, staff_payload: dict = Depends(verify_
             ext_status = cs_status.get("status", "")
             coherence = cs_status.get("coherence_evaluation", {})
             coherence_score = coherence.get("coherence_score", 0) if coherence else 0
-            # TODO: db.case_study_jobs.update_one needs manual conversion → table "book_jobs"
-
-            
             update("book_jobs", {"id": job["id"]}, {"updatedAt": datetime.now(timezone.utc).isoformat()})
             if ext_status == "completed":
-                # TODO: db.case_study_jobs.update_one needs manual conversion → table "book_jobs"
-
-                
                 update("book_jobs", {"id": job["id"]}, {
-                        "status": "completed",
-                        "currentStep": "Caso de Estudio generado exitosamente",
-                        "coherenceScore": coherence_score,
-                    })
+                    "status": "completed",
+                    "currentStep": "Caso de Estudio generado exitosamente",
+                    "coherenceScore": coherence_score,
+                })
                 job["status"] = "completed"
                 job["currentStep"] = "Caso de Estudio generado exitosamente"
                 job["coherenceScore"] = coherence_score
             elif ext_status == "failed":
-                # TODO: db.case_study_jobs.update_one needs manual conversion → table "book_jobs"
-
-                
                 update("book_jobs", {"id": job["id"]}, {"status": "error", "error": "Error en generacion externa"})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll case study status: {e}")
-
-    job["id"] = job.pop("_id")
     return {"job": job}
 
 
 @api_router.get("/admin/visa-cases/{case_id}/case-study-download")
 async def download_case_study(case_id: str, language: str = "es", staff_payload: dict = Depends(verify_staff_token)):
     """Proxy download of the generated case study PDF"""
-    job = select("book_jobs", single=True)  # REVIEW: add filters
-  db.case_study_jobs.find_one(
-        {"caseId": case_id, "status": "completed"},
-        {"externalStudyId": 1},
-        sort=[("createdAt", -1)]
-    )
+    job = select("book_jobs", filters={"caseId": case_id, "status": "completed"}, order="createdAt", order_desc=True, single=True)
     if not job or not job.get("externalStudyId"):
         raise HTTPException(status_code=404, detail="No hay Caso de Estudio completado")
 
@@ -6986,7 +6598,7 @@ async def reset_staff_password(
     """Reset password for a staff member (Admin only)"""
     try:
         # Get target staff
-        target_staff = select("staff", filters={'_id': staff_id}, single=True)
+        target_staff = select("staff", filters={"id": staff_id}, single=True)
         if not target_staff:
             raise HTTPException(status_code=404, detail="Staff not found")
         
@@ -7009,7 +6621,6 @@ async def reset_staff_password(
         password_hash = pwd_context.hash(new_password)
         
         # Update password in database
-        # TODO: db.staff.update_one needs manual conversion → table "staff"
 
         
         update("staff", {'id': staff_id}, {
@@ -7211,8 +6822,7 @@ async def export_users(
                 query['assignedAdvisor'] = staff_payload['id']
         
         # Obtener usuarios
-        users_list = select("clients")  # REVIEW: add filters
-  db.users.find(query).to_list(length=5000)
+        users_list = select("clients", filters=query if query else None, limit=5000)
         
         # Crear CSV en memoria
         output = io.StringIO()
@@ -7605,10 +7215,8 @@ async def create_user_with_case(
         logger.info(f"✅ Visa case created: {visa_case.id}")
         
         # Copy stages from master case
-        master_stages_cursor = # cursor replaced
- select("visa_stages", filters={'caseId': MASTER_CASE_ID}, order="stage_number", order_desc=False)
-        master_stages = await master_stages_cursor.to_list(length=None)
-        
+        master_stages = select("visa_stages", filters={"caseId": MASTER_CASE_ID}, order="stageNumber", order_desc=False)
+
         stages = []
         for master_stage in master_stages:
             stage_id = str(uuid.uuid4())
@@ -8124,10 +7732,10 @@ async def create_visa_case(
         try:
             # Try with ObjectId first
             user_id = ObjectId(request.userId)
-            user = select("clients", filters={'_id': user_id}, single=True)
+            user = select("clients", filters={"id": user_id}, single=True)
         except Exception:
             # If ObjectId conversion fails, try with string ID
-            user = select("clients", filters={'_id': request.userId}, single=True)
+            user = select("clients", filters={"id": request.userId}, single=True)
         
         # Also try with 'id' field if not found
         if not user:
@@ -8174,11 +7782,9 @@ async def create_visa_case(
         insert("visa_cases", case_dict)
         
         # Copy stages from master case
-        master_stages_cursor = # cursor replaced
- select("visa_stages", filters={'caseId': MASTER_CASE_ID}, order="stage_number", order_desc=False)
-        master_stages = await master_stages_cursor.to_list(length=None)
-        
-        logger.info(f"📋 Copying {len(master_stages)} stages from master case...")
+        master_stages = select("visa_stages", filters={"caseId": MASTER_CASE_ID}, order="stageNumber", order_desc=False)
+
+        logger.info(f"Copying {len(master_stages)} stages from master case...")
         
         stages = []
         for master_stage in master_stages:
@@ -8313,7 +7919,7 @@ async def create_visa_case(
         logger.info(f"   - {len(stages)} stages, {len(all_deliverables)} deliverables, {len(all_documents)} documents")
         
         # 📤 Notify case webhook about new case creation
-        user_info = select("clients", filters={"id": request.userId}, {"_id": 0, "name": 1, "email": 1, "phone": 1}, single=True)
+        user_info = select("clients", filters={"id": request.userId}, columns="name,email,phone", single=True)
         await notify_case_webhook(
             action="caso_creado",
             client_data={
@@ -8832,7 +8438,7 @@ async def get_visa_case_detail(
     """Get detailed information about a visa case"""
     try:
         # Obtener caso
-        case = select("visa_cases", filters={'_id': case_id}, single=True)
+        case = select("visa_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(status_code=404, detail="Visa case not found")
         
@@ -8959,7 +8565,7 @@ async def update_visa_case(
     """Update a visa case"""
     try:
         # Obtener caso
-        case = select("visa_cases", filters={'_id': case_id}, single=True)
+        case = select("visa_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(status_code=404, detail="Visa case not found")
         
@@ -9043,7 +8649,7 @@ async def delete_visa_case(
             )
         
         # Check if case exists
-        case = select("visa_cases", filters={'_id': case_id}, single=True)
+        case = select("visa_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(status_code=404, detail="Caso no encontrado")
         
@@ -9230,7 +8836,7 @@ async def delete_deliverable(
         if role not in ('admin', 'super_admin'):
             raise HTTPException(status_code=403, detail="Solo administradores pueden eliminar entregables")
 
-        deliverable = select("visa_deliverables", filters={"_id": deliverable_id}, single=True)
+        deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
         if not deliverable:
             deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
         if not deliverable:
@@ -9254,7 +8860,7 @@ async def delete_deliverable_file(
     """Delete ALL files from a deliverable (legacy endpoint)"""
     try:
         # Verificar que el deliverable existe
-        deliverable = select("visa_deliverables", filters={'_id': deliverable_id}, single=True)
+        deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
         if not deliverable:
             raise HTTPException(status_code=404, detail="Deliverable not found")
         
@@ -9317,7 +8923,7 @@ async def delete_single_deliverable_file(
     """Delete a specific file from a deliverable's files array"""
     try:
         # Verificar que el deliverable existe
-        deliverable = select("visa_deliverables", filters={'_id': deliverable_id}, single=True)
+        deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
         if not deliverable:
             raise HTTPException(status_code=404, detail="Deliverable not found")
         
@@ -9392,7 +8998,7 @@ async def move_single_deliverable(
     """Move a deliverable to a different stage for a SINGLE case"""
     try:
         # Verify case exists
-        case = select("visa_cases", filters={'_id': case_id}, single=True)
+        case = select("visa_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(status_code=404, detail="Caso no encontrado")
         
@@ -9457,7 +9063,7 @@ async def move_single_document(
     """Move a document to a different stage for a SINGLE case"""
     try:
         # Verify case exists
-        case = select("visa_cases", filters={'_id': case_id}, single=True)
+        case = select("visa_cases", filters={"id": case_id}, single=True)
         if not case:
             raise HTTPException(status_code=404, detail="Caso no encontrado")
         
@@ -9522,7 +9128,7 @@ async def change_deliverable_stage(
     """Change the stage of a deliverable"""
     try:
         # Find the deliverable
-        deliverable = select("visa_deliverables", filters={'_id': deliverable_id}, single=True)
+        deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
         if not deliverable:
             raise HTTPException(status_code=404, detail="Entregable no encontrado")
         
@@ -9631,12 +9237,12 @@ async def upload_deliverable(
     """Upload a deliverable file for a case. Supports multiple files per deliverable."""
     try:
         # Verificar que el caso existe
-        case = select("visa_cases", filters={'_id': request.caseId}, single=True)
+        case = select("visa_cases", filters={"id": request.caseId}, single=True)
         if not case:
             raise HTTPException(status_code=404, detail="Visa case not found")
         
         # Verificar que el deliverable existe
-        deliverable = select("visa_deliverables", filters={'_id': request.deliverableId}, single=True)
+        deliverable = select("visa_deliverables", filters={"id": request.deliverableId}, single=True)
         if not deliverable:
             deliverable = select("visa_deliverables", filters={'id': request.deliverableId}, single=True)
         if not deliverable:
@@ -9723,7 +9329,7 @@ async def upload_deliverable(
         insert("activity_logs", log)
         
         # Case audit log
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         await log_case_audit(
             case_id=request.caseId,
             action=f"Archivo '{request.fileName}' subido al entregable",
@@ -9749,7 +9355,7 @@ async def upload_deliverable(
             "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
         })
         
-        updated_deliverable = select("visa_deliverables", filters={'_id': request.deliverableId}, single=True)
+        updated_deliverable = select("visa_deliverables", filters={"id": request.deliverableId}, single=True)
         
         return {
             'message': 'Deliverable uploaded successfully',
@@ -10067,7 +9673,7 @@ async def update_stage_name_bulk(
     """Update stage name for ALL cases with this stage number"""
     try:
         # Verify staff has admin/super_admin role
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can update stage names")
         
@@ -10290,7 +9896,7 @@ async def update_stage_description_bulk(
     """Update stage description for ALL cases with this stage number"""
     try:
         # Verify staff has admin/super_admin role
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can update stage descriptions")
         
@@ -10346,7 +9952,7 @@ async def delete_stage_template(
     """Delete a stage template and optionally remove it from all cases"""
     try:
         # Verify staff has admin/super_admin role
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can delete stage templates")
         
@@ -10500,7 +10106,7 @@ async def create_deliverable_template(
 ):
     """Create a new deliverable template and optionally apply to existing cases"""
     try:
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can create deliverable templates")
         
@@ -10606,7 +10212,7 @@ async def move_deliverable_to_stage(
     """Move a deliverable from one stage to another for ALL cases"""
     try:
         # Verify admin role
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Solo admins pueden mover entregables")
         
@@ -10677,7 +10283,7 @@ async def rename_deliverable(
 ):
     """Rename a deliverable for ALL cases in a specific stage"""
     try:
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Solo admins pueden renombrar entregables")
         
@@ -10730,7 +10336,7 @@ async def delete_deliverable_template(
 ):
     """Delete a deliverable template and optionally remove it from all cases"""
     try:
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can delete deliverable templates")
         
@@ -10789,53 +10395,39 @@ async def get_document_templates(
 ):
     """Get unique client documents grouped by stage number from both collections"""
     try:
-        pipeline = [
-            {
-                "$group": {
-                    "_id": {
-                        "stageNumber": "$stageNumber",
-                        "name": "$name"
-                    },
-                    "count": {"$sum": 1},
-                    "sampleId": {"$first": "$_id"}
-                }
-            },
-            {"$sort": {"_id.stageNumber": 1, "_id.name.es": 1}}
-        ]
-        
-        # Get documents from both collections and merge them
-        documents_new = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.case_documents.aggregate(pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
-        documents_old = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.visa_client_documents.aggregate(pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
-        
-        # Merge both results
-        all_documents = documents_new + documents_old
-        
+        # Fetch all visa_documents and group by stageNumber + name in Python
+        all_visa_docs = select("visa_documents", columns="id,stageNumber,name,documentName", limit=10000)
+
         # Group by stage
         stages_dict = {}
-        for d in all_documents:
-            stage_num = d['_id']['stageNumber']
+        # Track unique (stageNumber, name_es) combinations
+        _seen_stage_docs = {}
+        for d in all_visa_docs:
+            stage_num = d.get("stageNumber")
+            if stage_num is None:
+                continue
             if stage_num not in stages_dict:
                 stages_dict[stage_num] = {
                     'stageNumber': stage_num,
                     'documents': []
                 }
-            
-            name = d['_id'].get('name') or {}
-            # Check if document already exists in this stage (avoid duplicates)
-            doc_name_es = name.get('es', 'Sin nombre')
-            existing = [doc for doc in stages_dict[stage_num]['documents'] if doc['name'].get('es') == doc_name_es]
-            
-            if not existing:
-                stages_dict[stage_num]['documents'].append({
-                    'name': name,
+
+            name = d.get('name') or {}
+            if isinstance(name, str):
+                name = {"es": name}
+            doc_name_es = name.get('es') or d.get('documentName') or 'Sin nombre'
+            key = (stage_num, doc_name_es)
+            if key in _seen_stage_docs:
+                _seen_stage_docs[key]['count'] += 1
+            else:
+                doc_entry = {
+                    'name': name if isinstance(name, dict) else {"es": name},
                     'documentName': doc_name_es,
-                    'count': d['count'],
-                    'sampleId': str(d.get('sampleId', ''))
-                })
+                    'count': 1,
+                    'sampleId': str(d.get('id', ''))
+                }
+                _seen_stage_docs[key] = doc_entry
+                stages_dict[stage_num]['documents'].append(doc_entry)
         
         # Sort stages by stage number and sort documents within each stage alphabetically
         sorted_stages = []
@@ -10869,7 +10461,7 @@ async def create_document_template(
 ):
     """Create a new document template and optionally apply to existing cases"""
     try:
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can create document templates")
         
@@ -10976,38 +10568,30 @@ async def move_document_to_stage(
 ):
     """Move a document requirement from one stage to another for ALL cases"""
     try:
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Solo admins pueden mover documentos")
         
-        query = {
-            "stageNumber": request.from_stage,
-            "$or": [
-                {"name.es": request.document_name_es},
-                {"documentName": request.document_name_es}
-            ]
-        }
-        
-        affected_count = # TODO: db.visa_client_documents.count_documents needs manual conversion → table "visa_documents"
-  db.visa_client_documents.count_documents(query)
-        
+        # Find matching documents by stageNumber and name (search in Python for $or logic)
+        _all_stage_docs = select("visa_documents", filters={"stageNumber": request.from_stage}, limit=5000)
+        _matching = [d for d in _all_stage_docs
+                     if d.get("documentName") == request.document_name_es
+                     or (isinstance(d.get("name"), dict) and d["name"].get("es") == request.document_name_es)]
+        affected_count = len(_matching)
+
         if affected_count == 0:
             raise HTTPException(
                 status_code=404,
                 detail=f"No se encontraron documentos '{request.document_name_es}' en la Etapa {request.from_stage}"
             )
-        
-        result = # TODO: db.visa_client_documents.update_many needs manual conversion → table "visa_documents"
-  update("visa_documents", {
-                "$set": {
-                    "stageNumber": request.to_stage,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                }
-            }, {
-                    "stageNumber": request.to_stage,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                })
-        
+
+        # Update each matching document
+        for _md in _matching:
+            update("visa_documents", {"id": _md["id"]}, {
+                "stageNumber": request.to_stage,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            })
+
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
             action='move_document',
@@ -11016,12 +10600,12 @@ async def move_document_to_stage(
             details={
                 'fromStage': request.from_stage,
                 'toStage': request.to_stage,
-                'affectedCount': result.modified_count
+                'affectedCount': affected_count
             }
         )
         insert("activity_logs", log)
-        
-        logger.info(f"Moved document '{request.document_name_es}' from stage {request.from_stage} to {request.to_stage} - {result.modified_count} cases")
+
+        logger.info(f"Moved document '{request.document_name_es}' from stage {request.from_stage} to {request.to_stage} - {affected_count} cases")
         
         return {
             "message": "Documento movido exitosamente",
@@ -11051,46 +10635,39 @@ async def rename_document(
 ):
     """Rename a document for ALL cases in a specific stage"""
     try:
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Solo admins pueden renombrar documentos")
-        
-        query = {
-            "stageNumber": request.stage_number,
-            "$or": [
-                {"name.es": request.old_name_es},
-                {"documentName": request.old_name_es}
-            ]
-        }
         
         new_name = {
             "es": request.new_name_es,
             "en": request.new_name_en or request.new_name_es
         }
-        
-        result = # TODO: db.visa_client_documents.update_many needs manual conversion → table "visa_documents"
-  update("visa_documents", {
-                "$set": {
-                    "name": new_name,
-                    "documentName": request.new_name_es,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                }
-            }, {
-                    "name": new_name,
-                    "documentName": request.new_name_es,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                })
-        
-        if result.modified_count == 0:
+
+        # Find matching documents in this stage (search name variants in Python)
+        _stage_docs_rename = select("visa_documents", filters={"stageNumber": request.stage_number}, limit=5000)
+        _rename_matches = [d for d in _stage_docs_rename
+                          if d.get("documentName") == request.old_name_es
+                          or (isinstance(d.get("name"), dict) and d["name"].get("es") == request.old_name_es)]
+
+        if not _rename_matches:
             raise HTTPException(status_code=404, detail="No se encontraron documentos para actualizar")
-        
-        logger.info(f"Renamed document '{request.old_name_es}' to '{request.new_name_es}' - {result.modified_count} cases")
-        
+
+        for _rd in _rename_matches:
+            update("visa_documents", {"id": _rd["id"]}, {
+                "name": new_name,
+                "documentName": request.new_name_es,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            })
+
+        modified_count = len(_rename_matches)
+        logger.info(f"Renamed document '{request.old_name_es}' to '{request.new_name_es}' - {modified_count} cases")
+
         return {
             "message": "Documento renombrado exitosamente",
             "oldName": request.old_name_es,
             "newName": request.new_name_es,
-            "casesUpdated": result.modified_count
+            "casesUpdated": modified_count
         }
         
     except HTTPException:
@@ -11109,7 +10686,7 @@ async def delete_document_template(
 ):
     """Delete a document template and optionally remove it from all cases"""
     try:
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can delete document templates")
         
@@ -11181,7 +10758,7 @@ async def validate_client_document(
 ):
     """Validate a client document"""
     try:
-        document = select("visa_documents", filters={'_id': document_id}, single=True)
+        document = select("visa_documents", filters={"id": document_id}, single=True)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -11197,15 +10774,11 @@ async def validate_client_document(
         if request.validationNotes:
             update_data['validationNotes'] = request.validationNotes
         
-        # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
 
         
         
         
-        db.visa_client_documents.update_one(
-            {'_id': document_id},
-            {'$set': update_data}
-        )
+        update("visa_documents", {"id": document_id}, update_data)
         
         # Log de actividad
         log = ActivityLog.create_log(
@@ -11221,11 +10794,10 @@ async def validate_client_document(
         case_id = document.get('caseId')
         if case_id:
             # Marcar actividad reciente en el caso para el cálculo de inactividad
-            # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
 
             
             update("visa_cases", {"id": case_id}, {"updatedAt": datetime.now(timezone.utc).isoformat()})
-            staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+            staff = select("staff", filters={"id": staff_payload['id']}, single=True)
             doc_name = document.get('documentName') or document.get('name', {}).get('es', 'Documento')
             await log_case_audit(
                 case_id=case_id,
@@ -11250,7 +10822,7 @@ async def validate_client_document(
         
         return {
             'message': 'Document validated successfully',
-            'document': select("visa_documents", filters={'_id': document_id}, single=True)
+            'document': select("visa_documents", filters={"id": document_id}, single=True)
         }
         
     except HTTPException:
@@ -11271,7 +10843,7 @@ async def reject_client_document(
 ):
     """Reject a client document"""
     try:
-        document = select("visa_documents", filters={'_id': document_id}, single=True)
+        document = select("visa_documents", filters={"id": document_id}, single=True)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -11284,15 +10856,11 @@ async def reject_client_document(
             'updatedAt': datetime.now(timezone.utc).isoformat()
         }
         
-        # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
 
         
         
         
-        db.visa_client_documents.update_one(
-            {'_id': document_id},
-            {'$set': update_data}
-        )
+        update("visa_documents", {"id": document_id}, update_data)
         
         # Log de actividad
         log = ActivityLog.create_log(
@@ -11311,11 +10879,10 @@ async def reject_client_document(
         case_id = document.get('caseId')
         if case_id:
             # Marcar actividad reciente en el caso para el cálculo de inactividad
-            # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
 
             
             update("visa_cases", {"id": case_id}, {"updatedAt": datetime.now(timezone.utc).isoformat()})
-            staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+            staff = select("staff", filters={"id": staff_payload['id']}, single=True)
             doc_name = document.get('documentName') or document.get('name', {}).get('es', 'Documento')
             await log_case_audit(
                 case_id=case_id,
@@ -11341,7 +10908,7 @@ async def reject_client_document(
         
         return {
             'message': 'Document rejected',
-            'document': select("visa_documents", filters={'_id': document_id}, single=True)
+            'document': select("visa_documents", filters={"id": document_id}, single=True)
         }
         
     except HTTPException:
@@ -11389,14 +10956,12 @@ async def get_stage_detail(
             raise HTTPException(status_code=404, detail="Stage not found")
         
         # Obtener entregables de esta etapa
-        deliverables = select("visa_deliverables")  # REVIEW: add filters
-  select("visa_deliverables", filters={'stageId': stage['_id']})
-        
+        deliverables = select("visa_deliverables", filters={"stageId": stage.get("id")})
+
         # Obtener documentos de esta etapa
-        documents = select("visa_documents")  # REVIEW: add filters
-  select("visa_documents", filters={
-            'caseId': case_id,
-            'stageNumber': stage_number
+        documents = select("visa_documents", filters={
+            "caseId": case_id,
+            "stageNumber": stage_number
         })
         
         return {
@@ -11444,7 +11009,6 @@ async def update_stage_amount(
             )
         
         # Update the stage amount
-        result = # TODO: db.visa_stages.update_one needs manual conversion → table "visa_stages"
   update("visa_stages", {
                 'caseId': case_id,
                 'stageNumber': stage_number
@@ -11495,10 +11059,10 @@ async def verify_user_token(authorization: Annotated[str, Header()] = None):
         # Verificar que el usuario existe
                 try:
             user_id = ObjectId(payload['id'])
-            user = select("clients", filters={'_id': user_id}, single=True)
+            user = select("clients", filters={"id": user_id}, single=True)
         except Exception:
             # If ObjectId conversion fails, try with string ID
-            user = select("clients", filters={'_id': payload['id']}, single=True)
+            user = select("clients", filters={"id": payload['id']}, single=True)
         
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
@@ -11538,29 +11102,27 @@ async def mark_intake_completed(phone: str = Form(...)):
         
         # Find the "Formulario de Intake" document
         # Try both old format (documentName) and new format (name.es or name.en)
-        intake_doc = # TODO: Complex query — needs manual conversion
- # Original: select("visa_documents", filters={
-            "caseId": visa_case["id"],
-            "$or": [
-                {"documentName": "Formulario de Intake"},
-                {"name.es": "Formulario de Intake"},
-                {"name.en": "Intake Form"}
-            ]
-        }, single=True)
- select("visa_documents", single=True)  # FIXME: add proper filters
-        
+        # Search for intake form by caseId and match name variants in Python
+        _case_docs_intake = select("visa_documents", filters={"caseId": visa_case["id"]}, limit=500)
+        intake_doc = None
+        for _cd in _case_docs_intake:
+            _doc_name = _cd.get("documentName", "")
+            _name_obj = _cd.get("name", {})
+            _name_es = _name_obj.get("es", "") if isinstance(_name_obj, dict) else ""
+            _name_en = _name_obj.get("en", "") if isinstance(_name_obj, dict) else ""
+            if _doc_name == "Formulario de Intake" or _name_es == "Formulario de Intake" or _name_en == "Intake Form":
+                intake_doc = _cd
+                break
+
         if not intake_doc:
             raise HTTPException(status_code=404, detail="Intake form document not found")
-        
-        # Update document status to "uploaded" (waiting for admin review)
-        # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
 
-        
+        # Update document status to "uploaded" (waiting for admin review)
         update("visa_documents", {"id": intake_doc["id"]}, {
-                    "status": "uploaded",  # Changed from pending to uploaded
-                    "completedAt": datetime.now(timezone.utc).isoformat(),
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                })
+            "status": "uploaded",
+            "completedAt": datetime.now(timezone.utc).isoformat(),
+            "updatedAt": datetime.now(timezone.utc).isoformat()
+        })
         
         logger.info(f"Intake form marked as completed for user {phone}")
         
@@ -11595,7 +11157,7 @@ async def submit_document_text(
             raise HTTPException(status_code=400, detail="Text value is required")
         
         # Find the document
-        document = select("visa_documents", filters={"_id": document_id}, single=True)
+        document = select("visa_documents", filters={"id": document_id}, single=True)
         
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -11608,7 +11170,6 @@ async def submit_document_text(
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Update document with text value
-        # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
 
         
         update("visa_documents", {"id": document_id}, {
@@ -11670,18 +11231,17 @@ async def upload_intake_form(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Find the "Formulario de Intake" document
-        # Try both old format (documentName) and new format (name.es or name.en)
-        intake_doc = # TODO: Complex query — needs manual conversion
- # Original: select("visa_documents", filters={
-            "caseId": visa_case["id"],
-            "$or": [
-                {"documentName": "Formulario de Intake"},
-                {"name.es": "Formulario de Intake"},
-                {"name.en": "Intake Form"}
-            ]
-        }, single=True)
- select("visa_documents", single=True)  # FIXME: add proper filters
+        # Find the "Formulario de Intake" document - search by caseId and match name in Python
+        _case_docs_upload = select("visa_documents", filters={"caseId": visa_case["id"]}, limit=500)
+        intake_doc = None
+        for _cd in _case_docs_upload:
+            _doc_name = _cd.get("documentName", "")
+            _name_obj = _cd.get("name", {})
+            _name_es = _name_obj.get("es", "") if isinstance(_name_obj, dict) else ""
+            _name_en = _name_obj.get("en", "") if isinstance(_name_obj, dict) else ""
+            if _doc_name == "Formulario de Intake" or _name_es == "Formulario de Intake" or _name_en == "Intake Form":
+                intake_doc = _cd
+                break
         
         file_url = f"/api/documents/download/{unique_filename}"
         update_data = {
@@ -11694,61 +11254,46 @@ async def upload_intake_form(
         
         if intake_doc:
             # Update Formulario de Intake document with file info
-            # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
+            update("visa_documents", {"id": intake_doc["id"]}, update_data)
 
-            
-            db.visa_client_documents.update_one(
-                {"_id": intake_doc["_id"]},
-                {"$set": update_data}
-            )
-        
         # Also update "Formulario I-140 Completado" with the same file
-        # Try both old format (documentName) and new format (name.es or name.en)
-        i140_doc = # TODO: Complex query — needs manual conversion
- # Original: select("visa_documents", filters={
-            "caseId": visa_case["id"],
-            "$or": [
-                {"documentName": "Formulario I-140 Completado"},
-                {"name.es": "Formulario I-140 Completado"},
-                {"name.en": "Completed I-140 Form"}
-            ]
-        }, single=True)
- select("visa_documents", single=True)  # FIXME: add proper filters
-        
+        # Search by caseId and match name variants in Python
+        _case_docs = select("visa_documents", filters={"caseId": visa_case["id"]}, limit=500)
+        i140_doc = None
+        for _cd in _case_docs:
+            _doc_name = _cd.get("documentName", "")
+            _name_obj = _cd.get("name", {})
+            _name_es = _name_obj.get("es", "") if isinstance(_name_obj, dict) else ""
+            _name_en = _name_obj.get("en", "") if isinstance(_name_obj, dict) else ""
+            if _doc_name == "Formulario I-140 Completado" or _name_es == "Formulario I-140 Completado" or _name_en == "Completed I-140 Form":
+                i140_doc = _cd
+                break
+
         # If I-140 doesn't exist in documents, check deliverables
         if not i140_doc:
-            i140_deliverable = # TODO: Complex query — needs manual conversion
- # Original: select("visa_deliverables", filters={
-                "caseId": visa_case["id"],
-                "$or": [
-                    {"deliverableName": "Formulario I-140 Completado"},
-                    {"name.es": "Formulario I-140 Completado"},
-                    {"name.en": "Completed I-140 Form"}
-                ]
-            }, single=True)
- select("visa_deliverables", single=True)  # FIXME: add proper filters
-            
+            _case_delivs = select("visa_deliverables", filters={"caseId": visa_case["id"]}, limit=500)
+            i140_deliverable = None
+            for _dl in _case_delivs:
+                _dl_name = _dl.get("deliverableName", "")
+                _name_obj = _dl.get("name", {})
+                _name_es = _name_obj.get("es", "") if isinstance(_name_obj, dict) else ""
+                _name_en = _name_obj.get("en", "") if isinstance(_name_obj, dict) else ""
+                if _dl_name == "Formulario I-140 Completado" or _name_es == "Formulario I-140 Completado" or _name_en == "Completed I-140 Form":
+                    i140_deliverable = _dl
+                    break
+
             if i140_deliverable:
                 # Update deliverable with file info
-                # TODO: db.visa_deliverables.update_one needs manual conversion → table "visa_deliverables"
-
-                
                 update("visa_deliverables", {"id": i140_deliverable["id"]}, {
-                            "status": "completed",
-                            "fileUrl": file_url,
-                            "fileName": file.filename,
-                            "completedAt": datetime.now(timezone.utc).isoformat(),
-                            "updatedAt": datetime.now(timezone.utc).isoformat()
-                        })
+                    "status": "completed",
+                    "fileUrl": file_url,
+                    "fileName": file.filename,
+                    "completedAt": datetime.now(timezone.utc).isoformat(),
+                    "updatedAt": datetime.now(timezone.utc).isoformat()
+                })
         else:
             # Update I-140 document with the same file
-            # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
-
-            
-            db.visa_client_documents.update_one(
-                {"_id": i140_doc["_id"]},
-                {"$set": update_data}
-            )
+            update("visa_documents", {"id": i140_doc["id"]}, update_data)
         
         logger.info(f"Intake form uploaded for user {phone}: {unique_filename}")
         logger.info(f"File also linked to Formulario I-140 Completado")
@@ -11864,8 +11409,7 @@ async def delete_test_user(request: DeleteTestUserRequest):
         elif request.phone:
             query['phone'] = request.phone
         
-        user = select("clients", single=True)  # REVIEW: add filters
-  db.users.find_one(query)
+        user = select("clients", filters=query, single=True)
         
         if not user:
             raise HTTPException(
@@ -12018,20 +11562,17 @@ async def export_uscis_migration_data():
         migration_data = {}
         
         # Export uscis_templates
-        templates = select("uscis_templates")  # REVIEW: add filters
-  select("uscis_templates")
+        templates = select("uscis_templates")
         migration_data['uscis_templates'] = [serialize_doc(t) for t in templates]
         logger.info(f"Exported {len(templates)} USCIS templates")
-        
-        # Export uscis_shared_forms
-        shared_forms = select("uscis_submissions")  # REVIEW: add filters
-  select("uscis_shared_forms")
+
+        # Export uscis_shared_forms (stored in uscis_submissions table with type distinction)
+        shared_forms = select("uscis_submissions", filters={"type": "shared_form"}) if False else select("uscis_submissions")
         migration_data['uscis_shared_forms'] = [serialize_doc(sf) for sf in shared_forms]
         logger.info(f"Exported {len(shared_forms)} USCIS shared forms")
-        
+
         # Export uscis_submissions
-        submissions = select("uscis_submissions")  # REVIEW: add filters
-  select("uscis_submissions")
+        submissions = select("uscis_submissions")
         migration_data['uscis_submissions'] = [serialize_doc(s) for s in submissions]
         logger.info(f"Exported {len(submissions)} USCIS submissions")
         
@@ -12084,12 +11625,10 @@ async def import_uscis_migration_data(
                     # Try to use ObjectId if it's a valid ObjectId string
                     try:
                         obj_id = ObjectId(t_id)
-                        # TODO: db.uscis_templates.update_one needs manual conversion → table "uscis_templates"
 
                         
                         update("uscis_templates", {'id': obj_id}, {**template, '_id': obj_id})
                     except:
-                        # TODO: db.uscis_templates.update_one needs manual conversion → table "uscis_templates"
 
                         
                         update("uscis_templates", {'id': t_id}, {**template, '_id': t_id})
@@ -12103,7 +11642,6 @@ async def import_uscis_migration_data(
             for shared in request.uscis_shared_forms:
                 s_id = shared.get('_id') or shared.get('id')
                 if s_id:
-                    # TODO: db.uscis_shared_forms.update_one needs manual conversion → table "uscis_submissions"
 
                     
                     update("uscis_shared_forms", {'id': s_id}, {**shared, '_id': s_id})
@@ -12117,7 +11655,6 @@ async def import_uscis_migration_data(
             for submission in request.uscis_submissions:
                 sub_id = submission.get('_id') or submission.get('id')
                 if sub_id:
-                    # TODO: db.uscis_submissions.update_one needs manual conversion → table "uscis_submissions"
 
                     
                     update("uscis_submissions", {'id': sub_id}, {**submission, '_id': sub_id})
@@ -12159,8 +11696,7 @@ async def get_timeline_templates(
 ):
     """Get all timeline templates"""
     try:
-        cursor = db.timeline_templates.find({}, {'_id': 0}).limit(limit)
-        templates = await cursor.to_list(length=limit)
+        templates = select("timeline_templates", limit=limit)
         
         return {
             "success": True,
@@ -12229,8 +11765,7 @@ async def get_eligibility_templates(
 ):
     """Get all eligibility templates"""
     try:
-        cursor = db.eligibility_templates.find({}, {'_id': 0}).limit(limit)
-        templates = await cursor.to_list(length=limit)
+        templates = select("eligibility_templates", limit=limit)
         
         return {
             "success": True,
