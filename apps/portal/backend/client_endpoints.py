@@ -13,6 +13,17 @@ import uuid
 import logging
 import shutil
 import os
+from openai import AsyncOpenAI
+
+_openai_async_client = None
+
+def _get_openai_async_client():
+    global _openai_async_client
+    if _openai_async_client is None:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            _openai_async_client = AsyncOpenAI(api_key=api_key)
+    return _openai_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -1192,9 +1203,6 @@ def setup_client_endpoints(db, verify_token):
             project_description = await download_and_extract_pdf(bp_url)
 
         # === GENERATE IDEAS WITH GPT-5.2 ===
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        import os
-
         prompt = f"""Basado en el siguiente perfil del autor, sugiere 3 ideas de libros convincentes y comercializables que se alineen con la experiencia e intereses del autor.
 
 PERFIL DEL AUTOR:
@@ -1222,13 +1230,17 @@ FORMATO DE RESPUESTA:
 
 Solo proporciona las 3 ideas numeradas, nada mas."""
 
-        chat = LlmChat(
-            api_key=os.environ.get("EMERGENT_LLM_KEY"),
-            session_id=f"book-ideas-{case_id}-{uuid.uuid4().hex[:8]}",
-            system_message="Eres un experto en publicaciones academicas y editoriales. Generas ideas de libros innovadoras basadas en el perfil profesional del autor."
-        ).with_model("openai", "gpt-5.2")
-
-        response = await chat.send_message(UserMessage(text=prompt))
+        client = _get_openai_async_client()
+        llm_response = await client.chat.completions.create(
+            model="gpt-5.2",
+            messages=[
+                {"role": "system", "content": "Eres un experto en publicaciones academicas y editoriales. Generas ideas de libros innovadoras basadas en el perfil profesional del autor."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_completion_tokens=4000
+        )
+        response = llm_response.choices[0].message.content
         logger.info(f"Book suggest-ideas: GPT response received ({len(response)} chars)")
 
         # Parse response into ideas array
@@ -1319,9 +1331,6 @@ Solo proporciona las 3 ideas numeradas, nada mas."""
         if not prep or not prep.get("selectedIdea"):
             raise HTTPException(status_code=400, detail="Primero debes seleccionar una idea")
 
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        import os
-
         prompt = f"""Basado en la siguiente idea de libro y el perfil del autor, sugiere 3 titulos atractivos y comercializables.
 
 IDEA DEL LIBRO:
@@ -1344,13 +1353,17 @@ FORMATO DE RESPUESTA:
 
 Solo proporciona los 3 titulos numerados, nada mas."""
 
-        chat = LlmChat(
-            api_key=os.environ.get("EMERGENT_LLM_KEY"),
-            session_id=f"book-titles-{case_id}-{uuid.uuid4().hex[:8]}",
-            system_message="Eres un experto en publicaciones academicas. Generas titulos de libros concisos y atractivos."
-        ).with_model("openai", "gpt-5.2")
-
-        response = await chat.send_message(UserMessage(text=prompt))
+        client = _get_openai_async_client()
+        llm_response = await client.chat.completions.create(
+            model="gpt-5.2",
+            messages=[
+                {"role": "system", "content": "Eres un experto en publicaciones academicas. Generas titulos de libros concisos y atractivos."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_completion_tokens=4000
+        )
+        response = llm_response.choices[0].message.content
 
         titles = []
         best_idx = -1

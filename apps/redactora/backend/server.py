@@ -15,8 +15,8 @@ from typing import List, Optional, Dict
 import uuid
 import math
 from datetime import datetime, timezone, timedelta
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 from openai import AsyncOpenAI
+from google import genai
 from auth import verify_password, get_password_hash, create_access_token, verify_token, Token
 from version_control import VersionManager, DocumentVersion
 from comments_system import CommentsManager, Comment
@@ -307,44 +307,37 @@ async def call_openai_gpt5(system_message: str, user_message: str, temperature: 
 
 
 async def call_gemini_flash_lite(system_message: str, user_message: str, temperature: float = 0.7, max_tokens: int = 6000) -> str:
-    """Helper function to call Google Gemini 2.0 Flash Lite API via emergentintegrations"""
+    """Helper function to call Google Gemini 2.0 Flash Lite API"""
     try:
-        logging.info(f"🔧 Calling Gemini 2.0 Flash Lite with temp={temperature}, max_tokens={max_tokens}")
-        logging.info(f"📤 System message length: {len(system_message)} chars")
-        logging.info(f"📤 User message length: {len(user_message)} chars")
-        
-        # Get API key
-        api_key = os.getenv("EMERGENT_LLM_KEY")
+        logging.info(f"Calling Gemini 2.0 Flash Lite with temp={temperature}, max_tokens={max_tokens}")
+
+        api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            logging.error("❌ EMERGENT_LLM_KEY not found in environment")
+            logging.error("GEMINI_API_KEY not found in environment")
             return ""
-        
-        # Create chat instance with Gemini Flash Lite
-        chat = LlmChat(
-            api_key=api_key,
-            session_id=f"recommendation_letter_{uuid.uuid4()}",
-            system_message=system_message
-        ).with_model("gemini", "gemini-2.0-flash-lite")
-        
-        # Send message
-        user_msg = UserMessage(text=user_message)
-        content = await chat.send_message(user_msg)
-        
-        logging.info(f"📥 Gemini Flash Lite response received. Content length: {len(content) if content else 0}")
-        
-        # Clean content
+
+        client = genai.Client(api_key=api_key)
+        response = await client.aio.models.generate_content(
+            model="gemini-2.0-flash-lite",
+            contents=user_message,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_message,
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            )
+        )
+
+        content = response.text
+        logging.info(f"Gemini Flash Lite response received. Content length: {len(content) if content else 0}")
+
         if not content or len(content.strip()) == 0:
-            logging.error(f"❌ WARNING Gemini Flash Lite returned empty content")
-            logging.error(f"   System msg preview: {system_message[:200]}...")
-            logging.error(f"   User msg preview: {user_message[:200]}...")
+            logging.error("Gemini Flash Lite returned empty content")
             return ""
-        
+
         return clean_content(content) if content else ""
-        
+
     except Exception as e:
-        logging.error(f"❌ Gemini Flash Lite API error: {e}")
-        logging.error(f"   System msg length: {len(system_message)}")
-        logging.error(f"   User msg length: {len(user_message)}")
+        logging.error(f"Gemini Flash Lite API error: {e}")
         import traceback
         logging.error(traceback.format_exc())
         return ""
@@ -15824,15 +15817,17 @@ Si el usuario escribe en español, responde en español. Si escribe en inglés, 
 Cuando se te proporcione contenido de un documento (PDF o Word), analízalo cuidadosamente y responde
 basándote en ese contenido. Puedes extraer información, resumir, responder preguntas específicas sobre el documento."""
         
-        chat = LlmChat(
-            api_key=gemini_api_key,
-            session_id=session_id,
-            system_message=system_message
-        ).with_model("gemini", "gemini-2.0-flash")
-        
-        # Send message to Gemini (with file content if present)
-        user_msg = UserMessage(text=full_message)
-        response = await chat.send_message(user_msg)
+        gemini_client = genai.Client(api_key=gemini_api_key)
+        gemini_response = await gemini_client.aio.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=full_message,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_message,
+                temperature=0.7,
+                max_output_tokens=4000,
+            )
+        )
+        response = gemini_response.text
         
         # Create assistant message
         assistant_message = {

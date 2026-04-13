@@ -2,8 +2,9 @@
 
 import json
 import logging
+import os
 from typing import Dict, Any
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -61,23 +62,21 @@ async def intelligent_extract_patent_info(text: str) -> Dict[str, Any]:
         # Prepare prompt
         user_prompt = USER_PROMPT_TEMPLATE.format(document_text=text_truncated)
         
-        # Call GPT-4o-mini via Emergent Integrations
-        llm_chat = LlmChat(
-            provider="openai",
+        # Call GPT-4o-mini via OpenAI directly
+        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        llm_response = await client.chat.completions.create(
             model="gpt-4o-mini",
-            api_key=None  # Will use Emergent Universal Key
-        )
-        
-        response = await llm_chat.generate_response(
-            system_message=SYSTEM_MESSAGE,
-            user_messages=[UserMessage(content=user_prompt)],
+            messages=[
+                {"role": "system", "content": SYSTEM_MESSAGE},
+                {"role": "user", "content": user_prompt}
+            ],
             temperature=0.1,
             max_tokens=1000,
-            json_mode=True  # Force JSON output
+            response_format={"type": "json_object"}
         )
-        
+
         # Parse response
-        extracted = json.loads(response)
+        extracted = json.loads(llm_response.choices[0].message.content)
         
         logger.info("Intelligent extraction completed successfully")
         logger.info(f"Extracted fields: {list(extracted.keys())}")

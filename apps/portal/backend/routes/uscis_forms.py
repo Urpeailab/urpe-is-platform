@@ -187,17 +187,8 @@ def translate_spanish_to_english(text: str, field_context: str = "") -> str:
     if cache_key in _translation_cache:
         return _translation_cache[cache_key]
     
-    # For longer texts, use OpenAI via Emergent LLM
+    # For longer texts, use OpenAI directly
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        import uuid
-        import asyncio
-        
-        emergent_key = os.environ.get("EMERGENT_LLM_KEY")
-        if not emergent_key:
-            logger.warning("EMERGENT_LLM_KEY not available for translation")
-            return text.upper()
-        
         system_prompt = """You are a professional translator for USCIS immigration forms.
 Translate the following Spanish text to English.
 Rules:
@@ -211,43 +202,32 @@ Rules:
 - If text is already in English, return it in UPPERCASE"""
 
         context_hint = f"\nField context: {field_context}" if field_context else ""
-        
-        # Create chat instance with translation session
-        chat = LlmChat(
-            api_key=emergent_key,
-            session_id=f"translation-{uuid.uuid4().hex[:8]}",
-            system_message=system_prompt
-        ).with_model("openai", "gpt-4.1-nano")  # Use fast, cheap model for translations
-        
-        # Send translation request
-        user_message = UserMessage(text=f"Translate to English:{context_hint}\n\n{text}")
-        
-        # Handle async execution properly
-        try:
-            loop = asyncio.get_running_loop()
-            # Already in async context
-            import nest_asyncio
-            nest_asyncio.apply()
-            translated = loop.run_until_complete(chat.send_message(user_message))
-        except RuntimeError:
-            # No running loop, create one
-            translated = asyncio.run(chat.send_message(user_message))
-        
-        translated = translated.strip()
-        
+
+        client = _get_openai_client()
+        if not client:
+            logger.warning("OpenAI client not available for translation")
+            return text.upper()
+
+        response = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Translate to English:{context_hint}\n\n{text}"}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+
+        translated = response.choices[0].message.content.strip()
+
         # Cache the result
         _translation_cache[cache_key] = translated
-        
+
         logger.info(f"Translated: '{text}' -> '{translated}'")
         return translated
-        
-    except ImportError as e:
-        logger.warning(f"emergentintegrations import error: {e}, falling back to uppercase")
-        return text.upper()
+
     except Exception as e:
         logger.error(f"Translation error: {e}")
-        return text.upper()
-        # Return original text in uppercase as fallback
         return text.upper()
 
 
