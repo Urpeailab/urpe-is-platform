@@ -3984,7 +3984,7 @@ async def generate_niw_section(niw_id: str, section_number: int, current_user: U
     try:
         # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
         # Try completed NIWs first (business_plans collection)
-        niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
+        niw = select("business_plans", single=True)  # REVIEW: add filters
   db.business_plans.find_one(
             {"id": niw_id, "user_id": current_user.id},
             {"_id": 0}
@@ -4241,7 +4241,7 @@ async def edit_niw_section(niw_id: str, request: EditSectionRequest, current_use
     try:
         # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
         # Try completed NIWs first (business_plans collection)
-        niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
+        niw = select("business_plans", single=True)  # REVIEW: add filters
   db.business_plans.find_one(
             {"id": niw_id, "user_id": current_user.id},
             {"_id": 0}
@@ -4355,7 +4355,7 @@ async def edit_niw_section_bilingual(niw_id: str, request: EditSectionBilingualR
     try:
         # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
         # Try completed NIWs first (business_plans collection)
-        niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
+        niw = select("business_plans", single=True)  # REVIEW: add filters
   db.business_plans.find_one(
             {"id": niw_id, "user_id": current_user.id},
             {"_id": 0}
@@ -4465,29 +4465,17 @@ async def approve_niw_section(niw_id: str, section_data: dict, current_user: Use
         section_data['approved'] = True
         
         result = # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.update_one(
-            {"id": niw_id, "user_id": current_user.id},
-            {
-                "$pull": {"sections": {"number": section_data['number']}},
-                "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
-            }
-        )
+  update("niw_petitions", {"id": niw_id, "user_id": current_user.id}, {"updated_at": datetime.now(timezone.utc).isoformat()})
         
         # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
 
         
         
         
-        db.niw_in_progress.update_one(
-            {"id": niw_id, "user_id": current_user.id},
-            {
-                "$push": {"sections": section_data},
-                "$set": {
+        update("niw_petitions", {"id": niw_id, "user_id": current_user.id}, {
                     "current_section": section_data['number'] + 1,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         # Auto-save version
         await auto_save_version(
@@ -4511,7 +4499,7 @@ async def finalize_niw(niw_id: str, current_user: User = Depends(get_current_use
     try:
         # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
         # Try completed NIWs first (business_plans collection)
-        niw_in_progress = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
+        niw_in_progress = select("business_plans", single=True)  # REVIEW: add filters
   db.business_plans.find_one(
             {"id": niw_id, "user_id": current_user.id},
             {"_id": 0}
@@ -4579,13 +4567,10 @@ async def finalize_niw(niw_id: str, current_user: User = Depends(get_current_use
                     # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
 
                     
-                    db.business_plans.update_one(
-                        {"id": plan.id},
-                        {"$set": {
+                    update("business_plans", {"id": plan.id}, {
                             "gamma_url": gamma_result.get('gamma_url'),
                             "gamma_pdf_url": gamma_result.get('pdf_url')
-                        }}
-                    )
+                        })
                     plan.gamma_url = gamma_result.get('gamma_url')
                     plan.gamma_pdf_url = gamma_result.get('pdf_url')
                     
@@ -4597,10 +4582,7 @@ async def finalize_niw(niw_id: str, current_user: User = Depends(get_current_use
         # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
 
         
-        db.niw_in_progress.update_one(
-            {"id": niw_id},
-            {"$set": {"status": "completed"}}
-        )
+        update("niw_petitions", {"id": niw_id}, {"status": "completed"})
         
         # Auto-save version for finalization
         await auto_save_version(
@@ -4645,7 +4627,7 @@ async def get_niw_in_progress(niw_id: str, current_user: User = Depends(get_curr
     """Get NIW proposal in progress"""
     # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
     # Try completed NIWs first (business_plans collection)
-    niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
+    niw = select("business_plans", single=True)  # REVIEW: add filters
   db.business_plans.find_one(
         {"id": niw_id, "user_id": current_user.id},
         {"_id": 0}
@@ -4675,7 +4657,7 @@ async def get_niws_in_progress(
     if client_id:
         query["client_id"] = client_id
     
-    niws = # TODO: db.niw_in_progress.find needs manual conversion → table "niw_petitions"
+    niws = select("niw_petitions")  # REVIEW: add filters
   db.niw_in_progress.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
     
     for niw in niws:
@@ -4690,7 +4672,7 @@ async def get_niws_in_progress(
 @api_router.get("/business-plans/drafts", response_model=List[NIWInProgress])
 async def get_niw_drafts(current_user: User = Depends(get_current_user)):
     """Get all draft NIW proposals"""
-    drafts = # TODO: db.niw_in_progress.find needs manual conversion → table "niw_petitions"
+    drafts = select("niw_petitions")  # REVIEW: add filters
   db.niw_in_progress.find(
         {"user_id": current_user.id, "status": "draft"},
         {"_id": 0}
@@ -4714,7 +4696,7 @@ async def get_business_plans(
     if client_id:
         query["client_id"] = client_id
     
-    plans = # TODO: db.business_plans.find needs manual conversion → table "business_plans"
+    plans = select("business_plans")  # REVIEW: add filters
   db.business_plans.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
     for plan in plans:
@@ -4931,10 +4913,7 @@ Format your response as:
         # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
 
         
-        db.business_plans.update_one(
-            {"id": plan_id},
-            {"$set": {"content": new_content}}
-        )
+        update("business_plans", {"id": plan_id}, {"content": new_content})
         
         return {"message": "Section updated successfully", "updated_content": improved_section}
         
@@ -4952,24 +4931,18 @@ async def update_business_plan(
     # 🔥 CRITICAL FIX: Check both collections and verify ownership
     # Try completed plans first
     result = # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
-  db.business_plans.update_one(
-        {"id": plan_id, "user_id": current_user.id},
-        {"$set": {
+  update("business_plans", {"id": plan_id, "user_id": current_user.id}, {
             "content": content,
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }}
-    )
+        })
     
     # If not found in completed, try in-progress
     if result.matched_count == 0:
         result = # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
-  db.niw_in_progress.update_one(
-            {"id": plan_id, "user_id": current_user.id},
-            {"$set": {
+  update("niw_petitions", {"id": plan_id, "user_id": current_user.id}, {
                 "content": content,
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }}
-        )
+            })
     
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Business plan not found or you don't have permission")
@@ -5990,29 +5963,17 @@ async def approve_chapter(book_id: str, chapter_data: dict, current_user: User =
         chapter_data['approved'] = True
         
         result = # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
-  db.books_in_progress.update_one(
-            {"id": book_id, "user_id": current_user.id},
-            {
-                "$pull": {"chapters": {"number": chapter_data['number']}},
-                "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
-            }
-        )
+  update("generated_documents", {"id": book_id, "user_id": current_user.id}, {"updated_at": datetime.now(timezone.utc).isoformat()})
         
         # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
 
         
         
         
-        db.books_in_progress.update_one(
-            {"id": book_id, "user_id": current_user.id},
-            {
-                "$push": {"chapters": chapter_data},
-                "$set": {
+        update("generated_documents", {"id": book_id, "user_id": current_user.id}, {
                     "current_chapter": chapter_data['number'] + 1,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         return {"message": "Capítulo aprobado exitosamente"}
         
@@ -6065,13 +6026,10 @@ async def finalize_book(book_id: str, current_user: User = Depends(get_current_u
                     # TODO: db.books.update_one needs manual conversion → table "generated_documents"
 
                     
-                    db.books.update_one(
-                        {"id": book.id},
-                        {"$set": {
+                    update("generated_documents", {"id": book.id}, {
                             "gamma_url": gamma_result.get('gamma_url'),
                             "gamma_pdf_url": gamma_result.get('pdf_url')
-                        }}
-                    )
+                        })
                     book.gamma_url = gamma_result.get('gamma_url')
                     book.gamma_pdf_url = gamma_result.get('pdf_url')
                     
@@ -6083,10 +6041,7 @@ async def finalize_book(book_id: str, current_user: User = Depends(get_current_u
         # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
 
         
-        db.books_in_progress.update_one(
-            {"id": book_id},
-            {"$set": {"status": "completed"}}
-        )
+        update("generated_documents", {"id": book_id}, {"status": "completed"})
         
         # Auto-save version for finalization
         await auto_save_version(
@@ -6136,13 +6091,13 @@ async def test_books_count(current_user: User = Depends(get_current_user)):
         books_completed = count("generated_documents", {"user_id": current_user.id})
         
         # Get sample books
-        samples_in_progress = # TODO: db.books_in_progress.find needs manual conversion → table "generated_documents"
+        samples_in_progress = select("generated_documents")  # REVIEW: add filters
   db.books_in_progress.find(
             {"user_id": current_user.id}, 
             {"_id": 0, "id": 1, "title": 1, "created_at": 1}
         ).limit(5).to_list(5)
         
-        samples_completed = # TODO: db.books.find needs manual conversion → table "generated_documents"
+        samples_completed = select("generated_documents")  # REVIEW: add filters
   db.books.find(
             {"user_id": current_user.id},
             {"_id": 0, "id": 1, "title": 1, "created_at": 1}
@@ -6183,7 +6138,7 @@ async def get_books_in_progress(
     if client_id:
         query["client_id"] = client_id
     
-    books = # TODO: db.books_in_progress.find needs manual conversion → table "generated_documents"
+    books = select("generated_documents")  # REVIEW: add filters
   db.books_in_progress.find(query, {"_id": 0}).sort("updated_at", -1).to_list(1000)
     
     for book in books:
@@ -6198,7 +6153,7 @@ async def get_books_in_progress(
 @api_router.get("/books/drafts", response_model=List[BookInProgress])
 async def get_book_drafts(current_user: User = Depends(get_current_user)):
     """Get all draft books"""
-    drafts = # TODO: db.books_in_progress.find needs manual conversion → table "generated_documents"
+    drafts = select("generated_documents")  # REVIEW: add filters
   db.books_in_progress.find(
         {"user_id": current_user.id, "status": "draft"},
         {"_id": 0}
@@ -6222,7 +6177,7 @@ async def get_books(
     if client_id:
         query["client_id"] = client_id
     
-    books = # TODO: db.books.find needs manual conversion → table "generated_documents"
+    books = select("generated_documents")  # REVIEW: add filters
   db.books.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     
     for book in books:
@@ -6374,10 +6329,7 @@ Format your response as:
         # TODO: db.books.update_one needs manual conversion → table "generated_documents"
 
         
-        db.books.update_one(
-            {"id": book_id},
-            {"$set": {"content": new_content}}
-        )
+        update("generated_documents", {"id": book_id}, {"content": new_content})
         
         return {"message": "Chapter updated successfully", "updated_content": improved_chapter}
         
@@ -6389,13 +6341,10 @@ Format your response as:
 async def update_book(book_id: str, content: str):
     """Update book content"""
     result = # TODO: db.books.update_one needs manual conversion → table "generated_documents"
-  db.books.update_one(
-        {"id": book_id},
-        {"$set": {
+  update("generated_documents", {"id": book_id}, {
             "content": content,
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }}
-    )
+        })
     
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Book not found")
@@ -7326,7 +7275,7 @@ async def generate_patent_section(
     # Reset token tracker for this section generation
     reset_token_tracker()
     
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -7814,7 +7763,7 @@ Please regenerate the section now, fixing ALL these problems."""
     # AUTO-SAVE SECTION IF IT PASSED EVALUATION (NEW PATENT EVALUATOR FIX)
     if evaluation_passed:
         # ⭐ CRITICAL FIX: Refresh patent from DB to get latest sections
-        patent_fresh = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+        patent_fresh = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
             {"id": patent_id},
             {"_id": 0}
@@ -7852,16 +7801,11 @@ Please regenerate the section now, fixing ALL these problems."""
         
         # Update patent in database
         result = # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
-  db.patents_in_progress.update_one(
-            {"id": patent_id},
-            {
-                "$set": {
+  update("patents", {"id": patent_id}, {
                     "sections": patent_sections,
                     "current_section": section_number + 1,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         logging.info(f"✅ Patent section {section_number} automatically saved after passing evaluation")
         logging.info(f"   MongoDB matched_count: {result.matched_count}, modified_count: {result.modified_count}")
@@ -7893,7 +7837,7 @@ async def generate_complete_patent(
     
     # Get patent data - try both collections and remember which one
     patent_collection = None
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -7903,7 +7847,7 @@ async def generate_complete_patent(
         patent_collection = db.patents_in_progress
     else:
         # Try in patents collection
-        patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+        patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
@@ -8015,7 +7959,7 @@ async def clean_patent_sections(
     current_user: User = Depends(get_current_user)
 ):
     """Clean existing sections from smart quotes and special characters"""
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -8041,10 +7985,7 @@ async def clean_patent_sections(
     # TODO: db.patents.update_one needs manual conversion → table "patents"
 
     
-    db.patents.update_one(
-        {"id": patent_id, "user_id": current_user.id},
-        {"$set": {"sections": cleaned_sections}}
-    )
+    update("patents", {"id": patent_id, "user_id": current_user.id}, {"sections": cleaned_sections})
     
     return {"message": "Sections cleaned successfully", "cleaned": len(cleaned_sections)}
 
@@ -8061,7 +8002,7 @@ async def approve_patent_section(
     logging.info(f"   Section title: {section.title}")
     logging.info(f"   Content length: {len(section.content) if section.content else 0}")
     
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -8091,16 +8032,11 @@ async def approve_patent_section(
     # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
 
     
-    db.patents_in_progress.update_one(
-        {"id": patent_id},
-        {
-            "$set": {
+    update("patents", {"id": patent_id}, {
                 "sections": sections,
                 "current_section": section.number + 1,
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     # Auto-save version
     await auto_save_version(
@@ -8123,7 +8059,7 @@ async def edit_patent_section(
     """Edit a patent section with AI regeneration (for in-progress patents)"""
     try:
         # First check in-progress patents (during interactive creation)
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+        patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
@@ -8132,7 +8068,7 @@ async def edit_patent_section(
         is_in_progress = True
         if not patent:
             # Check completed patents
-            patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+            patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
                 {"id": patent_id, "user_id": current_user.id},
                 {"_id": 0}
@@ -8324,15 +8260,10 @@ Write all content {language_instruction} following USPTO standards. Keep content
             
             
             
-            db.patents_in_progress.update_one(
-                {"id": patent_id},
-                {
-                    "$set": {
+            update("patents", {"id": patent_id}, {
                         "sections": updated_sections,
                         "updated_at": datetime.now(timezone.utc).isoformat()
-                    }
-                }
-            )
+                    })
             
             return {"section": updated_section}
         
@@ -8706,7 +8637,7 @@ async def generate_patent_drawings(
     logging.info(f"🎨 Starting NEW diagram generation with GPT-4o for patent {patent_id}")
     
     # Try to find patent in both in_progress and completed collections
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -8715,7 +8646,7 @@ async def generate_patent_drawings(
     is_finalized = False
     if not patent:
         # Check in finalized patents
-        patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+        patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
@@ -8791,7 +8722,7 @@ async def generate_patent_drawings(
 @api_router.post("/patents/finalize/{patent_id}")
 async def finalize_patent(patent_id: str, current_user: User = Depends(get_current_user)):
     """Finalize patent application and create completed document"""
-    patent_progress = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+    patent_progress = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -8886,7 +8817,7 @@ async def finalize_patent(patent_id: str, current_user: User = Depends(get_curre
 @api_router.get("/patents/in-progress/{patent_id}", response_model=PatentInProgress)
 async def get_patent_in_progress(patent_id: str, current_user: User = Depends(get_current_user)):
     """Get a patent in progress"""
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -8924,7 +8855,7 @@ async def get_patents_in_progress(
     # Complete patents should be fetched from /patents endpoint
     query["status"] = {"$ne": "complete"}
     
-    patents = # TODO: db.patents_in_progress.find needs manual conversion → table "patents"
+    patents = select("patents")  # REVIEW: add filters
   db.patents_in_progress.find(query, {"_id": 0}).to_list(length=None)
     
     for patent in patents:
@@ -8946,7 +8877,7 @@ async def get_patents(
         query["client_id"] = client_id
     
     # Get completed patents from the patents collection
-    patents = # TODO: db.patents.find needs manual conversion → table "patents"
+    patents = select("patents")  # REVIEW: add filters
   db.patents.find(query, {"_id": 0}).to_list(length=None)
     
     # 🔥 FIX: Also get completed V2 patents from patents_in_progress collection
@@ -8955,7 +8886,7 @@ async def get_patents(
     if client_id:
         query_complete_v2["client_id"] = client_id
     
-    completed_v2_patents = # TODO: db.patents_in_progress.find needs manual conversion → table "patents"
+    completed_v2_patents = select("patents")  # REVIEW: add filters
   db.patents_in_progress.find(query_complete_v2, {"_id": 0}).to_list(length=None)
     
     # Merge both lists
@@ -8967,7 +8898,7 @@ async def get_patents(
 async def get_patent(patent_id: str, current_user: User = Depends(get_current_user)):
     """Get a specific patent (searches both completed and in-progress)"""
     # First check completed patents
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -8975,7 +8906,7 @@ async def get_patent(patent_id: str, current_user: User = Depends(get_current_us
     
     # If not found, check in-progress patents
     if not patent:
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+        patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
@@ -9229,7 +9160,7 @@ async def download_patent_specification(
     current_user: User = Depends(get_current_user)
 ):
     """Download patent specification as PDF in specified language"""
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -9374,7 +9305,7 @@ async def generate_patent_translation(
     current_user: User = Depends(get_current_user)
 ):
     """Generate English translation for existing patent sections using chunked translation"""
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -9527,7 +9458,7 @@ async def download_patent_drawings(
 ):
     """Download patent drawings as PDF in specified language"""
     # Try to find in completed patents first
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -9535,7 +9466,7 @@ async def download_patent_drawings(
     
     # If not found, try patents_in_progress
     if not patent:
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+        patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
@@ -9889,7 +9820,7 @@ async def download_patent_complete(
     logging.info(f"👤 User: {current_user.email}")
     
     # Try completed patents first
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -9897,7 +9828,7 @@ async def download_patent_complete(
     
     # If not found, check in-progress patents (V2 patents are stored here)
     if not patent:
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+        patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
@@ -9988,10 +9919,7 @@ async def download_patent_complete(
                                 # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
 
                                 
-                                db.patents_in_progress.update_one(
-                                    {"id": patent['id'], "sections.number": section_number},
-                                    {"$set": {"sections.$.content_en": section_content}}
-                                )
+                                update("patents", {"id": patent['id'], "sections.number": section_number}, {"sections.$.content_en": section_content})
                                 logging.info(f"✅ Translated and saved section {section_number}")
                             except Exception as e:
                                 logging.warning(f"Could not save translation: {e}")
@@ -10593,7 +10521,7 @@ async def evaluate_patent(
     logging.info(f"👤 User: {current_user.email}")
     
     # Get the existing evaluation from database
-    evaluation = # TODO: db.patent_evaluations.find_one needs manual conversion → table "patent_evaluations"
+    evaluation = select("patent_evaluations", single=True)  # REVIEW: add filters
   db.patent_evaluations.find_one(
         {"patent_id": patent_id},
         {"_id": 0},
@@ -10617,7 +10545,7 @@ async def get_patent_evaluation(
     current_user: User = Depends(get_current_user)
 ):
     """Get the latest evaluation for a patent"""
-    evaluation = # TODO: db.patent_evaluations.find_one needs manual conversion → table "patent_evaluations"
+    evaluation = select("patent_evaluations", single=True)  # REVIEW: add filters
   db.patent_evaluations.find_one(
         {"patent_id": patent_id},
         {"_id": 0},
@@ -10637,7 +10565,7 @@ async def get_patent_evaluation(
     current_user: User = Depends(get_current_user)
 ):
     """Get the latest evaluation for a patent"""
-    evaluation = # TODO: db.patent_evaluations.find_one needs manual conversion → table "patent_evaluations"
+    evaluation = select("patent_evaluations", single=True)  # REVIEW: add filters
   db.patent_evaluations.find_one(
         {"patent_id": patent_id},
         {"_id": 0},
@@ -10658,7 +10586,7 @@ async def download_patent_numbered(
 ):
     """Download complete patent with USPTO-style line numbering (every line numbered, no blank lines)"""
     # Try completed patents first
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -10666,7 +10594,7 @@ async def download_patent_numbered(
     
     # If not found, check in-progress patents (V2 patents are stored here)
     if not patent:
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+        patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
@@ -10766,7 +10694,7 @@ async def download_patent_draft(
     current_user: User = Depends(get_current_user)
 ):
     """Download patent draft as PDF (simplified version) in specified language"""
-    patent = # TODO: db.patents.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11040,7 +10968,7 @@ async def generate_econometric_section(
     current_user: User = Depends(get_current_user)
 ):
     """Generate a specific section of the econometric study"""
-    study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
+    study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies_in_progress.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11385,16 +11313,10 @@ Write this section {language_instruction} with full academic rigor, ensuring it 
     # TODO: db.econometric_studies_in_progress.update_one needs manual conversion → table "econometric_studies"
 
     
-    db.econometric_studies_in_progress.update_one(
-        {"id": study_id},
-        {
-            "$push": {"sections": section},
-            "$set": {
+    update("econometric_studies", {"id": study_id}, {
                 "current_section": section_number,
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     return {
         "section": section,
@@ -11411,7 +11333,7 @@ async def approve_econometric_section(
     current_user: User = Depends(get_current_user)
 ):
     """Approve a section and move to the next"""
-    study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
+    study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies_in_progress.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11433,15 +11355,10 @@ async def approve_econometric_section(
     # TODO: db.econometric_studies_in_progress.update_one needs manual conversion → table "econometric_studies"
 
     
-    db.econometric_studies_in_progress.update_one(
-        {"id": study_id, "sections.number": section_number},
-        {
-            "$set": {
+    update("econometric_studies", {"id": study_id, "sections.number": section_number}, {
                 "sections.$.status": "approved",
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     # Auto-save version
     await auto_save_version(
@@ -11489,7 +11406,7 @@ async def edit_econometric_section_with_ai(
 ):
     """Edit an econometric study section with AI instructions"""
     # Check both in-progress and completed studies
-    study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
+    study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies_in_progress.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11497,7 +11414,7 @@ async def edit_econometric_section_with_ai(
     
     collection = db.econometric_studies_in_progress
     if not study:
-        study = # TODO: db.econometric_studies.find_one needs manual conversion → table "econometric_studies"
+        study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies.find_one(
             {"id": study_id, "user_id": current_user.id},
             {"_id": 0}
@@ -11567,14 +11484,14 @@ async def edit_econometric_section_direct(
 ):
     """Edit a section directly without AI (for manual edits)"""
     # Check both in-progress and completed studies
-    study = # TODO: db.econometric_studies.find_one needs manual conversion → table "econometric_studies"
+    study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
     )
     
     if not study:
-        study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
+        study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies_in_progress.find_one(
             {"id": study_id, "user_id": current_user.id},
             {"_id": 0}
@@ -11615,17 +11532,14 @@ async def edit_econometric_section_direct(
         
         
         
-        db.econometric_studies.update_one(
-            {"id": study_id},
-            {"$set": {"full_content": full_content}}
-        )
+        update("econometric_studies", {"id": study_id}, {"full_content": full_content})
     
     return {"message": "Section updated successfully"}
 
 @api_router.get("/econometric-studies")
 async def list_econometric_studies(current_user: User = Depends(get_current_user)):
     """List all econometric studies for the current user (completed only)"""
-    studies = # TODO: db.econometric_studies.find needs manual conversion → table "econometric_studies"
+    studies = select("econometric_studies")  # REVIEW: add filters
   db.econometric_studies.find(
         {"user_id": current_user.id},
         {"_id": 0}
@@ -11636,7 +11550,7 @@ async def list_econometric_studies(current_user: User = Depends(get_current_user
 @api_router.get("/econometric-studies/in-progress")
 async def list_econometric_studies_in_progress(current_user: User = Depends(get_current_user)):
     """List all econometric studies IN PROGRESS for the current user"""
-    studies = # TODO: db.econometric_studies_in_progress.find needs manual conversion → table "econometric_studies"
+    studies = select("econometric_studies")  # REVIEW: add filters
   db.econometric_studies_in_progress.find(
         {"user_id": current_user.id},
         {"_id": 0}
@@ -11651,7 +11565,7 @@ async def get_econometric_study(
 ):
     """Get a specific econometric study (completed or in progress)"""
     # Try completed studies first
-    study = # TODO: db.econometric_studies.find_one needs manual conversion → table "econometric_studies"
+    study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11659,7 +11573,7 @@ async def get_econometric_study(
     
     # If not found, try in-progress studies
     if not study:
-        study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
+        study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies_in_progress.find_one(
             {"id": study_id, "user_id": current_user.id},
             {"_id": 0}
@@ -11676,7 +11590,7 @@ async def download_econometric_study(
     current_user: User = Depends(get_current_user)
 ):
     """Download econometric study as PDF"""
-    study = # TODO: db.econometric_studies.find_one needs manual conversion → table "econometric_studies"
+    study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11717,7 +11631,7 @@ async def delete_econometric_study(
 @api_router.post("/econometric-studies/finalize/{study_id}")
 async def finalize_econometric_study(study_id: str, current_user: User = Depends(get_current_user)):
     """Finalize the econometric study"""
-    study = # TODO: db.econometric_studies_in_progress.find_one needs manual conversion → table "econometric_studies"
+    study = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_studies_in_progress.find_one(
         {"id": study_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11877,7 +11791,7 @@ async def get_recommendation_letters(
     current_user: User = Depends(get_current_user)
 ):
     """Get all recommendation letters for the current user"""
-    letters = # TODO: db.recommendation_letters.find needs manual conversion → table "recommendation_letters"
+    letters = select("recommendation_letters")  # REVIEW: add filters
   db.recommendation_letters.find(
         {"user_id": current_user.id},
         {"_id": 0}
@@ -11892,7 +11806,7 @@ async def get_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Get a specific recommendation letter"""
-    letter = # TODO: db.recommendation_letters.find_one needs manual conversion → table "recommendation_letters"
+    letter = select("recommendation_letters", single=True)  # REVIEW: add filters
   db.recommendation_letters.find_one(
         {"id": letter_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11911,7 +11825,7 @@ async def edit_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Edit a specific section or part of the recommendation letter"""
-    letter = # TODO: db.recommendation_letters.find_one needs manual conversion → table "recommendation_letters"
+    letter = select("recommendation_letters", single=True)  # REVIEW: add filters
   db.recommendation_letters.find_one(
         {"id": letter_id, "user_id": current_user.id},
         {"_id": 0}
@@ -11953,15 +11867,10 @@ Generate the revised letter in **{letter.get('language', 'English')}**."""
         # TODO: db.recommendation_letters.update_one needs manual conversion → table "recommendation_letters"
 
         
-        db.recommendation_letters.update_one(
-            {"id": letter_id, "user_id": current_user.id},
-            {
-                "$set": {
+        update("recommendation_letters", {"id": letter_id, "user_id": current_user.id}, {
                     "content": revised_content,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         return {
             "content": revised_content,
@@ -11979,7 +11888,7 @@ async def translate_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Translate recommendation letter to Spanish (if not already translated)"""
-    letter = # TODO: db.recommendation_letters.find_one needs manual conversion → table "recommendation_letters"
+    letter = select("recommendation_letters", single=True)  # REVIEW: add filters
   db.recommendation_letters.find_one(
         {"id": letter_id, "user_id": current_user.id},
         {"_id": 0}
@@ -12029,15 +11938,10 @@ Provide ONLY the translated letter, no explanations."""
         # TODO: db.recommendation_letters.update_one needs manual conversion → table "recommendation_letters"
 
         
-        db.recommendation_letters.update_one(
-            {"id": letter_id, "user_id": current_user.id},
-            {
-                "$set": {
+        update("recommendation_letters", {"id": letter_id, "user_id": current_user.id}, {
                     "content_es": content_es,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         return {
             "content_es": content_es,
@@ -12073,7 +11977,7 @@ async def download_recommendation_letter(
     current_user: User = Depends(get_current_user)
 ):
     """Download recommendation letter as PDF with Markdown formatting in specified language"""
-    letter_doc = # TODO: db.recommendation_letters.find_one needs manual conversion → table "recommendation_letters"
+    letter_doc = select("recommendation_letters", single=True)  # REVIEW: add filters
   db.recommendation_letters.find_one(
         {"id": letter_id, "user_id": current_user.id},
         {"_id": 0}
@@ -12641,7 +12545,7 @@ async def save_niw_as_draft(niw_id: str, current_user: User = Depends(get_curren
     """Save NIW proposal in-progress as draft"""
     # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
     # Try completed NIWs first (business_plans collection)
-    niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
+    niw = select("business_plans", single=True)  # REVIEW: add filters
   db.business_plans.find_one(
         {"id": niw_id, "user_id": current_user.id},
         {"_id": 0}
@@ -12658,15 +12562,10 @@ async def save_niw_as_draft(niw_id: str, current_user: User = Depends(get_curren
     # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
 
     
-    db.niw_in_progress.update_one(
-        {"id": niw_id},
-        {
-            "$set": {
+    update("niw_petitions", {"id": niw_id}, {
                 "status": "draft",
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     return {"message": "Draft saved successfully", "id": niw_id}
 
@@ -12682,15 +12581,10 @@ async def save_book_as_draft(book_id: str, current_user: User = Depends(get_curr
     # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
 
     
-    db.books_in_progress.update_one(
-        {"id": book_id},
-        {
-            "$set": {
+    update("generated_documents", {"id": book_id}, {
                 "status": "draft",
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     return {"message": "Draft saved successfully", "id": book_id}
 
@@ -12701,7 +12595,7 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
     """Resume working on a draft NIW proposal"""
     # 🔥 CRITICAL FIX: Check both completed and in-progress NIWs
     # Try completed NIWs first (business_plans collection)
-    niw = # TODO: db.business_plans.find_one needs manual conversion → table "business_plans"
+    niw = select("business_plans", single=True)  # REVIEW: add filters
   db.business_plans.find_one(
         {"id": niw_id, "user_id": current_user.id, "status": "draft"},
         {"_id": 0}
@@ -12709,7 +12603,7 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
     
     # If not found, check in-progress NIWs
     if not niw:
-        niw = # TODO: db.niw_in_progress.find_one needs manual conversion → table "niw_petitions"
+        niw = select("niw_petitions", single=True)  # REVIEW: add filters
   db.niw_in_progress.find_one(
             {"id": niw_id, "user_id": current_user.id, "status": "draft"},
             {"_id": 0}
@@ -12722,15 +12616,10 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
     # TODO: db.niw_in_progress.update_one needs manual conversion → table "niw_petitions"
 
     
-    db.niw_in_progress.update_one(
-        {"id": niw_id},
-        {
-            "$set": {
+    update("niw_petitions", {"id": niw_id}, {
                 "status": "in_progress",
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     niw['status'] = 'in_progress'
     if isinstance(niw.get('created_at'), str):
@@ -12743,7 +12632,7 @@ async def resume_niw_draft(niw_id: str, current_user: User = Depends(get_current
 @api_router.post("/books/resume-draft/{book_id}", response_model=BookInProgress)
 async def resume_book_draft(book_id: str, current_user: User = Depends(get_current_user)):
     """Resume working on a draft book"""
-    book = # TODO: db.books_in_progress.find_one needs manual conversion → table "generated_documents"
+    book = select("generated_documents", single=True)  # REVIEW: add filters
   db.books_in_progress.find_one(
         {"id": book_id, "user_id": current_user.id, "status": "draft"},
         {"_id": 0}
@@ -12756,15 +12645,10 @@ async def resume_book_draft(book_id: str, current_user: User = Depends(get_curre
     # TODO: db.books_in_progress.update_one needs manual conversion → table "generated_documents"
 
     
-    db.books_in_progress.update_one(
-        {"id": book_id},
-        {
-            "$set": {
+    update("generated_documents", {"id": book_id}, {
                 "status": "in_progress",
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     book['status'] = 'in_progress'
     if isinstance(book.get('created_at'), str):
@@ -12885,10 +12769,7 @@ async def evaluate_niw_final(plan_id: str, current_user: User = Depends(get_curr
     # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
 
     
-    db.business_plans.update_one(
-        {"id": plan_id},
-        {"$set": {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
+    update("business_plans", {"id": plan_id}, {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()})
     
     # Evaluate the document
     evaluation = await evaluate_document_quality(
@@ -12904,18 +12785,13 @@ async def evaluate_niw_final(plan_id: str, current_user: User = Depends(get_curr
     # TODO: db.business_plans.update_one needs manual conversion → table "business_plans"
 
     
-    db.business_plans.update_one(
-        {"id": plan_id},
-        {
-            "$set": {
+    update("business_plans", {"id": plan_id}, {
                 "status": final_status,
                 "quality_score": evaluation.score,
                 "evaluation_feedback": evaluation.feedback,
                 "problematic_sections": evaluation.problematic_sections,
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     return {
         "plan_id": plan_id,
@@ -12939,10 +12815,7 @@ async def evaluate_book_final(book_id: str, current_user: User = Depends(get_cur
     # TODO: db.books.update_one needs manual conversion → table "generated_documents"
 
     
-    db.books.update_one(
-        {"id": book_id},
-        {"$set": {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
+    update("generated_documents", {"id": book_id}, {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()})
     
     # Evaluate the document
     evaluation = await evaluate_document_quality(
@@ -12958,18 +12831,13 @@ async def evaluate_book_final(book_id: str, current_user: User = Depends(get_cur
     # TODO: db.books.update_one needs manual conversion → table "generated_documents"
 
     
-    db.books.update_one(
-        {"id": book_id},
-        {
-            "$set": {
+    update("generated_documents", {"id": book_id}, {
                 "status": final_status,
                 "quality_score": evaluation.score,
                 "evaluation_feedback": evaluation.feedback,
                 "problematic_chapters": evaluation.problematic_sections,
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     return {
         "book_id": book_id,
@@ -12993,10 +12861,7 @@ async def evaluate_patent_final(patent_id: str, current_user: User = Depends(get
     # TODO: db.patents.update_one needs manual conversion → table "patents"
 
     
-    db.patents.update_one(
-        {"id": patent_id},
-        {"$set": {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
+    update("patents", {"id": patent_id}, {"status": "evaluating", "updated_at": datetime.now(timezone.utc).isoformat()})
     
     # Evaluate the document - combine specification and drawings content
     full_content = patent['specification_content']
@@ -13016,18 +12881,13 @@ async def evaluate_patent_final(patent_id: str, current_user: User = Depends(get
     # TODO: db.patents.update_one needs manual conversion → table "patents"
 
     
-    db.patents.update_one(
-        {"id": patent_id},
-        {
-            "$set": {
+    update("patents", {"id": patent_id}, {
                 "status": final_status,
                 "quality_score": evaluation.score,
                 "evaluation_feedback": evaluation.feedback,
                 "problematic_sections": evaluation.problematic_sections,
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     return {
         "patent_id": patent_id,
@@ -13186,7 +13046,7 @@ async def generate_complete_patent_v2(
     try:
         logging.info(f"🎯 [BUGFIX] Endpoint called for patent_id={patent_id}, user={current_user.email}")
         
-        patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+        patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
             {"id": patent_id, "user_id": current_user.id},
             {"_id": 0}
@@ -13574,10 +13434,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
         # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
 
         
-        db.patents_in_progress.update_one(
-            {"id": patent_id},
-            {
-                "$set": {
+        update("patents", {"id": patent_id}, {
                     "sections": sections,
                     "complete_specification_en": complete_patent_en,
                     "complete_specification_es": complete_patent_es,
@@ -13585,9 +13442,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
                     "status": "complete",
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         logging.info(f"🎉 Complete patent V2 generated: {len(sections)} sections")
         
@@ -13612,7 +13467,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
             try:
                 # extract_metrics_for_table and auto_generate_comparison_table imported at top
                 # Reload patent with all sections
-                complete_patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+                complete_patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
                     {"id": patent_id},
                     {"_id": 0}
@@ -13665,13 +13520,10 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
                         # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
 
                         
-                        db.patents_in_progress.update_one(
-                            {"id": patent_id},
-                            {"$set": {
+                        update("patents", {"id": patent_id}, {
                                 "sections": sections_with_table,
                                 "updated_at": datetime.now(timezone.utc).isoformat()
-                            }}
-                        )
+                            })
                         
                         logging.info(f"✅ Comparison table inserted into Summary section")
                     else:
@@ -13695,7 +13547,7 @@ Preserve the structure exactly. Only translate the text content, not HTML tags o
             import re
             
             # Reload patent to get latest sections
-            complete_patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+            complete_patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
                 {"id": patent_id},
                 {"_id": 0}
@@ -13821,13 +13673,10 @@ Use USPTO format with paragraph markers."""
                                         # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
 
                                         
-                                        db.patents_in_progress.update_one(
-                                            {"id": patent_id},
-                                            {"$set": {
+                                        update("patents", {"id": patent_id}, {
                                                 "sections": sections_updated,
                                                 "updated_at": datetime.now(timezone.utc).isoformat()
-                                            }}
-                                        )
+                                            })
                                         
                                         break  # Exit regeneration loop
                                     else:
@@ -13855,7 +13704,7 @@ Use USPTO format with paragraph markers."""
         try:
             # scan_and_remove_spanish_entire_document imported at top
             # Get the FINAL patent with all sections, table, strengthened claims, and drawings
-            complete_patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+            complete_patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
                 {"id": patent_id},
                 {"_id": 0}
@@ -13947,7 +13796,7 @@ Use USPTO format with paragraph markers."""
         logging.info(f"🏆 Starting automatic USPTO evaluation and correction for patent {patent_id}")
         
         # Get the complete specification for evaluation
-        complete_patent_for_eval = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+        complete_patent_for_eval = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
             {"id": patent_id},
             {"_id": 0}
@@ -14117,10 +13966,7 @@ Use USPTO format with paragraph markers."""
             # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
 
             
-            db.patents_in_progress.update_one(
-                {"id": patent_id},
-                {"$set": {"status": "completed"}}
-            )
+            update("patents", {"id": patent_id}, {"status": "completed"})
         
         logging.info("✅ Patent generation complete - returning to client")
         
@@ -14136,10 +13982,7 @@ Use USPTO format with paragraph markers."""
         # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
 
         
-        db.patents_in_progress.update_one(
-            {"id": patent_id},
-            {"$set": {"status": "error", "error_message": str(e)}}
-        )
+        update("patents", {"id": patent_id}, {"status": "error", "error_message": str(e)})
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
@@ -14153,7 +13996,7 @@ async def regenerate_patent(
     logging.info(f"🔄 Regenerating patent {patent_id}")
     
     # Get patent
-    patent = # TODO: db.patents_in_progress.find_one needs manual conversion → table "patents"
+    patent = select("patents", single=True)  # REVIEW: add filters
   db.patents_in_progress.find_one(
         {"id": patent_id, "user_id": current_user.id},
         {"_id": 0}
@@ -14166,16 +14009,13 @@ async def regenerate_patent(
     # TODO: db.patents_in_progress.update_one needs manual conversion → table "patents"
 
     
-    db.patents_in_progress.update_one(
-        {"id": patent_id},
-        {"$set": {
+    update("patents", {"id": patent_id}, {
             "status": "regenerating",
             "sections": [],
             "complete_specification_en": "",
             "complete_specification_es": "",
             "updated_at": datetime.now(timezone.utc).isoformat()
-        }}
-    )
+        })
     
     # Call generate_complete_patent_v2 to regenerate
     return await generate_complete_patent_v2(patent_id, current_user)
@@ -14192,7 +14032,7 @@ async def get_patents_v2_in_progress(
     if client_id:
         query["client_id"] = client_id
     
-    patents = # TODO: db.patents_in_progress.find needs manual conversion → table "patents"
+    patents = select("patents")  # REVIEW: add filters
   db.patents_in_progress.find(query, {"_id": 0}).to_list(1000)
     return patents
 
@@ -14235,7 +14075,7 @@ async def start_whitepaper_interactive(whitepaper_input: WhitepaperInput, curren
 async def generate_whitepaper_section(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Generate a section for the technical white paper with AI evaluation"""
     
-    whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
+    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
   db.whitepapers_in_progress.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
@@ -14442,16 +14282,11 @@ Please regenerate the section now, addressing ALL these technical requirements."
         # TODO: db.whitepapers_in_progress.update_one needs manual conversion → table "generated_documents"
 
         
-        db.whitepapers_in_progress.update_one(
-            {"id": whitepaper_id},
-            {
-                "$set": {
+        update("generated_documents", {"id": whitepaper_id}, {
                     "sections": whitepaper_sections,
                     "current_section": section_number + 1,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         logging.info(f"✅ Whitepaper section {section_number} automatically saved after passing evaluation")
     
@@ -14460,7 +14295,7 @@ Please regenerate the section now, addressing ALL these technical requirements."
 @api_router.post("/whitepapers/approve-section/{whitepaper_id}")
 async def approve_whitepaper_section(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Approve current section and move to next"""
-    whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
+    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
   db.whitepapers_in_progress.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
@@ -14483,16 +14318,11 @@ async def approve_whitepaper_section(whitepaper_id: str, current_user: User = De
     # TODO: db.whitepapers_in_progress.update_one needs manual conversion → table "generated_documents"
 
     
-    db.whitepapers_in_progress.update_one(
-        {"id": whitepaper_id},
-        {
-            "$set": {
+    update("generated_documents", {"id": whitepaper_id}, {
                 "sections": sections,
                 "current_section": next_section,
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     return {
         "message": "Section approved successfully",
@@ -14507,7 +14337,7 @@ async def edit_whitepaper_section(
     current_user: User = Depends(get_current_user)
 ):
     """Edit a section of the technical white paper"""
-    whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
+    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
   db.whitepapers_in_progress.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
@@ -14574,22 +14404,17 @@ Please provide the improved section content addressing the editing instructions 
     # TODO: db.whitepapers_in_progress.update_one needs manual conversion → table "generated_documents"
 
     
-    db.whitepapers_in_progress.update_one(
-        {"id": whitepaper_id},
-        {
-            "$set": {
+    update("generated_documents", {"id": whitepaper_id}, {
                 "sections": sections,
                 "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+            })
     
     return {"section": edited_section.model_dump()}
 
 @api_router.post("/whitepapers/finalize/{whitepaper_id}")
 async def finalize_whitepaper(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Finalize the technical white paper"""
-    whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
+    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
   db.whitepapers_in_progress.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
@@ -14672,7 +14497,7 @@ async def finalize_whitepaper(whitepaper_id: str, current_user: User = Depends(g
 async def get_whitepaper(whitepaper_id: str, current_user: User = Depends(get_current_user)):
     """Get a specific whitepaper (searches both completed and in-progress)"""
     # First check completed whitepapers
-    whitepaper = # TODO: db.whitepapers.find_one needs manual conversion → table "generated_documents"
+    whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
   db.whitepapers.find_one(
         {"id": whitepaper_id, "user_id": current_user.id},
         {"_id": 0}
@@ -14680,7 +14505,7 @@ async def get_whitepaper(whitepaper_id: str, current_user: User = Depends(get_cu
     
     # If not found, check in-progress whitepapers
     if not whitepaper:
-        whitepaper = # TODO: db.whitepapers_in_progress.find_one needs manual conversion → table "generated_documents"
+        whitepaper = select("generated_documents", single=True)  # REVIEW: add filters
   db.whitepapers_in_progress.find_one(
             {"id": whitepaper_id, "user_id": current_user.id},
             {"_id": 0}
@@ -14736,11 +14561,11 @@ async def list_whitepapers(client_id: Optional[str] = None, current_user: User =
         query["client_id"] = client_id
     
     # Get completed whitepapers
-    completed = # TODO: db.whitepapers.find needs manual conversion → table "generated_documents"
+    completed = select("generated_documents")  # REVIEW: add filters
   db.whitepapers.find(query, {"_id": 0}).to_list(1000)
     
     # Get in-progress whitepapers
-    in_progress = # TODO: db.whitepapers_in_progress.find needs manual conversion → table "generated_documents"
+    in_progress = select("generated_documents")  # REVIEW: add filters
   db.whitepapers_in_progress.find(query, {"_id": 0}).to_list(1000)
     
     return {
@@ -15076,7 +14901,7 @@ async def get_clients(
         skip = (page - 1) * limit
         
         # Query
-        clients = # TODO: db.clients.find needs manual conversion → table "clients"
+        clients = select("clients")  # REVIEW: add filters
   db.clients.find(
             query,
             {"_id": 0}
@@ -15130,7 +14955,7 @@ async def search_clients(
         skip = (page - 1) * limit
         
         # Query con projection
-        clients = # TODO: db.clients.find needs manual conversion → table "clients"
+        clients = select("clients")  # REVIEW: add filters
   db.clients.find(
             query,
             {
@@ -15168,7 +14993,7 @@ async def get_client(client_id: str, current_user: User = Depends(get_current_us
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        client = # TODO: db.clients.find_one needs manual conversion → table "clients"
+        client = select("clients", single=True)  # REVIEW: add filters
   db.clients.find_one(query, {"_id": 0})
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -15193,7 +15018,7 @@ async def update_client(
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        client = # TODO: db.clients.find_one needs manual conversion → table "clients"
+        client = select("clients", single=True)  # REVIEW: add filters
   db.clients.find_one(query)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -15279,7 +15104,7 @@ async def get_client_stats(client_id: str, current_user: User = Depends(get_curr
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        client = # TODO: db.clients.find_one needs manual conversion → table "clients"
+        client = select("clients", single=True)  # REVIEW: add filters
   db.clients.find_one(query, {"_id": 0})
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
@@ -15461,7 +15286,7 @@ async def get_recent_activity(
         if current_user.role == "operator":
             query["operator_id"] = current_user.id
         
-        activities = # TODO: db.activity_logs.find needs manual conversion → table "activity_logs"
+        activities = select("activity_logs")  # REVIEW: add filters
   db.activity_logs.find(
             query,
             {"_id": 0}
@@ -15481,7 +15306,7 @@ async def get_recent_activity(
 async def list_operators(current_admin: User = Depends(require_admin)):
     """Lista de todos los operadores con sus estadísticas"""
     try:
-        operators = # TODO: db.users.find needs manual conversion → table "clients"
+        operators = select("clients")  # REVIEW: add filters
   db.users.find(
             {"role": "operator"},
             {"_id": 0, "password": 0}
@@ -15588,10 +15413,7 @@ async def update_operator_status(
         
         
         
-        db.users.update_one(
-            {"id": operator_id},
-            {"$set": {"status": new_status}}
-        )
+        update("clients", {"id": operator_id}, {"status": new_status})
         
         logger.info(f"Operator {operator_id} status changed to {new_status} by admin {current_admin.id}")
         
@@ -15628,10 +15450,7 @@ async def delete_operator(
         # TODO: db.users.update_one needs manual conversion → table "clients"
 
         
-        db.users.update_one(
-            {"id": operator_id},
-            {"$set": {"status": "inactive"}}
-        )
+        update("clients", {"id": operator_id}, {"status": "inactive"})
         
         logger.info(f"Operator {operator_id} deleted (inactive) by admin {current_admin.id}")
         
@@ -15678,26 +15497,10 @@ async def transfer_client(
         # TODO: db.clients.update_one needs manual conversion → table "clients"
 
         
-        db.clients.update_one(
-            {"id": client_id},
-            {
-                "$set": {
+        update("clients", {"id": client_id}, {
                     "operator_id": new_operator_id,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                },
-                "$push": {
-                    "transfer_history": {
-                        "from": old_operator_id,
-                        "from_name": old_operator_name,
-                        "to": new_operator_id,
-                        "to_name": new_operator["full_name"],
-                        "by": current_admin.id,
-                        "by_name": current_admin.full_name,
-                        "date": datetime.now(timezone.utc).isoformat()
-                    }
-                }
-            }
-        )
+                })
         
         # Actualizar TODOS los documentos del cliente
         collections = [
@@ -15779,7 +15582,7 @@ async def get_admin_stats(current_admin: User = Depends(require_admin)):
             total_documents += await db[collection_name].count_documents({})
         
         # Top 3 operadores por documentos
-        operators = # TODO: db.users.find needs manual conversion → table "clients"
+        operators = select("clients")  # REVIEW: add filters
   db.users.find(
             {"role": "operator", "status": "active"},
             {"_id": 0, "id": 1, "full_name": 1, "email": 1}
@@ -15864,7 +15667,7 @@ async def get_conversations(
         user_id = user["id"]
         
         # Get all conversations
-        conversations = # TODO: db.chat_conversations.find needs manual conversion → table "redactora_chat_messages"
+        conversations = select("redactora_chat_messages")  # REVIEW: add filters
   db.chat_conversations.find(
             {"user_id": user_id},
             {"_id": 0}
@@ -15898,7 +15701,7 @@ async def get_conversation_messages(
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = # TODO: db.chat_conversations.find_one needs manual conversion → table "redactora_chat_messages"
+        conversation = select("redactora_chat_messages", single=True)  # REVIEW: add filters
   db.chat_conversations.find_one(
             {"id": conversation_id, "user_id": user_id},
             {"_id": 0}
@@ -15908,7 +15711,7 @@ async def get_conversation_messages(
             raise HTTPException(status_code=404, detail="Conversation not found")
         
         # Get messages
-        messages = # TODO: db.chat_messages.find needs manual conversion → table "redactora_chat_messages"
+        messages = select("redactora_chat_messages")  # REVIEW: add filters
   db.chat_messages.find(
             {"conversation_id": conversation_id},
             {"_id": 0}
@@ -15944,7 +15747,7 @@ async def send_message_to_conversation(
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = # TODO: db.chat_conversations.find_one needs manual conversion → table "redactora_chat_messages"
+        conversation = select("redactora_chat_messages", single=True)  # REVIEW: add filters
   db.chat_conversations.find_one(
             {"id": conversation_id, "user_id": user_id},
             {"_id": 0}
@@ -16045,19 +15848,13 @@ async def send_message_to_conversation(
             # TODO: db.chat_conversations.update_one needs manual conversion → table "redactora_chat_messages"
 
             
-            db.chat_conversations.update_one(
-                {"id": conversation_id},
-                {"$set": {"title": title, "updated_at": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("redactora_chat_messages", {"id": conversation_id}, {"title": title, "updated_at": datetime.now(timezone.utc).isoformat()})
         else:
             # Just update timestamp
             # TODO: db.chat_conversations.update_one needs manual conversion → table "redactora_chat_messages"
 
             
-            db.chat_conversations.update_one(
-                {"id": conversation_id},
-                {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("redactora_chat_messages", {"id": conversation_id}, {"updated_at": datetime.now(timezone.utc).isoformat()})
         
         # Initialize Gemini chat
         gemini_api_key = os.environ.get('GEMINI_API_KEY')
@@ -16125,7 +15922,7 @@ async def delete_conversation(
         user_id = user["id"]
         
         # Verify conversation belongs to user
-        conversation = # TODO: db.chat_conversations.find_one needs manual conversion → table "redactora_chat_messages"
+        conversation = select("redactora_chat_messages", single=True)  # REVIEW: add filters
   db.chat_conversations.find_one(
             {"id": conversation_id, "user_id": user_id},
             {"_id": 0}

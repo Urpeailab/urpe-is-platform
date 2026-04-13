@@ -2188,10 +2188,7 @@ async def create_test_eligibility_report(
         # TODO: db.test_eligibility_reports.update_one needs manual conversion → table "eligibility_assessments"
 
         
-        db.test_eligibility_reports.update_one(
-            {"id": test_id},
-            {"$set": {"status": "timeout", "error": "N8N webhook timeout"}}
-        )
+        update("eligibility_assessments", {"id": test_id}, {"status": "timeout", "error": "N8N webhook timeout"})
         raise HTTPException(
             status_code=504,
             detail="N8N webhook timeout"
@@ -2885,20 +2882,19 @@ async def update_payment(
         
         data = await request.json()
         
-        # Buscar el pago en manual_payments (colección principal de pagos)
-        payment = select("payments", filters={'id': payment_id}, single=True)
+        # Buscar el pago en manual_payments (tabla principal de pagos)
+        payment = select("manual_payments", filters={"id": payment_id}, single=True)
+        payment_table = "manual_payments"
         if not payment:
             # También buscar en payment_transactions como respaldo
-            payment = select("payment_transactions", filters={'id': payment_id}, single=True)
-        
+            payment = select("payment_transactions", filters={"id": payment_id}, single=True)
+            payment_table = "payment_transactions"
+
         if not payment:
             raise HTTPException(
                 status_code=404,
                 detail=f"Pago no encontrado: {payment_id}"
             )
-        
-        # Determinar la colección correcta
-        collection = db.manual_payments if select("payments", filters={'id': payment_id}, single=True) else db.payment_transactions
         
         # Campos permitidos para actualizar
         allowed_fields = ['amount', 'currency', 'status', 'paymentMethod', 'notes', 'transactionId', 'reference', 'paymentDate', 'receiptUrl', 'stageNumbers']
@@ -2915,13 +2911,10 @@ async def update_payment(
         update_fields['updatedBy'] = staff_info.get('email')
         
         # Actualizar el pago
-        await collection.update_one(
-            {'id': payment_id},
-            {'$set': update_fields}
-        )
+        update(payment_table, filters={"id": payment_id}, data=update_fields)
         
         # Obtener pago actualizado
-        updated_payment = await collection.find_one({'id': payment_id}, {'_id': 0})
+        updated_payment = select(payment_table, filters={"id": payment_id}, single=True)
         
         logger.info(f"✅ Payment {payment_id} updated by {staff_info.get('email')}")
         
@@ -2958,15 +2951,15 @@ async def delete_payment(
                 detail="Solo admin y super_admin pueden eliminar pagos"
             )
         
-        # Buscar el pago en manual_payments (colección principal de pagos)
-        payment = select("payments", filters={'id': payment_id}, single=True)
-        collection = db.manual_payments
-        
+        # Buscar el pago en manual_payments (tabla principal de pagos)
+        payment = select("manual_payments", filters={"id": payment_id}, single=True)
+        payment_table = "manual_payments"
+
         if not payment:
             # También buscar en payment_transactions como respaldo
-            payment = select("payment_transactions", filters={'id': payment_id}, single=True)
-            collection = db.payment_transactions
-        
+            payment = select("payment_transactions", filters={"id": payment_id}, single=True)
+            payment_table = "payment_transactions"
+
         if not payment:
             raise HTTPException(
                 status_code=404,
@@ -2981,9 +2974,9 @@ async def delete_payment(
         }
         
         # Eliminar el pago
-        result = await collection.delete_one({'id': payment_id})
-        
-        if result.deleted_count == 0:
+        result = delete(payment_table, filters={"id": payment_id})
+
+        if not result:
             raise HTTPException(
                 status_code=500,
                 detail="No se pudo eliminar el pago"
@@ -3356,8 +3349,7 @@ async def get_admin_comparator_cases(
 ):
     """Get all comparator cases for admin"""
     try:
-        cursor = db.comparator_cases.find({}, {'_id': 0}).limit(limit)
-        cases = await cursor.to_list(length=limit)
+        cases = select("comparator_cases", limit=limit)
         
         return {
             "success": True,
@@ -3737,7 +3729,7 @@ async def admin_login(request: AdminLoginRequest):
     """Admin login with email and password"""
     try:
         # Buscar staff por email
-        staff = # TODO: db.staff.find_one needs manual conversion → table "staff"
+        staff = select("staff", single=True)  # REVIEW: add filters
   db.staff.find_one({'email': request.email.lower()})
         
         if not staff:
@@ -3757,10 +3749,7 @@ async def admin_login(request: AdminLoginRequest):
         # TODO: db.staff.update_one needs manual conversion → table "staff"
 
         
-        db.staff.update_one(
-            {'_id': staff['_id']},
-            {'$set': {'lastLogin': datetime.utcnow()}}
-        )
+        update("staff", {'id': staff['id']}, {'lastLogin': datetime.utcnow()})
         
         # Log de actividad
         log = ActivityLog.create_log(
@@ -3819,11 +3808,7 @@ async def send_otp(request: OTPRequest):
     # TODO: db.admin_otp.update_one needs manual conversion → table "staff"
 
     
-    db.admin_otp.update_one(
-        {"email": email},
-        {"$set": {"code": code, "expiresAt": expires.isoformat(), "attempts": 0, "createdAt": datetime.now(timezone.utc).isoformat()}},
-        upsert=True
-    )
+    update("staff", {"email": email}, {"code": code, "expiresAt": expires.isoformat(), "attempts": 0, "createdAt": datetime.now(timezone.utc).isoformat()})
     
     # Send email
     try:
@@ -3935,7 +3920,7 @@ async def emergency_create_admin(request: EmergencyAdminRequest):
             raise HTTPException(status_code=403, detail="Invalid emergency key")
         
         # Verificar si ya existe un admin con ese email
-        existing_staff = # TODO: db.staff.find_one needs manual conversion → table "staff"
+        existing_staff = select("staff", single=True)  # REVIEW: add filters
   db.staff.find_one({'email': request.email.lower()})
         if existing_staff:
             raise HTTPException(status_code=400, detail="Admin with this email already exists")
@@ -3990,7 +3975,7 @@ async def emergency_create_admin(request: EmergencyAdminRequest):
 async def send_magic_link(request: AdminMagicLinkRequest):
     """Send magic link to admin email"""
     try:
-        staff = # TODO: db.staff.find_one needs manual conversion → table "staff"
+        staff = select("staff", single=True)  # REVIEW: add filters
   db.staff.find_one({'email': request.email.lower()})
         
         if not staff:
@@ -4010,15 +3995,10 @@ async def send_magic_link(request: AdminMagicLinkRequest):
         # TODO: db.staff.update_one needs manual conversion → table "staff"
 
         
-        db.staff.update_one(
-            {'_id': staff['_id']},
-            {
-                '$set': {
+        update("staff", {'id': staff['id']}, {
                     'magicLinkToken': token,
                     'magicLinkExpires': expires
-                }
-            }
-        )
+                })
         
         # TODO: Enviar email con link
         # En desarrollo, retornamos el token
@@ -4047,7 +4027,7 @@ async def send_magic_link(request: AdminMagicLinkRequest):
 async def verify_magic_link(token: str):
     """Verify magic link token and login"""
     try:
-        staff = # TODO: db.staff.find_one needs manual conversion → table "staff"
+        staff = select("staff", single=True)  # REVIEW: add filters
   db.staff.find_one({
             'magicLinkToken': token,
             'magicLinkExpires': {'$gt': datetime.utcnow()}
@@ -4065,13 +4045,7 @@ async def verify_magic_link(token: str):
         # TODO: db.staff.update_one needs manual conversion → table "staff"
 
         
-        db.staff.update_one(
-            {'_id': staff['_id']},
-            {
-                '$set': {'lastLogin': datetime.utcnow()},
-                '$unset': {'magicLinkToken': '', 'magicLinkExpires': ''}
-            }
-        )
+        update("staff", {'id': staff['id']}, {'lastLogin': datetime.utcnow()})
         
         # Log de actividad
         log = ActivityLog.create_log(
@@ -4254,7 +4228,7 @@ async def get_case_notes(case_id: str, staff_payload: dict = Depends(verify_staf
     if not is_admin:
         query["deleted"] = {"$ne": True}
 
-    notes = # TODO: db.case_notes.find needs manual conversion → table "case_notes"
+    notes = select("case_notes")  # REVIEW: add filters
   db.case_notes.find(query, {"_id": 0}).sort("createdAt", -1).to_list(500)
     return {"success": True, "notes": notes}
 
@@ -4311,11 +4285,11 @@ async def delete_case_note(case_id: str, note_id: str, staff_payload: dict = Dep
 
     
 
-    db.case_notes.update_one({"id": note_id}, {"$set": {
+    update("case_notes", {"id": note_id}, {
         "deleted": True,
         "deletedAt": datetime.now(timezone.utc).isoformat(),
         "deletedBy": {"id": staff_payload.get("id"), "name": staff_payload.get("name", ""), "role": role},
-    }})
+    })
 
     return {"success": True, "message": "Nota eliminada"}
 
@@ -4361,7 +4335,7 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     if not is_admin:
         visa_filter["$or"] = [{"coordinatorId": user_id}, {"salesRepId": user_id}]
 
-    visa_cases = # TODO: db.visa_cases.find needs manual conversion → table "visa_cases"
+    visa_cases = select("visa_cases")  # REVIEW: add filters
   db.visa_cases.find(
         visa_filter,
         {"_id": 0, "id": 1, "userId": 1, "status": 1, "overallProgress": 1, "currentStage": 1,
@@ -4392,7 +4366,7 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
 
     user_name_map = {}
     if user_query:
-        user_docs = # TODO: db.users.find needs manual conversion → table "clients"
+        user_docs = select("clients")  # REVIEW: add filters
   db.users.find(
             {"$or": user_query} if len(user_query) > 1 else user_query[0],
             {"_id": 1, "id": 1, "name": 1}
@@ -4414,7 +4388,7 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     if not is_admin:
         all_visa_filter["$or"] = [{"coordinatorId": user_id}, {"salesRepId": user_id}]
 
-    all_visa_cases = # TODO: db.visa_cases.find needs manual conversion → table "visa_cases"
+    all_visa_cases = select("visa_cases")  # REVIEW: add filters
   db.visa_cases.find(
         all_visa_filter,
         {"_id": 0, "coordinatorId": 1, "salesRepId": 1}
@@ -4487,7 +4461,7 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
              {"salesRepId": {"$exists": False}},
          ]
         }
-    all_visa_full = # TODO: db.visa_cases.find needs manual conversion → table "visa_cases"
+    all_visa_full = select("visa_cases")  # REVIEW: add filters
   db.visa_cases.find(
         unattended_filter if is_admin else {"_id": "skip"},
         {"_id": 0, "id": 1, "clientName": 1, "user": 1, "status": 1, "overallProgress": 1,
@@ -4529,7 +4503,7 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
     appts_pending = count("appointments", {"status": "pending"})
 
     # ===== TAB 2: GESTION CLASICA (CHECKLIST) =====
-    classic_cases = # TODO: db.classic_cases.find needs manual conversion → table "classic_cases"
+    classic_cases = select("classic_cases")  # REVIEW: add filters
   db.classic_cases.find(
         {},
         {"_id": 0, "id": 1, "name": 1, "email": 1, "status": 1, "workStatus": 1,
@@ -4669,7 +4643,7 @@ async def backfill_activity_dates(secret: str = ""):
     results = []
 
     # ===== CASOS DE VISA =====
-    visa_cases = # TODO: db.visa_cases.find needs manual conversion → table "visa_cases"
+    visa_cases = select("visa_cases")  # REVIEW: add filters
   db.visa_cases.find(
         {"isMasterCase": {"$ne": True}},
         {"_id": 0, "id": 1, "updatedAt": 1, "createdAt": 1}
@@ -4688,7 +4662,7 @@ async def backfill_activity_dates(secret: str = ""):
             candidates.append(c)
 
         # 2. Último log de auditoría
-        audit = # TODO: db.case_audit_logs.find_one needs manual conversion → table "case_audit_logs"
+        audit = select("case_audit_logs", single=True)  # REVIEW: add filters
   db.case_audit_logs.find_one(
             {"caseId": case_id}, sort=[("timestamp", -1)]
         )
@@ -4698,7 +4672,7 @@ async def backfill_activity_dates(secret: str = ""):
                 candidates.append(c)
 
         # 3. Último entregable subido (uploadedAt o updatedAt)
-        deliv = # TODO: db.visa_deliverables.find_one needs manual conversion → table "visa_deliverables"
+        deliv = select("visa_deliverables", single=True)  # REVIEW: add filters
   db.visa_deliverables.find_one(
             {"caseId": case_id, "$or": [{"uploadedAt": {"$exists": True}}, {"updatedAt": {"$exists": True}}]},
             sort=[("uploadedAt", -1)]
@@ -4709,7 +4683,7 @@ async def backfill_activity_dates(secret: str = ""):
                 candidates.append(c)
 
         # 4. Última actividad en case_activities
-        act = # TODO: db.case_activities.find_one needs manual conversion → table "case_audit_logs"
+        act = select("case_audit_logs", single=True)  # REVIEW: add filters
   db.case_activities.find_one(
             {"caseId": case_id}, sort=[("timestamp", -1)]
         )
@@ -4719,7 +4693,7 @@ async def backfill_activity_dates(secret: str = ""):
                 candidates.append(c)
 
         # 5. Última nota de coordinador (case_notes)
-        note = # TODO: db.case_notes.find_one needs manual conversion → table "case_notes"
+        note = select("case_notes", single=True)  # REVIEW: add filters
   db.case_notes.find_one(
             {"caseId": case_id}, sort=[("createdAt", -1)]
         )
@@ -4737,10 +4711,7 @@ async def backfill_activity_dates(secret: str = ""):
                 # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
 
                 
-                db.visa_cases.update_one(
-                    {"id": case_id},
-                    {"$set": {"updatedAt": new_val}}
-                )
+                update("visa_cases", {"id": case_id}, {"updatedAt": new_val})
                 visa_updated += 1
                 results.append({
                     "type": "visa", "id": case_id,
@@ -4749,7 +4720,7 @@ async def backfill_activity_dates(secret: str = ""):
                 })
 
     # ===== GESTIÓN CLÁSICA =====
-    classic_cases = # TODO: db.classic_cases.find needs manual conversion → table "classic_cases"
+    classic_cases = select("classic_cases")  # REVIEW: add filters
   db.classic_cases.find(
         {}, {"_id": 0, "id": 1, "updatedAt": 1, "createdAt": 1, "lastContactAt": 1, "lastProgressChangeAt": 1}
     ).to_list(5000)
@@ -4768,7 +4739,7 @@ async def backfill_activity_dates(secret: str = ""):
                 candidates.append(c)
 
         # 2. Última entrada en timeline
-        tl = # TODO: db.classic_case_timeline.find_one needs manual conversion → table "user_timelines"
+        tl = select("user_timelines", single=True)  # REVIEW: add filters
   db.classic_case_timeline.find_one(
             {"caseId": case_id}, sort=[("timestamp", -1)]
         )
@@ -4778,7 +4749,7 @@ async def backfill_activity_dates(secret: str = ""):
                 candidates.append(c)
 
         # 3. Última nota
-        note = # TODO: db.classic_case_notes.find_one needs manual conversion → table "case_notes"
+        note = select("case_notes", single=True)  # REVIEW: add filters
   db.classic_case_notes.find_one(
             {"caseId": case_id}, sort=[("createdAt", -1)]
         )
@@ -4788,7 +4759,7 @@ async def backfill_activity_dates(secret: str = ""):
                 candidates.append(c)
 
         # 4. Último contacto registrado
-        contact = # TODO: db.classic_case_contacts.find_one needs manual conversion → table "clients"
+        contact = select("clients", single=True)  # REVIEW: add filters
   db.classic_case_contacts.find_one(
             {"caseId": case_id}, sort=[("createdAt", -1)]
         )
@@ -4805,10 +4776,7 @@ async def backfill_activity_dates(secret: str = ""):
                 # TODO: db.classic_cases.update_one needs manual conversion → table "classic_cases"
 
                 
-                db.classic_cases.update_one(
-                    {"id": case_id},
-                    {"$set": {"updatedAt": new_val}}
-                )
+                update("classic_cases", {"id": case_id}, {"updatedAt": new_val})
                 classic_updated += 1
                 results.append({
                     "type": "classic", "id": case_id,
@@ -4855,7 +4823,7 @@ async def add_user_cv(
     from storage_service import upload_file as supabase_upload
 
     user = # TODO: Complex query — needs manual conversion
- # Original: db.users.find_one({"$or": [{"_id": user_id}, {"id": user_id}]})
+ # Original: select("clients", filters={"$or": [{"id": user_id}, {"id": user_id}]}, single=True)
  select("clients", single=True)  # FIXME: add proper filters
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -4889,10 +4857,7 @@ async def add_user_cv(
     # TODO: db.users.update_one needs manual conversion → table "clients"
 
     
-    db.users.update_one(
-        {"$or": [{"_id": user_id}, {"id": user_id}]},
-        {"$set": {"cvUrl": result["fileUrl"], "updatedAt": datetime.now(timezone.utc).isoformat()}}
-    )
+    update("clients", {"$or": [{"id": user_id}, {"id": user_id}]}, {"cvUrl": result["fileUrl"], "updatedAt": datetime.now(timezone.utc).isoformat()})
 
     return {"success": True, "cv": cv_record, "message": "CV subido exitosamente"}
 
@@ -4993,13 +4958,10 @@ async def change_admin_password(
         
         # Update password (update both fields for compatibility)
         result = # TODO: db.staff.update_one needs manual conversion → table "staff"
-  db.staff.update_one(
-            {'_id': admin_id},
-            {'$set': {
+  update("staff", {'id': admin_id}, {
                 'passwordHash': hashed_password,
                 'password': hashed_password  # For backward compatibility
-            }}
-        )
+            })
         
         if result.modified_count == 0:
             raise HTTPException(status_code=500, detail="Failed to update password")
@@ -5062,7 +5024,7 @@ async def get_all_staff(
         skip = (page - 1) * limit
         
         # Obtener staff y total
-        staff_list = # TODO: db.staff.find needs manual conversion → table "staff"
+        staff_list = select("staff")  # REVIEW: add filters
   db.staff.find(query).skip(skip).limit(limit).to_list(length=limit)
         total = # TODO: db.staff.count_documents needs manual conversion → table "staff"
   db.staff.count_documents(query)
@@ -5128,7 +5090,7 @@ async def get_unique_advisors(
     """Get list of unique advisor names from users (for filtering visa cases)"""
     try:
         # Obtener todos los usuarios que tienen advisor definido
-        users_with_advisor = # TODO: db.users.find needs manual conversion → table "clients"
+        users_with_advisor = select("clients")  # REVIEW: add filters
   db.users.find(
             {'advisor': {'$exists': True, '$ne': None}},
             {'advisor': 1}
@@ -5196,7 +5158,7 @@ async def get_all_users(
         skip = (page - 1) * limit
         
         # Obtener usuarios y total
-        users_list = # TODO: db.users.find needs manual conversion → table "clients"
+        users_list = select("clients")  # REVIEW: add filters
   db.users.find(query).skip(skip).limit(limit).to_list(length=limit)
         total = # TODO: db.users.count_documents needs manual conversion → table "clients"
   db.users.count_documents(query)
@@ -5256,7 +5218,7 @@ async def get_user_by_id(
         
         # Buscar usuario por _id (ObjectId)
         try:
-            user = # TODO: db.users.find_one needs manual conversion → table "clients"
+            user = select("clients", single=True)  # REVIEW: add filters
   db.users.find_one({"_id": ObjectId(user_id)})
         except:
             # Si falla con ObjectId, intentar con el campo 'id' (string)
@@ -5311,7 +5273,7 @@ async def update_user(
         # Buscar usuario por _id o id string
         user = None
         try:
-            user = # TODO: db.users.find_one needs manual conversion → table "clients"
+            user = select("clients", single=True)  # REVIEW: add filters
   db.users.find_one({"_id": ObjectId(user_id)})
         except:
             user = select("clients", filters={"id": user_id}, single=True)
@@ -5521,14 +5483,11 @@ async def run_unique_phone_migration(
                     # TODO: db.users.update_one needs manual conversion → table "clients"
 
                     
-                    db.users.update_one(
-                        {'_id': user['_id']},
-                        {'$set': {
+                    update("clients", {'id': user['id']}, {
                             'phone': new_phone,
                             'phone_duplicate_original': phone,
                             'updatedAt': datetime.now(timezone.utc).isoformat()
-                        }}
-                    )
+                        })
                     results["users_modified"] += 1
             
             results["duplicates_found"].append(dup_info)
@@ -5536,10 +5495,7 @@ async def run_unique_phone_migration(
         # Step 3: Handle empty phone strings
         if not dry_run:
             empty_result = # TODO: db.users.update_many needs manual conversion → table "clients"
-  db.users.update_many(
-                {'phone': ''},
-                {'$set': {'phone': None}}
-            )
+  update("clients", {'phone': ''}, {'phone': None})
             if empty_result.modified_count > 0:
                 results["empty_phones_converted"] = empty_result.modified_count
         
@@ -5846,7 +5802,7 @@ async def delete_user(
         user = None
         try:
             # Intentar primero como ObjectId
-            user = # TODO: db.users.find_one needs manual conversion → table "clients"
+            user = select("clients", single=True)  # REVIEW: add filters
   db.users.find_one({"_id": ObjectId(user_id)})
         except:
             pass
@@ -5952,7 +5908,7 @@ async def create_staff(
             )
         
         # Verificar que el email no existe
-        existing = # TODO: db.staff.find_one needs manual conversion → table "staff"
+        existing = select("staff", single=True)  # REVIEW: add filters
   db.staff.find_one({'email': request.email.lower()})
         if existing:
             raise HTTPException(status_code=400, detail="Email already exists")
@@ -6060,7 +6016,7 @@ async def export_staff(
                 query['department'] = staff_payload.get('department')
         
         # Obtener staff
-        staff_list = # TODO: db.staff.find needs manual conversion → table "staff"
+        staff_list = select("staff")  # REVIEW: add filters
   db.staff.find(query).to_list(length=1000)
         
         # Crear CSV en memoria
@@ -6172,7 +6128,7 @@ async def get_staff_detail(
             visa_by_status[doc["_id"]] = doc["count"]
 
         # Get list of visa cases (limited)
-        visa_cases = # TODO: db.visa_cases.find needs manual conversion → table "visa_cases"
+        visa_cases = select("visa_cases")  # REVIEW: add filters
   db.visa_cases.find(
             {"$or": [{"coordinatorId": staff_id}, {"salesRepId": staff_id}]},
             {"_id": 0, "id": 1, "userId": 1, "visaType": 1, "status": 1, "overallProgress": 1, "createdAt": 1, "updatedAt": 1}
@@ -6189,7 +6145,7 @@ async def get_staff_detail(
                 except Exception:
                     pass
                 user = # TODO: Complex query — needs manual conversion
- # Original: db.users.find_one({"$or": queries}, {"_id": 0, "name": 1, "email": 1})
+ # Original: select("clients", filters={"$or": queries}, {"id": 0, "name": 1, "email": 1}, single=True)
  select("clients", single=True)  # FIXME: add proper filters
             vc["clientName"] = user.get("name", "Sin nombre") if user else "Sin cliente"
             vc["clientEmail"] = user.get("email", "") if user else ""
@@ -6208,7 +6164,7 @@ async def get_staff_detail(
             classic_by_status[doc["_id"]] = doc["count"]
 
         # Get list of classic cases (limited)
-        classic_cases = # TODO: db.classic_cases.find needs manual conversion → table "classic_cases"
+        classic_cases = select("classic_cases")  # REVIEW: add filters
   db.classic_cases.find(
             {"coordinatorId": staff_id},
             {"_id": 0, "id": 1, "name": 1, "email": 1, "status": 1, "workStatus": 1, "createdAt": 1, "updatedAt": 1}
@@ -6276,7 +6232,7 @@ async def update_staff(
             update_data['name'] = request.name
         if request.email is not None:
             # Verificar que el email no esté en uso por otro staff
-            existing = # TODO: db.staff.find_one needs manual conversion → table "staff"
+            existing = select("staff", single=True)  # REVIEW: add filters
   db.staff.find_one({
                 'email': request.email.lower(),
                 '_id': {'$ne': staff_id}
@@ -6405,22 +6361,13 @@ async def transfer_staff_cases(
 
         # Transfer visa cases - coordinatorId
         visa_coord = # TODO: db.visa_cases.update_many needs manual conversion → table "visa_cases"
-  db.visa_cases.update_many(
-            {"coordinatorId": staff_id},
-            {"$set": {"coordinatorId": request.targetStaffId}}
-        )
+  update("visa_cases", {"coordinatorId": staff_id}, {"coordinatorId": request.targetStaffId})
         # Transfer visa cases - salesRepId
         visa_sales = # TODO: db.visa_cases.update_many needs manual conversion → table "visa_cases"
-  db.visa_cases.update_many(
-            {"salesRepId": staff_id},
-            {"$set": {"salesRepId": request.targetStaffId}}
-        )
+  update("visa_cases", {"salesRepId": staff_id}, {"salesRepId": request.targetStaffId})
         # Transfer classic cases - coordinatorId
         classic_coord = # TODO: db.classic_cases.update_many needs manual conversion → table "classic_cases"
-  db.classic_cases.update_many(
-            {"coordinatorId": staff_id},
-            {"$set": {"coordinatorId": request.targetStaffId}}
-        )
+  update("classic_cases", {"coordinatorId": staff_id}, {"coordinatorId": request.targetStaffId})
 
         total = visa_coord.modified_count + visa_sales.modified_count + classic_coord.modified_count
 
@@ -6466,7 +6413,7 @@ async def generate_whitepaper(case_id: str, staff_payload: dict = Depends(verify
     import asyncio as _asyncio
 
     # Check if there's already an active job
-    existing = # TODO: db.whitepaper_jobs.find_one needs manual conversion → table "book_jobs"
+    existing = select("book_jobs", single=True)  # REVIEW: add filters
   db.whitepaper_jobs.find_one(
         {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
         {"_id": 1}
@@ -6492,7 +6439,7 @@ async def generate_whitepaper(case_id: str, staff_payload: dict = Depends(verify
 @api_router.get("/admin/visa-cases/{case_id}/whitepaper-job")
 async def get_whitepaper_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest whitepaper generation job for a case"""
-    job = # TODO: db.whitepaper_jobs.find_one needs manual conversion → table "book_jobs"
+    job = select("book_jobs", single=True)  # REVIEW: add filters
   db.whitepaper_jobs.find_one(
         {"caseId": case_id},
         {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalWhitepaperId": 1, "externalClientId": 1, "updatedAt": 1},
@@ -6511,29 +6458,20 @@ async def get_whitepaper_job(case_id: str, staff_payload: dict = Depends(verify_
             # TODO: db.whitepaper_jobs.update_one needs manual conversion → table "book_jobs"
 
             
-            db.whitepaper_jobs.update_one(
-                {"_id": job["_id"]},
-                {"$set": {"progress": progress, "updatedAt": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("book_jobs", {"id": job["id"]}, {"progress": progress, "updatedAt": datetime.now(timezone.utc).isoformat()})
             job["progress"] = progress
             if ext_status == "completed":
                 # TODO: db.whitepaper_jobs.update_one needs manual conversion → table "book_jobs"
 
                 
-                db.whitepaper_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "completed", "currentStep": "White Paper generado exitosamente"}}
-                )
+                update("book_jobs", {"id": job["id"]}, {"status": "completed", "currentStep": "White Paper generado exitosamente"})
                 job["status"] = "completed"
                 job["currentStep"] = "White Paper generado exitosamente"
             elif ext_status == "error":
                 # TODO: db.whitepaper_jobs.update_one needs manual conversion → table "book_jobs"
 
                 
-                db.whitepaper_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "error", "error": "Error en generacion externa"}}
-                )
+                update("book_jobs", {"id": job["id"]}, {"status": "error", "error": "Error en generacion externa"})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll whitepaper status: {e}")
@@ -6551,7 +6489,7 @@ async def generate_policy_paper(case_id: str, staff_payload: dict = Depends(veri
     import uuid as uuid_mod
     import asyncio as _asyncio
 
-    existing = # TODO: db.policy_paper_jobs.find_one needs manual conversion → table "book_jobs"
+    existing = select("book_jobs", single=True)  # REVIEW: add filters
   db.policy_paper_jobs.find_one(
         {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
         {"_id": 1}
@@ -6577,7 +6515,7 @@ async def generate_policy_paper(case_id: str, staff_payload: dict = Depends(veri
 @api_router.get("/admin/visa-cases/{case_id}/policy-paper-job")
 async def get_policy_paper_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest policy paper generation job for a case"""
-    job = # TODO: db.policy_paper_jobs.find_one needs manual conversion → table "book_jobs"
+    job = select("book_jobs", single=True)  # REVIEW: add filters
   db.policy_paper_jobs.find_one(
         {"caseId": case_id},
         {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalPaperId": 1, "externalClientId": 1, "updatedAt": 1},
@@ -6596,20 +6534,14 @@ async def get_policy_paper_job(case_id: str, staff_payload: dict = Depends(verif
             # TODO: db.policy_paper_jobs.update_one needs manual conversion → table "book_jobs"
 
             
-            db.policy_paper_jobs.update_one(
-                {"_id": job["_id"]},
-                {"$set": {"progress": progress, "progressMessage": progress_msg, "updatedAt": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("book_jobs", {"id": job["id"]}, {"progress": progress, "progressMessage": progress_msg, "updatedAt": datetime.now(timezone.utc).isoformat()})
             job["progress"] = progress
             job["progressMessage"] = progress_msg
             if ext_status == "completed":
                 # TODO: db.policy_paper_jobs.update_one needs manual conversion → table "book_jobs"
 
                 
-                db.policy_paper_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "completed", "currentStep": "Policy Paper generado exitosamente"}}
-                )
+                update("book_jobs", {"id": job["id"]}, {"status": "completed", "currentStep": "Policy Paper generado exitosamente"})
                 job["status"] = "completed"
                 job["currentStep"] = "Policy Paper generado exitosamente"
             elif ext_status == "error":
@@ -6617,10 +6549,7 @@ async def get_policy_paper_job(case_id: str, staff_payload: dict = Depends(verif
                 # TODO: db.policy_paper_jobs.update_one needs manual conversion → table "book_jobs"
 
                 
-                db.policy_paper_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "error", "error": err_msg}}
-                )
+                update("book_jobs", {"id": job["id"]}, {"status": "error", "error": err_msg})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll policy paper status: {e}")
@@ -6632,7 +6561,7 @@ async def get_policy_paper_job(case_id: str, staff_payload: dict = Depends(verif
 @api_router.get("/admin/visa-cases/{case_id}/policy-paper-download")
 async def download_policy_paper(case_id: str, language: str = "es", staff_payload: dict = Depends(verify_staff_token)):
     """Proxy download of the generated policy paper PDF"""
-    job = # TODO: db.policy_paper_jobs.find_one needs manual conversion → table "book_jobs"
+    job = select("book_jobs", single=True)  # REVIEW: add filters
   db.policy_paper_jobs.find_one(
         {"caseId": case_id, "status": "completed"},
         {"externalPaperId": 1},
@@ -6671,7 +6600,7 @@ async def generate_econometric(case_id: str, staff_payload: dict = Depends(verif
     import uuid as uuid_mod
     import asyncio as _asyncio
 
-    existing = # TODO: db.econometric_jobs.find_one needs manual conversion → table "econometric_studies"
+    existing = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_jobs.find_one(
         {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
         {"_id": 1}
@@ -6697,7 +6626,7 @@ async def generate_econometric(case_id: str, staff_payload: dict = Depends(verif
 @api_router.get("/admin/visa-cases/{case_id}/econometric-job")
 async def get_econometric_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest econometric study job for a case"""
-    job = # TODO: db.econometric_jobs.find_one needs manual conversion → table "econometric_studies"
+    job = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_jobs.find_one(
         {"caseId": case_id},
         {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalStudyId": 1, "externalClientId": 1, "updatedAt": 1},
@@ -6715,29 +6644,20 @@ async def get_econometric_job(case_id: str, staff_payload: dict = Depends(verify
             # TODO: db.econometric_jobs.update_one needs manual conversion → table "econometric_studies"
 
             
-            db.econometric_jobs.update_one(
-                {"_id": job["_id"]},
-                {"$set": {"progress": progress, "updatedAt": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("econometric_studies", {"id": job["id"]}, {"progress": progress, "updatedAt": datetime.now(timezone.utc).isoformat()})
             job["progress"] = progress
             if ext_status in ("completed", "generation_complete"):
                 # TODO: db.econometric_jobs.update_one needs manual conversion → table "econometric_studies"
 
                 
-                db.econometric_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "completed", "currentStep": "Estudio Econometrico generado exitosamente"}}
-                )
+                update("econometric_studies", {"id": job["id"]}, {"status": "completed", "currentStep": "Estudio Econometrico generado exitosamente"})
                 job["status"] = "completed"
                 job["currentStep"] = "Estudio Econometrico generado exitosamente"
             elif ext_status == "generation_failed":
                 # TODO: db.econometric_jobs.update_one needs manual conversion → table "econometric_studies"
 
                 
-                db.econometric_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "error", "error": "Error en generacion externa"}}
-                )
+                update("econometric_studies", {"id": job["id"]}, {"status": "error", "error": "Error en generacion externa"})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll econometric status: {e}")
@@ -6749,7 +6669,7 @@ async def get_econometric_job(case_id: str, staff_payload: dict = Depends(verify
 @api_router.get("/admin/visa-cases/{case_id}/econometric-download")
 async def download_econometric(case_id: str, language: str = "es", staff_payload: dict = Depends(verify_staff_token)):
     """Proxy download of the generated econometric study PDF"""
-    job = # TODO: db.econometric_jobs.find_one needs manual conversion → table "econometric_studies"
+    job = select("econometric_studies", single=True)  # REVIEW: add filters
   db.econometric_jobs.find_one(
         {"caseId": case_id, "status": "completed"},
         {"externalStudyId": 1},
@@ -6782,7 +6702,7 @@ async def download_econometric(case_id: str, language: str = "es", staff_payload
 @api_router.get("/admin/visa-cases/{case_id}/book-preparation")
 async def get_book_preparation_admin(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get book preparation status (idea + title selected by client)"""
-    prep = # TODO: db.book_preparations.find_one needs manual conversion → table "book_preparations"
+    prep = select("book_preparations", single=True)  # REVIEW: add filters
   db.book_preparations.find_one(
         {"caseId": case_id},
         {"_id": 0}
@@ -6796,7 +6716,7 @@ async def generate_book(case_id: str, staff_payload: dict = Depends(verify_staff
     import uuid as uuid_mod
     import asyncio as _asyncio
 
-    existing = # TODO: db.book_jobs.find_one needs manual conversion → table "book_jobs"
+    existing = select("book_jobs", single=True)  # REVIEW: add filters
   db.book_jobs.find_one(
         {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
         {"_id": 1}
@@ -6822,7 +6742,7 @@ async def generate_book(case_id: str, staff_payload: dict = Depends(verify_staff
 @api_router.get("/admin/visa-cases/{case_id}/book-job")
 async def get_book_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest book generation job for a case"""
-    job = # TODO: db.book_jobs.find_one needs manual conversion → table "book_jobs"
+    job = select("book_jobs", single=True)  # REVIEW: add filters
   db.book_jobs.find_one(
         {"caseId": case_id},
         {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalBookId": 1, "externalClientId": 1, "updatedAt": 1},
@@ -6841,20 +6761,14 @@ async def get_book_job(case_id: str, staff_payload: dict = Depends(verify_staff_
             # TODO: db.book_jobs.update_one needs manual conversion → table "book_jobs"
 
             
-            db.book_jobs.update_one(
-                {"_id": job["_id"]},
-                {"$set": {"progress": progress, "progressMessage": progress_msg, "updatedAt": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("book_jobs", {"id": job["id"]}, {"progress": progress, "progressMessage": progress_msg, "updatedAt": datetime.now(timezone.utc).isoformat()})
             job["progress"] = progress
             job["progressMessage"] = progress_msg
             if ext_status == "completed":
                 # TODO: db.book_jobs.update_one needs manual conversion → table "book_jobs"
 
                 
-                db.book_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "completed", "currentStep": "Libro generado exitosamente"}}
-                )
+                update("book_jobs", {"id": job["id"]}, {"status": "completed", "currentStep": "Libro generado exitosamente"})
                 job["status"] = "completed"
                 job["currentStep"] = "Libro generado exitosamente"
             elif ext_status == "failed":
@@ -6862,10 +6776,7 @@ async def get_book_job(case_id: str, staff_payload: dict = Depends(verify_staff_
                 # TODO: db.book_jobs.update_one needs manual conversion → table "book_jobs"
 
                 
-                db.book_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "error", "error": err_msg}}
-                )
+                update("book_jobs", {"id": job["id"]}, {"status": "error", "error": err_msg})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll book status: {e}")
@@ -6877,7 +6788,7 @@ async def get_book_job(case_id: str, staff_payload: dict = Depends(verify_staff_
 @api_router.get("/admin/visa-cases/{case_id}/book-download")
 async def download_book(case_id: str, language: str = "es", staff_payload: dict = Depends(verify_staff_token)):
     """Proxy download of the generated book PDF"""
-    job = # TODO: db.book_jobs.find_one needs manual conversion → table "book_jobs"
+    job = select("book_jobs", single=True)  # REVIEW: add filters
   db.book_jobs.find_one(
         {"caseId": case_id, "status": "completed"},
         {"externalBookId": 1},
@@ -6916,7 +6827,7 @@ async def get_bp_preparation_admin(case_id: str, staff_payload: dict = Depends(v
 @api_router.get("/admin/visa-cases/{case_id}/bp-job")
 async def get_bp_job_admin(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest BP generation job for a case"""
-    job = # TODO: db.bp_jobs.find_one needs manual conversion → table "book_jobs"
+    job = select("book_jobs", single=True)  # REVIEW: add filters
   db.bp_jobs.find_one(
         {"caseId": case_id},
         {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "progress": 1, "externalNiwId": 1, "updatedAt": 1},
@@ -6966,7 +6877,7 @@ async def generate_case_study(case_id: str, staff_payload: dict = Depends(verify
     import uuid as uuid_mod
     import asyncio as _asyncio
 
-    existing = # TODO: db.case_study_jobs.find_one needs manual conversion → table "book_jobs"
+    existing = select("book_jobs", single=True)  # REVIEW: add filters
   db.case_study_jobs.find_one(
         {"caseId": case_id, "status": {"$in": ["processing", "generating"]}},
         {"_id": 1}
@@ -6992,7 +6903,7 @@ async def generate_case_study(case_id: str, staff_payload: dict = Depends(verify
 @api_router.get("/admin/visa-cases/{case_id}/case-study-job")
 async def get_case_study_job(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get latest case study generation job for a case"""
-    job = # TODO: db.case_study_jobs.find_one needs manual conversion → table "book_jobs"
+    job = select("book_jobs", single=True)  # REVIEW: add filters
   db.case_study_jobs.find_one(
         {"caseId": case_id},
         {"_id": 1, "status": 1, "currentStep": 1, "error": 1, "externalStudyId": 1, "externalClientId": 1, "updatedAt": 1},
@@ -7011,22 +6922,16 @@ async def get_case_study_job(case_id: str, staff_payload: dict = Depends(verify_
             # TODO: db.case_study_jobs.update_one needs manual conversion → table "book_jobs"
 
             
-            db.case_study_jobs.update_one(
-                {"_id": job["_id"]},
-                {"$set": {"updatedAt": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("book_jobs", {"id": job["id"]}, {"updatedAt": datetime.now(timezone.utc).isoformat()})
             if ext_status == "completed":
                 # TODO: db.case_study_jobs.update_one needs manual conversion → table "book_jobs"
 
                 
-                db.case_study_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {
+                update("book_jobs", {"id": job["id"]}, {
                         "status": "completed",
                         "currentStep": "Caso de Estudio generado exitosamente",
                         "coherenceScore": coherence_score,
-                    }}
-                )
+                    })
                 job["status"] = "completed"
                 job["currentStep"] = "Caso de Estudio generado exitosamente"
                 job["coherenceScore"] = coherence_score
@@ -7034,10 +6939,7 @@ async def get_case_study_job(case_id: str, staff_payload: dict = Depends(verify_
                 # TODO: db.case_study_jobs.update_one needs manual conversion → table "book_jobs"
 
                 
-                db.case_study_jobs.update_one(
-                    {"_id": job["_id"]},
-                    {"$set": {"status": "error", "error": "Error en generacion externa"}}
-                )
+                update("book_jobs", {"id": job["id"]}, {"status": "error", "error": "Error en generacion externa"})
                 job["status"] = "error"
         except Exception as e:
             logger.warning(f"Failed to poll case study status: {e}")
@@ -7049,7 +6951,7 @@ async def get_case_study_job(case_id: str, staff_payload: dict = Depends(verify_
 @api_router.get("/admin/visa-cases/{case_id}/case-study-download")
 async def download_case_study(case_id: str, language: str = "es", staff_payload: dict = Depends(verify_staff_token)):
     """Proxy download of the generated case study PDF"""
-    job = # TODO: db.case_study_jobs.find_one needs manual conversion → table "book_jobs"
+    job = select("book_jobs", single=True)  # REVIEW: add filters
   db.case_study_jobs.find_one(
         {"caseId": case_id, "status": "completed"},
         {"externalStudyId": 1},
@@ -7110,16 +7012,11 @@ async def reset_staff_password(
         # TODO: db.staff.update_one needs manual conversion → table "staff"
 
         
-        db.staff.update_one(
-            {'_id': staff_id},
-            {
-                '$set': {
+        update("staff", {'id': staff_id}, {
                     'passwordHash': password_hash,
                     'mustChangePassword': True,
                     'updatedAt': datetime.now(timezone.utc)
-                }
-            }
-        )
+                })
         
         # Log activity
         log = ActivityLog.create_log(
@@ -7314,7 +7211,7 @@ async def export_users(
                 query['assignedAdvisor'] = staff_payload['id']
         
         # Obtener usuarios
-        users_list = # TODO: db.users.find needs manual conversion → table "clients"
+        users_list = select("clients")  # REVIEW: add filters
   db.users.find(query).to_list(length=5000)
         
         # Crear CSV en memoria
@@ -7744,8 +7641,7 @@ async def create_user_with_case(
             logger.info(f"✅ Created {len(stages)} stages")
         
         # Copy deliverables from master case
-        master_deliverables_cursor = db.visa_deliverables.find({'caseId': MASTER_CASE_ID})
-        master_deliverables = await master_deliverables_cursor.to_list(length=None)
+        master_deliverables = select("visa_deliverables", filters={"case_id": MASTER_CASE_ID})
         
         all_deliverables = []
         stage_id_map = {s["stageNumber"]: s["_id"] for s in stages}
@@ -7786,8 +7682,7 @@ async def create_user_with_case(
             logger.info(f"✅ Created {len(all_deliverables)} deliverables")
         
         # Copy required documents from master case
-        master_documents_cursor = db.visa_client_documents.find({'caseId': MASTER_CASE_ID})
-        master_documents = await master_documents_cursor.to_list(length=None)
+        master_documents = select("visa_documents", filters={"case_id": MASTER_CASE_ID})
         
         all_documents = []
         for master_doc in master_documents:
@@ -8017,13 +7912,7 @@ async def integration_upsert_client(
         if request.visaType:
             update_fields["visaType"] = request.visaType
 
-        # TODO: Complex update — needs manual conversion
-
-
-        # Original: db.users.update_one({"_id": existing_user["_id"]}, {"$set": update_fields})
-
-
-        update("clients", {}, {})  # FIXME
+        update("users", filters={"id": user_id}, data=update_fields)
         action = "updated"
         logger.info(f"✅ [integration] User updated: {user_id} ({request.email})")
     else:
@@ -8081,22 +7970,19 @@ async def integration_upsert_client(
             })
 
     # ─── Upsert visa_case ────────────────────────────────────────────────────
-    existing_case = select("visa_cases", filters={"userId": user_id, "isMasterCase": {"$ne": True}}, single=True)
+    # Find non-master case for this user
+    sb = get_supabase()
+    _ec_result = sb.table("visa_cases").select("*").eq("client_id", user_id).neq("is_master_case", True).limit(1).execute()
+    existing_case = _ec_result.data[0] if _ec_result.data else None
     case_id = None
     case_action = "none"
 
     if existing_case:
-        case_id = str(existing_case.get("id") or existing_case.get("_id", ""))
-        # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
-
-        
-        db.visa_cases.update_one(
-            {"_id": existing_case["_id"]},
-            {"$set": {
-                "visaType": request.visaType or existing_case.get("visaType", "EB-2 NIW"),
-                "updatedAt": now_iso,
-            }}
-        )
+        case_id = str(existing_case.get("id", ""))
+        update("visa_cases", filters={"id": case_id}, data={
+            "visa_type": request.visaType or existing_case.get("visa_type", "EB-2 NIW"),
+            "updated_at": now_iso,
+        })
         case_action = "updated"
         logger.info(f"✅ [integration] Visa case updated: {case_id}")
     else:
@@ -8326,8 +8212,7 @@ async def create_visa_case(
             logger.info(f"✅ Created {len(stages)} stages")
         
         # Copy deliverables from master case
-        master_deliverables_cursor = db.visa_deliverables.find({'caseId': MASTER_CASE_ID})
-        master_deliverables = await master_deliverables_cursor.to_list(length=None)
+        master_deliverables = select("visa_deliverables", filters={"case_id": MASTER_CASE_ID})
         
         logger.info(f"📦 Copying {len(master_deliverables)} deliverables from master case...")
         
@@ -8370,8 +8255,7 @@ async def create_visa_case(
             logger.info(f"✅ Created {len(all_deliverables)} deliverables")
         
         # Copy required documents from master case
-        master_documents_cursor = db.visa_client_documents.find({'caseId': MASTER_CASE_ID})
-        master_documents = await master_documents_cursor.to_list(length=None)
+        master_documents = select("visa_documents", filters={"case_id": MASTER_CASE_ID})
         
         logger.info(f"📄 Copying {len(master_documents)} required documents from master case...")
         
@@ -8509,14 +8393,11 @@ async def get_all_visa_cases(
         # Filtro por nombre de coordinador - buscar primero el ID del coordinador
         if coordinatorName and coordinatorName != 'all':
             # Buscar el staff por nombre para obtener su ID
-            coordinator_staff = # TODO: db.staff.find_one needs manual conversion → table "staff"
-  db.staff.find_one(
-                {'name': {'$regex': f'^{coordinatorName}$', '$options': 'i'}},
-                {'_id': 1, 'id': 1}
-            )
+            sb = get_supabase()
+            _cs_result = sb.table("staff").select("id").ilike("name", coordinatorName).limit(1).execute()
+            coordinator_staff = _cs_result.data[0] if _cs_result.data else None
             if coordinator_staff:
-                # Staff uses _id as string UUID, not 'id' field
-                coord_id = str(coordinator_staff.get('_id'))
+                coord_id = str(coordinator_staff.get('id'))
                 query['coordinatorId'] = coord_id
             else:
                 # Si no se encuentra el coordinador, retornar vacío
@@ -8532,14 +8413,11 @@ async def get_all_visa_cases(
         
         # Filtro por nombre de vendedor - buscar en sellerId
         if salesRepName and salesRepName != 'all':
-            seller_staff = # TODO: db.staff.find_one needs manual conversion → table "staff"
-  db.staff.find_one(
-                {'name': {'$regex': f'^{salesRepName}$', '$options': 'i'}},
-                {'_id': 1, 'id': 1}
-            )
+            sb = get_supabase()
+            _ss_result = sb.table("staff").select("id").ilike("name", salesRepName).limit(1).execute()
+            seller_staff = _ss_result.data[0] if _ss_result.data else None
             if seller_staff:
-                # Staff uses _id as string UUID, not 'id' field
-                seller_id = str(seller_staff.get('_id'))
+                seller_id = str(seller_staff.get('id'))
                 query['sellerId'] = seller_id
             else:
                 query['sellerId'] = 'NOT_FOUND_SELLER'
@@ -8570,49 +8448,64 @@ async def get_all_visa_cases(
             }
             
             # Obtener IDs de usuarios que coinciden
-            matching_users = # TODO: db.users.find needs manual conversion → table "clients"
-  db.users.find(user_query, {'_id': 1, 'id': 1}).to_list(length=1000)
-            user_ids = []
-            for user in matching_users:
-                # Agregar tanto _id como id (pueden ser diferentes formatos)
-                if '_id' in user:
-                    user_ids.append(user['_id'])
-                    # También agregar como string para casos que usen string IDs
-                    user_ids.append(str(user['_id']))
-                if 'id' in user and user['id'] not in user_ids:
-                    user_ids.append(user['id'])
-            
-            # Filtrar casos por userId que coincidan con los usuarios encontrados
-            if user_ids:
-                query['userId'] = {'$in': user_ids}
+            sb = get_supabase()
+            _su_result = sb.table("users").select("id").or_(
+                f"name.ilike.%{search}%,email.ilike.%{search}%,phone.ilike.%{search}%"
+            ).limit(1000).execute()
+            matching_users = _su_result.data or []
+            _search_user_ids = [u['id'] for u in matching_users if u.get('id')]
+            if not _search_user_ids:
+                _search_user_ids = []  # Empty list = no results
+        
+        # Build Supabase query with all filters
+        sb = get_supabase()
+        q = sb.table("visa_cases").select("*")
+
+        # Apply simple equality filters from query dict
+        if query.get('userId'):
+            q = q.eq("client_id", query['userId'])
+        if query.get('status'):
+            q = q.eq("status", query['status'])
+        if query.get('visaType'):
+            q = q.eq("visa_type", query['visaType'])
+        if query.get('coordinatorId'):
+            q = q.eq("coordinator_id", query['coordinatorId'])
+        if query.get('salesRepId'):
+            q = q.eq("sales_rep_id", query['salesRepId'])
+        if query.get('sellerId'):
+            q = q.eq("seller_id", query['sellerId'])
+
+        # Date range filters
+        if dateFrom:
+            q = q.gte("created_at", dateFrom + "T00:00:00")
+        if dateTo:
+            q = q.lte("created_at", dateTo + "T23:59:59")
+
+        # Progress range filters
+        if progressMin is not None:
+            q = q.gte("overall_progress", progressMin)
+        if progressMax is not None:
+            q = q.lte("overall_progress", progressMax)
+
+        # Staff assigned filter (coordinator OR salesRep OR seller)
+        if _filter_staff_assigned:
+            q = q.or_(
+                f"coordinator_id.eq.{_filter_staff_assigned},sales_rep_id.eq.{_filter_staff_assigned},seller_id.eq.{_filter_staff_assigned}"
+            )
+
+        # Search user IDs filter
+        if search and hasattr(locals(), '_search_user_ids'):
+            if _search_user_ids:
+                q = q.in_("client_id", _search_user_ids)
             else:
-                # Si no hay usuarios que coincidan, no mostrar ningún caso
-                # (esto fuerza que el resultado sea vacío)
-                query['userId'] = {'$in': []}  # Array vacío = no resultados
-        
-        # Filtro de rango de fechas
-        if dateFrom or dateTo:
-            date_query = {}
-            if dateFrom:
-                # Parse fecha desde (inicio del día)
-                date_query['$gte'] = dateFrom + "T00:00:00"
-            if dateTo:
-                # Parse fecha hasta (final del día)
-                date_query['$lte'] = dateTo + "T23:59:59"
-            query['createdAt'] = date_query
-        
-        # Filtro de rango de progreso
-        if progressMin is not None or progressMax is not None:
-            progress_query = {}
-            if progressMin is not None:
-                progress_query['$gte'] = progressMin
-            if progressMax is not None:
-                progress_query['$lte'] = progressMax
-            query['overallProgress'] = progress_query
-        
-        # Obtener TODOS los casos (sin paginación todavía) para calcular score
-        all_cases = # TODO: db.visa_cases.find needs manual conversion → table "visa_cases"
-  db.visa_cases.find(query).to_list(length=None)
+                q = q.in_("client_id", ["__no_match__"])
+
+        all_cases = q.execute().data or []
+
+        # Post-filter: unassigned (no coordinator)
+        if _filter_unassigned:
+            all_cases = [c for c in all_cases if not c.get('coordinator_id')]
+
         total = len(all_cases)
         
         # ============ OPTIMIZACIÓN: BATCH QUERIES ============
@@ -8639,48 +8532,21 @@ async def get_all_visa_cases(
         # 2. Cargar todos los usuarios en batch
         users_map = {}
         if user_ids:
-            # Intentar cargar por ObjectId y por string id
-                        object_ids = []
-            string_ids = list(user_ids)
-            
-            for uid in user_ids:
-                if isinstance(uid, str) and len(uid) == 24:
-                    try:
-                        object_ids.append(ObjectId(uid))
-                    except:
-                        pass
-            
-            users_query = {'$or': []}
-            if object_ids:
-                users_query['$or'].append({'_id': {'$in': object_ids}})
-            if string_ids:
-                users_query['$or'].append({'id': {'$in': string_ids}})
-                users_query['$or'].append({'_id': {'$in': string_ids}})
-            
-            if users_query['$or']:
-                users_list = # TODO: db.users.find needs manual conversion → table "clients"
-  db.users.find(users_query).to_list(length=None)
-                for u in users_list:
-                    # Map by both _id and id
-                    if u.get('_id'):
-                        users_map[str(u['_id'])] = u
-                    if u.get('id'):
-                        users_map[str(u['id'])] = u
-        
+            sb = get_supabase()
+            _users_result = sb.table("users").select("*").in_("id", list(user_ids)).execute()
+            users_list = _users_result.data or []
+            for u in users_list:
+                if u.get('id'):
+                    users_map[str(u['id'])] = u
+
         # 3. Cargar todo el staff en batch (para coordinadores y vendedores)
         staff_map = {}
         all_staff_ids = coordinator_ids | seller_ids
         if all_staff_ids:
-            staff_list = # TODO: db.staff.find needs manual conversion → table "staff"
-  db.staff.find({
-                '$or': [
-                    {'_id': {'$in': list(all_staff_ids)}},
-                    {'id': {'$in': list(all_staff_ids)}}
-                ]
-            }).to_list(length=None)
+            sb = get_supabase()
+            _staff_result = sb.table("staff").select("*").in_("id", list(all_staff_ids)).execute()
+            staff_list = _staff_result.data or []
             for s in staff_list:
-                if s.get('_id'):
-                    staff_map[str(s['_id'])] = s
                 if s.get('id'):
                     staff_map[str(s['id'])] = s
         
@@ -8688,33 +8554,24 @@ async def get_all_visa_cases(
         stages_map = {}  # case_id -> last_paid_stage
         total_stages_map = {}  # case_id -> total_stages
         if case_ids:
-            # Agregación para obtener última etapa pagada por caso
-            pipeline = [
-                {'$match': {'caseId': {'$in': list(case_ids)}, 'isPaid': True}},
-                {'$group': {
-                    '_id': '$caseId',
-                    'lastPaidStage': {'$max': '$stageNumber'}
-                }}
-            ]
-            stages_agg = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.visa_stages.aggregate(pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
-            for s in stages_agg:
-                stages_map[s['_id']] = s['lastPaidStage']
-            
-            # Contar total de etapas por caso
-            count_pipeline = [
-                {'$match': {'caseId': {'$in': list(case_ids)}}},
-                {'$group': {
-                    '_id': '$caseId',
-                    'count': {'$sum': 1}
-                }}
-            ]
-            count_agg = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.visa_stages.aggregate(count_pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
-            for c in count_agg:
-                total_stages_map[c['_id']] = c['count']
+            # Get all stages for these cases in one query
+            sb = get_supabase()
+            _all_stages_result = sb.table("visa_stages").select("case_id,stage_number,is_paid").in_("case_id", list(case_ids)).execute()
+            _all_stages = _all_stages_result.data or []
+
+            # Compute last paid stage and total per case
+            from collections import defaultdict
+            _stage_counts = defaultdict(int)
+            _paid_max = defaultdict(int)
+            for s in _all_stages:
+                cid = s.get('case_id')
+                sn = s.get('stage_number', 0)
+                _stage_counts[cid] += 1
+                if s.get('is_paid'):
+                    _paid_max[cid] = max(_paid_max[cid], sn)
+
+            stages_map = dict(_paid_max)
+            total_stages_map = dict(_stage_counts)
         
         # ============ FIN BATCH QUERIES ============
         
@@ -8772,53 +8629,21 @@ async def get_all_visa_cases(
                 current_stage = case.get('currentStage', 1)
                 
                 # Obtener stats de documentos de la etapa actual
-                docs_stats = # TODO: db.visa_client_documents.aggregate needs manual conversion → table "visa_documents"
-  db.visa_client_documents.aggregate([
-                    {
-                        "$match": {
-                            "caseId": case_id,
-                            "stageNumber": current_stage
-                        }
-                    },
-                    {
-                        "$group": {
-                            "_id": None,
-                            "total_required": {
-                                "$sum": {"$cond": [{"$eq": ["$required", True]}, 1, 0]}
-                            },
-                            "required_validated": {
-                                "$sum": {
-                                    "$cond": [
-                                        {
-                                            "$and": [
-                                                {"$eq": ["$required", True]},
-                                                {"$eq": ["$status", "validated"]}
-                                            ]
-                                        },
-                                        1,
-                                        0
-                                    ]
-                                }
-                            },
-                            "uploaded_pending": {
-                                "$sum": {"$cond": [{"$eq": ["$status", "uploaded"]}, 1, 0]}
-                            }
-                        }
-                    }
-                ]).to_list(1)
-                
+                _case_docs = select("visa_documents", filters={"case_id": case_id, "stage_number": current_stage})
+                docs_stats = []
+                if _case_docs:
+                    _total_required = sum(1 for d in _case_docs if d.get('required'))
+                    _required_validated = sum(1 for d in _case_docs if d.get('required') and d.get('status') == 'validated')
+                    _uploaded_pending = sum(1 for d in _case_docs if d.get('status') == 'uploaded')
+                    docs_stats = [{'total_required': _total_required, 'required_validated': _required_validated, 'uploaded_pending': _uploaded_pending}]
+
                 # Entregables pendientes de etapa actual
-                deliverables_pending = count("visa_deliverables", {
-                    "caseId": case_id,
-                    "stageNumber": current_stage,
-                    "isCompleted": False
-                })
-                
+                _case_delivs = select("visa_deliverables", filters={"case_id": case_id, "stage_number": current_stage})
+                deliverables_pending = sum(1 for d in _case_delivs if not d.get('is_completed', False))
+
                 # Etapas sin pagar
-                stages_unpaid = count("visa_stages", {
-                    "caseId": case_id,
-                    "isPaid": False
-                })
+                _case_stages = select("visa_stages", filters={"case_id": case_id})
+                stages_unpaid = sum(1 for s in _case_stages if not s.get('is_paid', False))
                 
                 # Calcular días desde última actualización
                 from datetime import datetime, timezone
@@ -9040,39 +8865,28 @@ async def get_visa_case_detail(
                 stages = []
         
         # Obtener entregables
-        deliverables_query = {'caseId': case_id}
+        deliverables_filters = {"case_id": case_id}
         if user_role == 'acreditador' and acred_stage:
-            deliverables_query['stageNumber'] = acred_stage
-        deliverables = # TODO: db.visa_deliverables.find needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.find(deliverables_query).to_list(length=100)
-        
+            deliverables_filters["stage_number"] = acred_stage
+        deliverables = select("visa_deliverables", filters=deliverables_filters, limit=100)
+
         # Obtener documentos del cliente
-        documents_query = {'caseId': case_id}
+        documents_filters = {"case_id": case_id}
         if user_role == 'acreditador' and acred_stage:
-            documents_query['stageNumber'] = acred_stage
-        documents = # TODO: db.visa_client_documents.find needs manual conversion → table "visa_documents"
-  db.visa_client_documents.find(documents_query).to_list(length=100)
-        
+            documents_filters["stage_number"] = acred_stage
+        documents = select("visa_documents", filters=documents_filters, limit=100)
+
         # Obtener pagos
-        payments = # TODO: db.visa_payments.find needs manual conversion → table "payments"
-  db.visa_payments.find({'caseId': case_id}).to_list(length=10)
-        
+        payments = select("visa_payments", filters={"case_id": case_id}, limit=10)
+
         # Obtener reuniones
-        meetings = select("visa_meetings", filters={'caseId': case_id}, order="scheduled_at", order_desc=True)
-        
+        meetings = select("visa_meetings", filters={"case_id": case_id}, order="scheduled_at", order_desc=True)
+
         # Obtener info del usuario
         user = None
-        if case.get('userId'):
-            # Intentar primero como ObjectId si parece ser uno
-            try:
-                user = # TODO: db.users.find_one needs manual conversion → table "clients"
-  db.users.find_one({'_id': ObjectId(case['userId'])})
-            except:
-                pass
-            
-            # Si no se encontró, intentar como UUID en el campo 'id'
-            if not user:
-                user = select("clients", filters={'id': case['userId']}, single=True)
+        user_id_val = case.get('client_id') or case.get('userId')
+        if user_id_val:
+            user = select("users", filters={"id": user_id_val}, single=True)
         
         if user:
             case['user'] = {
@@ -9094,9 +8908,7 @@ async def get_visa_case_detail(
         
         # Obtener info de coordinadora
         if case.get('coordinatorId'):
-            coordinator = select("staff", filters={'_id': case['coordinatorId']}, single=True)
-            if not coordinator:
-                coordinator = select("staff", filters={'id': case['coordinatorId']}, single=True)
+            coordinator = select("staff", filters={"id": case.get('coordinator_id') or case.get('coordinatorId')}, single=True)
             if coordinator:
                 case['coordinator'] = {
                     'id': str(coordinator.get('_id') or coordinator.get('id')),
@@ -9108,11 +8920,9 @@ async def get_visa_case_detail(
                 case['coordinatorName'] = coordinator.get('name', '')
         
         # Obtener info de vendedor/a (check both sellerId and salesRepId)
-        seller_id = case.get('sellerId') or case.get('salesRepId')
+        seller_id = case.get('seller_id') or case.get('sales_rep_id') or case.get('sellerId') or case.get('salesRepId')
         if seller_id:
-            seller = select("staff", filters={'_id': seller_id}, single=True)
-            if not seller:
-                seller = select("staff", filters={'id': seller_id}, single=True)
+            seller = select("staff", filters={"id": seller_id}, single=True)
             if seller:
                 case['seller'] = {
                     'id': str(seller.get('_id') or seller.get('id')),
@@ -9172,14 +8982,8 @@ async def update_visa_case(
             update_data['totalAmount'] = request.totalAmount
         
         # Actualizar
-        # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
+        update("visa_cases", filters={"id": case_id}, data=update_data)
 
-        
-        db.visa_cases.update_one(
-            {'_id': case_id},
-            {'$set': update_data}
-        )
-        
         # Log de actividad
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
@@ -9188,26 +8992,25 @@ async def update_visa_case(
             resource_id=case_id,
             details=update_data
         )
-        insert("activity_logs", log)
-        
+        insert("activity_log", log)
+
         # Notifications for coordinator assignment and status change
         from services.case_notifications import notify_coordinator_assigned, notify_case_status_changed
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         performer = {"id": staff_payload['id'], "name": staff.get('name', 'Admin') if staff else 'Admin', "role": staff_payload.get('role', '')}
-        
+
         if request.coordinatorId is not None:
-            new_coord = select("staff", filters={'_id': request.coordinatorId}, single=True)
+            new_coord = select("staff", filters={"id": request.coordinatorId}, single=True)
             if new_coord:
-                user_doc = # TODO: db.users.find_one needs manual conversion → table "clients"
-  db.users.find_one({"$or": [{"_id": case.get("userId")}, {"id": case.get("userId")}]})
+                user_doc = select("users", filters={"id": case.get("client_id") or case.get("userId")}, single=True)
                 client_name = user_doc.get("name", "Cliente") if user_doc else "Cliente"
                 await notify_coordinator_assigned(db, case_id, new_coord.get('name', ''), new_coord.get('email', ''), client_name, performer)
-        
+
         if request.status and request.status != case.get('status'):
             await notify_case_status_changed(db, case_id, case.get('status', ''), request.status, performer)
-        
+
         # Obtener caso actualizado
-        updated_case = select("visa_cases", filters={'_id': case_id}, single=True)
+        updated_case = select("visa_cases", filters={"id": case_id}, single=True)
         
         return {
             'case': updated_case,
@@ -9316,27 +9119,19 @@ async def get_master_case(staff_payload: dict = Depends(verify_staff_token)):
     """Get the master case template with all its stages, deliverables, and documents"""
     try:
         # Get master case
-        master_case = # TODO: db.visa_cases.find_one needs manual conversion → table "visa_cases"
-  db.visa_cases.find_one(
-            {"caseId": MASTER_CASE_ID, "isMasterCase": True},
-            {'_id': 0}
-        )
-        
+        master_case = select("visa_cases", filters={"case_id": MASTER_CASE_ID, "is_master_case": True}, single=True)
+
         if not master_case:
             raise HTTPException(status_code=404, detail="Master case not found")
-        
+
         # Get stages
-        stages_cursor = # cursor replaced
- select("visa_stages", filters={'caseId': MASTER_CASE_ID}, {'_id': 0}, order="stage_number", order_desc=False)
-        stages = await stages_cursor.to_list(length=100)
+        stages = select("visa_stages", filters={"case_id": MASTER_CASE_ID}, order="stage_number", order_desc=False, limit=100)
         
         # Get deliverables
-        deliverables_cursor = db.visa_deliverables.find({'caseId': MASTER_CASE_ID}, {'_id': 0})
-        deliverables = await deliverables_cursor.to_list(length=1000)
+        deliverables = select("visa_deliverables", filters={"case_id": MASTER_CASE_ID}, limit=1000)
         
         # Get documents
-        documents_cursor = db.visa_client_documents.find({'caseId': MASTER_CASE_ID}, {'_id': 0})
-        documents = await documents_cursor.to_list(length=1000)
+        documents = select("visa_documents", filters={"case_id": MASTER_CASE_ID}, limit=1000)
         
         return {
             "success": True,
@@ -9486,15 +9281,8 @@ async def delete_deliverable_file(
             'updatedAt': datetime.now(timezone.utc).isoformat()
         }
         
-        # TODO: db.visa_deliverables.update_one needs manual conversion → table "visa_deliverables"
-
-        
-        
-        
-        db.visa_deliverables.update_one(
-            {'_id': deliverable_id},
-            {'$set': update_data, '$unset': {'notes': ''}}
-        )
+        update_data['notes'] = None  # Clear notes (replaces $unset)
+        update("visa_deliverables", filters={"id": deliverable_id}, data=update_data)
         
         # Log de actividad
         log = ActivityLog.create_log(
@@ -9559,16 +9347,8 @@ async def delete_single_deliverable_file(
             update_data['fileUrl'] = updated_files[-1].get('fileUrl')
             update_data['fileName'] = updated_files[-1].get('fileName')
         
-        # TODO: db.visa_deliverables.update_one needs manual conversion → table "visa_deliverables"
+        update("visa_deliverables", filters={"id": deliverable_id}, data=update_data)
 
-        
-        
-        
-        db.visa_deliverables.update_one(
-            {'_id': deliverable_id},
-            {'$set': update_data}
-        )
-        
         # Log de actividad
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
@@ -9628,17 +9408,11 @@ async def move_single_deliverable(
         old_stage = deliverable.get('stageNumber')
         
         # Update the deliverable's stage
-        result = # TODO: db.visa_deliverables.update_one needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.update_one(
-            {'_id': request.deliverable_id},
-            {
-                '$set': {
-                    'stageNumber': request.to_stage,
-                    'updatedAt': datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
-        
+        update("visa_deliverables", filters={"id": request.deliverable_id}, data={
+            "stage_number": request.to_stage,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
+
         # Log activity
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
@@ -9688,27 +9462,18 @@ async def move_single_document(
             raise HTTPException(status_code=404, detail="Caso no encontrado")
         
         # Verify document exists and belongs to this case
-        document = select("visa_documents", filters={
-            '_id': request.document_id,
-            'caseId': case_id
-        }, single=True)
-        
+        document = select("visa_documents", filters={"id": request.document_id, "case_id": case_id}, single=True)
+
         if not document:
             raise HTTPException(status_code=404, detail="Documento no encontrado en este caso")
-        
-        old_stage = document.get('stageNumber')
-        
+
+        old_stage = document.get('stage_number') or document.get('stageNumber')
+
         # Update the document's stage
-        result = # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
-  db.visa_client_documents.update_one(
-            {'_id': request.document_id},
-            {
-                '$set': {
-                    'stageNumber': request.to_stage,
-                    'updatedAt': datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+        update("visa_documents", filters={"id": request.document_id}, data={
+            "stage_number": request.to_stage,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
         
         # Log activity
         log = ActivityLog.create_log(
@@ -9764,18 +9529,12 @@ async def change_deliverable_stage(
         old_stage = deliverable.get('stageNumber')
         
         # Update the deliverable's stage
-        result = # TODO: db.visa_deliverables.update_one needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.update_one(
-            {'_id': deliverable_id},
-            {
-                '$set': {
-                    'stageNumber': request.stageNumber,
-                    'updatedAt': datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
-        
-        if result.modified_count == 0:
+        result = update("visa_deliverables", filters={"id": deliverable_id}, data={
+            "stage_number": request.stageNumber,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
+
+        if not result:
             raise HTTPException(status_code=400, detail="No se pudo actualizar el entregable")
         
         # Log activity
@@ -9818,25 +9577,19 @@ async def change_document_stage(
     """Change the stage of a client document"""
     try:
         # Find the document
-        document = select("visa_documents", filters={'_id': document_id}, single=True)
+        document = select("visa_documents", filters={"id": document_id}, single=True)
         if not document:
             raise HTTPException(status_code=404, detail="Documento no encontrado")
-        
-        old_stage = document.get('stageNumber')
-        
+
+        old_stage = document.get('stage_number') or document.get('stageNumber')
+
         # Update the document's stage
-        result = # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
-  db.visa_client_documents.update_one(
-            {'_id': document_id},
-            {
-                '$set': {
-                    'stageNumber': request.stageNumber,
-                    'updatedAt': datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
-        
-        if result.modified_count == 0:
+        result = update("visa_documents", filters={"id": document_id}, data={
+            "stage_number": request.stageNumber,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
+
+        if not result:
             raise HTTPException(status_code=400, detail="No se pudo actualizar el documento")
         
         # Log activity
@@ -9933,54 +9686,25 @@ async def upload_deliverable(
         if request.notes:
             update_data['notes'] = request.notes
         
-        # TODO: db.visa_deliverables.update_one needs manual conversion → table "visa_deliverables"
+        update("visa_deliverables", filters={"id": request.deliverableId}, data=update_data)
 
-        
-        
-        
-        db.visa_deliverables.update_one(
-            {'_id': request.deliverableId},
-            {'$set': update_data}
-        )
-        
         # Marcar actividad reciente en el caso principal para el cálculo de inactividad
-        # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
-
-        
-        db.visa_cases.update_one(
-            {"id": request.caseId},
-            {"$set": {"updatedAt": datetime.now(timezone.utc).isoformat()}}
-        )
+        update("visa_cases", filters={"id": request.caseId}, data={"updated_at": datetime.now(timezone.utc).isoformat()})
 
         # Actualizar progreso de la etapa
-        stage = select("visa_stages", filters={
-            'caseId': request.caseId,
-            'stageNumber': request.stageNumber
-        }, single=True)
-        
+        stage = select("visa_stages", filters={"case_id": request.caseId, "stage_number": request.stageNumber}, single=True)
+
         if stage:
             # Contar deliverables completados
-            completed = count("visa_deliverables", {
-                'stageId': stage['_id'],
-                'fileUrl': {'$exists': True, '$ne': None}
-            })
-            
-            # TODO: db.visa_stages.update_one needs manual conversion → table "visa_stages"
+            stage_deliverables = select("visa_deliverables", filters={"stage_id": stage['id'], "case_id": request.caseId})
+            completed = sum(1 for d in stage_deliverables if d.get('file_url') or d.get('fileUrl'))
 
-            
-            
-            
-            db.visa_stages.update_one(
-                {'_id': stage['_id']},
-                {
-                    '$set': {
-                        'deliverablesCompleted': completed,
-                        'updatedAt': datetime.now(timezone.utc).isoformat()
-                    }
-                }
-            )
-            
-            # 🔧 FIX: Update currentStage after deliverable completion
+            update("visa_stages", filters={"id": stage['id']}, data={
+                "deliverables_completed": completed,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            })
+
+            # Update currentStage after deliverable completion
             await update_case_current_stage(request.caseId)
         
         # Log de actividad
@@ -10048,12 +9772,11 @@ async def get_case_deliverables(
 ):
     """Get all deliverables for a case, optionally filtered by stage"""
     try:
-        query = {'caseId': case_id}
+        deliv_filters = {"case_id": case_id}
         if stageNumber:
-            query['stageNumber'] = stageNumber
-        
-        deliverables = # TODO: db.visa_deliverables.find needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.find(query).to_list(length=100)
+            deliv_filters["stage_number"] = stageNumber
+
+        deliverables = select("visa_deliverables", filters=deliv_filters, limit=100)
         
         return {
             'deliverables': deliverables,
@@ -10075,12 +9798,11 @@ async def get_case_documents(
 ):
     """Get all documents for a case"""
     try:
-        query = {'caseId': case_id}
+        doc_filters = {"case_id": case_id}
         if status:
-            query['status'] = status
-        
-        documents = # TODO: db.visa_client_documents.find needs manual conversion → table "visa_documents"
-  db.visa_client_documents.find(query).to_list(length=100)
+            doc_filters["status"] = status
+
+        documents = select("visa_documents", filters=doc_filters, limit=100)
         
         return {
             'documents': documents,
@@ -10115,27 +9837,17 @@ async def create_stage_template(
     """Create a new stage template and optionally apply it to existing cases"""
     try:
         # Verify staff has admin/super_admin role
-        staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
+        staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can create stage templates")
-        
+
         # Find the highest stage number in both collections
-        pipeline_visa = [
-            {"$group": {"_id": None, "maxStageNumber": {"$max": "$stageNumber"}}},
-        ]
-        pipeline_stages = [
-            {"$group": {"_id": None, "maxStageNumber": {"$max": "$stageNumber"}}},
-        ]
-        
-        result_visa = list(# TODO: Aggregate pipeline needs manual SQL conversion
-# Original: db.visa_stages.aggregate(pipeline_visa)
-[]  # FIXME: convert to SQL/Supabase RPC)
-        result_stages = list(# TODO: Aggregate pipeline needs manual SQL conversion
-# Original: db.stages.aggregate(pipeline_stages)
-[]  # FIXME: convert to SQL/Supabase RPC)
-        
-        max_visa = (result_visa[0]['maxStageNumber']) if result_visa and result_visa[0].get('maxStageNumber') else 0
-        max_stages = (result_stages[0]['maxStageNumber']) if result_stages and result_stages[0].get('maxStageNumber') else 0
+        sb = get_supabase()
+        _max_visa_r = sb.table("visa_stages").select("stage_number").order("stage_number", desc=True).limit(1).execute()
+        _max_stages_r = sb.table("stages").select("stageNumber").order("stageNumber", desc=True).limit(1).execute()
+
+        max_visa = _max_visa_r.data[0]['stage_number'] if _max_visa_r.data else 0
+        max_stages = _max_stages_r.data[0]['stageNumber'] if _max_stages_r.data else 0
         
         new_stage_number = max(max_visa, max_stages) + 1
         
@@ -10176,9 +9888,8 @@ async def create_stage_template(
         
         if request.apply_to == 'all_cases':
             # Get all cases - use _id as fallback
-            all_cases = # TODO: db.visa_cases.find needs manual conversion → table "visa_cases"
-  db.visa_cases.find({}).to_list(None)
-            case_ids_to_apply = [case.get('id') or case.get('_id') for case in all_cases if case.get('id') or case.get('_id')]
+            all_cases = select("visa_cases")
+            case_ids_to_apply = [case.get('id') for case in all_cases if case.get('id')]
             
         elif request.apply_to == 'selected_cases':
             case_ids_to_apply = request.case_ids
@@ -10193,22 +9904,14 @@ async def create_stage_template(
             
             for case_id in case_ids_to_apply:
                 try:
-                    # Get case - try both id and _id fields
-                    case = # TODO: Complex query — needs manual conversion
- # Original: db.visa_cases.find_one({
-                        "$or": [
-                            {"id": case_id},
-                            {"_id": case_id}
-                        ]
-                    })
- select("visa_cases", single=True)  # FIXME: add proper filters
-                    
+                    # Get case
+                    case = select("visa_cases", filters={"id": case_id}, single=True)
+
                     if not case:
                         logger.warning(f"Case {case_id} not found, skipping")
                         continue
-                    
-                    # Use the correct id field
-                    actual_case_id = case.get('id') or case.get('_id')
+
+                    actual_case_id = case.get('id')
                     
                     stage_instance = {
                         "id": str(uuid.uuid4()),
@@ -10296,13 +9999,22 @@ async def get_stage_templates(
             {"$sort": {"_id": 1}}
         ]
         
-        stages_in_cases = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.visa_stages.aggregate(pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
+        # Get all visa stages and group in Python
+        _all_vs = select("visa_stages")
+        from collections import defaultdict
+        _sg = defaultdict(lambda: {"names": set(), "descriptions": set(), "count": 0})
+        for s in _all_vs:
+            sn = s.get('stage_number') or s.get('stageNumber')
+            if sn is not None:
+                _sg[sn]["count"] += 1
+                name = s.get('name')
+                desc = s.get('description')
+                if name: _sg[sn]["names"].add(str(name))
+                if desc: _sg[sn]["descriptions"].add(str(desc))
+        stages_in_cases = [{"_id": sn, "names": list(g["names"]), "descriptions": list(g["descriptions"]), "totalCases": g["count"]} for sn, g in sorted(_sg.items())]
         
         # Get all stage templates from stages collection
-        stage_templates = # TODO: db.stages.find needs manual conversion → table "visa_stages"
-  db.stages.find({"isTemplate": True}).to_list(100)
+        stage_templates = select("stages", filters={"isTemplate": True}, limit=100)
         
         # Create a dict for quick lookup
         stages_dict = {}
@@ -10372,17 +10084,13 @@ async def update_stage_name_bulk(
             raise HTTPException(status_code=404, detail=f"No stages found with number {stage_number}")
         
         # Update all stages with this stage number
-        result = # TODO: db.visa_stages.update_many needs manual conversion → table "visa_stages"
-  db.visa_stages.update_many(
-            {"stageNumber": stage_number},
-            {
-                "$set": {
-                    "name": new_name,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
-        
+        sb = get_supabase()
+        _update_result = sb.table("visa_stages").update({
+            "name": new_name,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("stage_number", stage_number).execute()
+        result_modified_count = len(_update_result.data) if _update_result.data else 0
+
         # Log the activity
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
@@ -10392,10 +10100,10 @@ async def update_stage_name_bulk(
             details={
                 'stageNumber': stage_number,
                 'newName': new_name,
-                'affectedCases': result.modified_count
+                'affectedCases': result_modified_count
             }
         )
-        insert("activity_logs", log)
+        insert("activity_log", log)
         
         logger.info(f"Bulk stage name update: Stage {stage_number} renamed to '{new_name['es']}' - {result.modified_count} cases affected by staff {staff_payload['id']}")
         
@@ -10403,9 +10111,9 @@ async def update_stage_name_bulk(
             "message": f"Nombre de Etapa {stage_number} actualizado exitosamente",
             "stageNumber": stage_number,
             "newName": new_name,
-            "casesUpdated": result.modified_count
+            "casesUpdated": result_modified_count
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -10447,13 +10155,9 @@ async def update_stage_price(
             raise HTTPException(status_code=404, detail=f"Etapa {stage_number} no encontrada para este caso")
         
         # Update the stage amount
-        result = # TODO: db.visa_stages.update_one needs manual conversion → table "visa_stages"
-  db.visa_stages.update_one(
-            {"caseId": case_id, "stageNumber": stage_number},
-            {"$set": {"amount": request.amount}}
-        )
-        
-        if result.modified_count == 0:
+        result = update("visa_stages", filters={"case_id": case_id, "stage_number": stage_number}, data={"amount": request.amount})
+
+        if not result:
             raise HTTPException(status_code=400, detail="No se pudo actualizar el precio")
         
         # Log the action
@@ -10552,13 +10256,9 @@ async def update_stage_full(
             update_data["isUnlocked"] = request.isUnlocked
         
         # Update the stage
-        result = # TODO: db.visa_stages.update_one needs manual conversion → table "visa_stages"
-  db.visa_stages.update_one(
-            {"caseId": case_id, "stageNumber": stage_number},
-            {"$set": update_data}
-        )
-        
-        if result.modified_count == 0:
+        result = update("visa_stages", filters={"case_id": case_id, "stage_number": stage_number}, data=update_data)
+
+        if not result:
             raise HTTPException(status_code=400, detail="No se pudo actualizar la etapa")
         
         # Log the action
@@ -10599,22 +10299,18 @@ async def update_stage_description_bulk(
             "en": request.description_en or request.description_es
         }
         
-        affected_count = count("visa_stages", {"stageNumber": stage_number})
-        
+        affected_count = count("visa_stages", filters={"stage_number": stage_number})
+
         if affected_count == 0:
             raise HTTPException(status_code=404, detail=f"No stages found with number {stage_number}")
-        
-        result = # TODO: db.visa_stages.update_many needs manual conversion → table "visa_stages"
-  db.visa_stages.update_many(
-            {"stageNumber": stage_number},
-            {
-                "$set": {
-                    "description": new_description,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
-        
+
+        sb = get_supabase()
+        _desc_result = sb.table("visa_stages").update({
+            "description": new_description,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("stage_number", stage_number).execute()
+        result_modified_count = len(_desc_result.data) if _desc_result.data else 0
+
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
             action='bulk_update',
@@ -10622,17 +10318,17 @@ async def update_stage_description_bulk(
             resource_id=f"stage_{stage_number}",
             details={
                 'stageNumber': stage_number,
-                'affectedCases': result.modified_count
+                'affectedCases': result_modified_count
             }
         )
-        insert("activity_logs", log)
-        
-        logger.info(f"Bulk stage description update: Stage {stage_number} - {result.modified_count} cases affected")
-        
+        insert("activity_log", log)
+
+        logger.info(f"Bulk stage description update: Stage {stage_number} - {result_modified_count} cases affected")
+
         return {
-            "message": f"Descripción de Etapa {stage_number} actualizada exitosamente",
+            "message": f"Descripcion de Etapa {stage_number} actualizada exitosamente",
             "stageNumber": stage_number,
-            "casesUpdated": result.modified_count
+            "casesUpdated": result_modified_count
         }
         
     except HTTPException:
@@ -10729,9 +10425,28 @@ async def get_deliverable_templates(
             {"$sort": {"_id.stageNumber": 1, "_id.name.es": 1}}
         ]
         
-        deliverables = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.visa_deliverables.aggregate(pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
+        # Get all deliverables and group in Python
+        _all_delivs = select("visa_deliverables")
+        from collections import defaultdict
+        _dg = defaultdict(lambda: {"count": 0, "first": None})
+        for d in _all_delivs:
+            sn = d.get('stage_number') or d.get('stageNumber')
+            name = d.get('name') or {}
+            key = (sn, str(name))
+            _dg[key]["count"] += 1
+            if _dg[key]["first"] is None:
+                _dg[key]["first"] = d
+        deliverables = []
+        for (sn, _), g in sorted(_dg.items(), key=lambda x: (x[0][0] or 0, x[0][1])):
+            d = g["first"]
+            deliverables.append({
+                '_id': {'stageNumber': sn, 'name': d.get('name', {})},
+                'deliverableName': d.get('deliverableName') or d.get('deliverable_name'),
+                'description': d.get('description'),
+                'required': d.get('required', True),
+                'count': g["count"],
+                'sampleId': str(d.get('id', ''))
+            })
         
         # Group by stage
         stages_dict = {}
@@ -10804,10 +10519,8 @@ async def create_deliverable_template(
                 {"$match": {"stageNumber": request.stage_number}},
                 {"$group": {"_id": "$caseId"}}
             ]
-            result = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.visa_stages.aggregate(pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
-            case_ids_to_apply = [doc['_id'] for doc in result]
+            _stage_cases = select("visa_stages", filters={"stage_number": request.stage_number})
+            case_ids_to_apply = list(set(s.get('case_id') for s in _stage_cases if s.get('case_id')))
             
         elif request.apply_to == 'selected_cases':
             case_ids_to_apply = request.case_ids
@@ -10819,15 +10532,11 @@ async def create_deliverable_template(
             
             for case_id in case_ids_to_apply:
                 try:
-                    case = # TODO: Complex query — needs manual conversion
- # Original: db.visa_cases.find_one({
-                        "$or": [{"id": case_id}, {"_id": case_id}]
-                    })
- select("visa_cases", single=True)  # FIXME: add proper filters
+                    case = select("visa_cases", filters={"id": case_id}, single=True)
                     if not case:
                         continue
-                    
-                    actual_case_id = case.get('id') or case.get('_id')
+
+                    actual_case_id = case.get('id')
                     
                     deliverable_instance = {
                         "_id": str(uuid.uuid4()),
@@ -10902,35 +10611,28 @@ async def move_deliverable_to_stage(
             raise HTTPException(status_code=403, detail="Solo admins pueden mover entregables")
         
         # Find deliverables matching the name and source stage
-        query = {
-            "stageNumber": request.from_stage,
-            "$or": [
-                {"name.es": request.deliverable_name_es},
-                {"deliverableName": request.deliverable_name_es}
-            ]
-        }
-        
-        affected_count = # TODO: db.visa_deliverables.count_documents needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.count_documents(query)
-        
+        sb = get_supabase()
+        _match_result = sb.table("visa_deliverables").select("id").eq(
+            "stage_number", request.from_stage
+        ).or_(
+            f"name->>es.eq.{request.deliverable_name_es},deliverable_name.eq.{request.deliverable_name_es}"
+        ).execute()
+        matching_ids = [d['id'] for d in (_match_result.data or [])]
+        affected_count = len(matching_ids)
+
         if affected_count == 0:
             raise HTTPException(
-                status_code=404, 
+                status_code=404,
                 detail=f"No se encontraron entregables '{request.deliverable_name_es}' en la Etapa {request.from_stage}"
             )
-        
+
         # Update stage number for all matching deliverables
-        result = # TODO: db.visa_deliverables.update_many needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.update_many(
-            query,
-            {
-                "$set": {
-                    "stageNumber": request.to_stage,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
-        
+        _move_result = sb.table("visa_deliverables").update({
+            "stage_number": request.to_stage,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).in_("id", matching_ids).execute()
+        result_modified_count = len(_move_result.data) if _move_result.data else 0
+
         # Log activity
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
@@ -10940,19 +10642,19 @@ async def move_deliverable_to_stage(
             details={
                 'fromStage': request.from_stage,
                 'toStage': request.to_stage,
-                'affectedCount': result.modified_count
+                'affectedCount': result_modified_count
             }
         )
-        insert("activity_logs", log)
-        
-        logger.info(f"Moved deliverable '{request.deliverable_name_es}' from stage {request.from_stage} to {request.to_stage} - {result.modified_count} cases")
-        
+        insert("activity_log", log)
+
+        logger.info(f"Moved deliverable '{request.deliverable_name_es}' from stage {request.from_stage} to {request.to_stage} - {result_modified_count} cases")
+
         return {
             "message": f"Entregable movido exitosamente",
             "deliverableName": request.deliverable_name_es,
             "fromStage": request.from_stage,
             "toStage": request.to_stage,
-            "casesUpdated": result.modified_count
+            "casesUpdated": result_modified_count
         }
         
     except HTTPException:
@@ -10979,41 +10681,37 @@ async def rename_deliverable(
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Solo admins pueden renombrar entregables")
         
-        query = {
-            "stageNumber": request.stage_number,
-            "$or": [
-                {"name.es": request.old_name_es},
-                {"deliverableName": request.old_name_es}
-            ]
-        }
-        
+        # Find matching deliverables
+        sb = get_supabase()
+        _rename_match = sb.table("visa_deliverables").select("id").eq(
+            "stage_number", request.stage_number
+        ).or_(
+            f"name->>es.eq.{request.old_name_es},deliverable_name.eq.{request.old_name_es}"
+        ).execute()
+        rename_ids = [d['id'] for d in (_rename_match.data or [])]
+
         new_name = {
             "es": request.new_name_es,
             "en": request.new_name_en or request.new_name_es
         }
-        
-        result = # TODO: db.visa_deliverables.update_many needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.update_many(
-            query,
-            {
-                "$set": {
-                    "name": new_name,
-                    "deliverableName": request.new_name_es,
-                    "updatedAt": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
-        
-        if result.modified_count == 0:
+
+        if not rename_ids:
             raise HTTPException(status_code=404, detail="No se encontraron entregables para actualizar")
-        
-        logger.info(f"Renamed deliverable '{request.old_name_es}' to '{request.new_name_es}' - {result.modified_count} cases")
-        
+
+        _rename_result = sb.table("visa_deliverables").update({
+            "name": new_name,
+            "deliverable_name": request.new_name_es,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).in_("id", rename_ids).execute()
+        result_modified_count = len(_rename_result.data) if _rename_result.data else 0
+
+        logger.info(f"Renamed deliverable '{request.old_name_es}' to '{request.new_name_es}' - {result_modified_count} cases")
+
         return {
             "message": "Entregable renombrado exitosamente",
             "oldName": request.old_name_es,
             "newName": request.new_name_es,
-            "casesUpdated": result.modified_count
+            "casesUpdated": result_modified_count
         }
         
     except HTTPException:
@@ -11190,10 +10888,8 @@ async def create_document_template(
                 {"$match": {"stageNumber": request.stage_number}},
                 {"$group": {"_id": "$caseId"}}
             ]
-            result = # TODO: Aggregate pipeline needs manual SQL conversion
- # Original: db.visa_stages.aggregate(pipeline)
- []  # FIXME: convert to SQL/Supabase RPC
-            case_ids_to_apply = [doc['_id'] for doc in result]
+            _stage_cases = select("visa_stages", filters={"stage_number": request.stage_number})
+            case_ids_to_apply = list(set(s.get('case_id') for s in _stage_cases if s.get('case_id')))
             
         elif request.apply_to == 'selected_cases':
             case_ids_to_apply = request.case_ids
@@ -11205,15 +10901,11 @@ async def create_document_template(
             
             for case_id in case_ids_to_apply:
                 try:
-                    case = # TODO: Complex query — needs manual conversion
- # Original: db.visa_cases.find_one({
-                        "$or": [{"id": case_id}, {"_id": case_id}]
-                    })
- select("visa_cases", single=True)  # FIXME: add proper filters
+                    case = select("visa_cases", filters={"id": case_id}, single=True)
                     if not case:
                         continue
-                    
-                    actual_case_id = case.get('id') or case.get('_id')
+
+                    actual_case_id = case.get('id')
                     user_id = case.get('userId')
                     
                     document_instance = {
@@ -11306,15 +10998,15 @@ async def move_document_to_stage(
             )
         
         result = # TODO: db.visa_client_documents.update_many needs manual conversion → table "visa_documents"
-  db.visa_client_documents.update_many(
-            query,
-            {
+  update("visa_documents", {
                 "$set": {
                     "stageNumber": request.to_stage,
                     "updatedAt": datetime.now(timezone.utc).isoformat()
                 }
-            }
-        )
+            }, {
+                    "stageNumber": request.to_stage,
+                    "updatedAt": datetime.now(timezone.utc).isoformat()
+                })
         
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
@@ -11377,16 +11069,17 @@ async def rename_document(
         }
         
         result = # TODO: db.visa_client_documents.update_many needs manual conversion → table "visa_documents"
-  db.visa_client_documents.update_many(
-            query,
-            {
+  update("visa_documents", {
                 "$set": {
                     "name": new_name,
                     "documentName": request.new_name_es,
                     "updatedAt": datetime.now(timezone.utc).isoformat()
                 }
-            }
-        )
+            }, {
+                    "name": new_name,
+                    "documentName": request.new_name_es,
+                    "updatedAt": datetime.now(timezone.utc).isoformat()
+                })
         
         if result.modified_count == 0:
             raise HTTPException(status_code=404, detail="No se encontraron documentos para actualizar")
@@ -11531,10 +11224,7 @@ async def validate_client_document(
             # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
 
             
-            db.visa_cases.update_one(
-                {"id": case_id},
-                {"$set": {"updatedAt": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("visa_cases", {"id": case_id}, {"updatedAt": datetime.now(timezone.utc).isoformat()})
             staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
             doc_name = document.get('documentName') or document.get('name', {}).get('es', 'Documento')
             await log_case_audit(
@@ -11624,10 +11314,7 @@ async def reject_client_document(
             # TODO: db.visa_cases.update_one needs manual conversion → table "visa_cases"
 
             
-            db.visa_cases.update_one(
-                {"id": case_id},
-                {"$set": {"updatedAt": datetime.now(timezone.utc).isoformat()}}
-            )
+            update("visa_cases", {"id": case_id}, {"updatedAt": datetime.now(timezone.utc).isoformat()})
             staff = select("staff", filters={'_id': staff_payload['id']}, single=True)
             doc_name = document.get('documentName') or document.get('name', {}).get('es', 'Documento')
             await log_case_audit(
@@ -11702,15 +11389,15 @@ async def get_stage_detail(
             raise HTTPException(status_code=404, detail="Stage not found")
         
         # Obtener entregables de esta etapa
-        deliverables = # TODO: db.visa_deliverables.find needs manual conversion → table "visa_deliverables"
-  db.visa_deliverables.find({'stageId': stage['_id']}).to_list(length=50)
+        deliverables = select("visa_deliverables")  # REVIEW: add filters
+  select("visa_deliverables", filters={'stageId': stage['_id']})
         
         # Obtener documentos de esta etapa
-        documents = # TODO: db.visa_client_documents.find needs manual conversion → table "visa_documents"
-  db.visa_client_documents.find({
+        documents = select("visa_documents")  # REVIEW: add filters
+  select("visa_documents", filters={
             'caseId': case_id,
             'stageNumber': stage_number
-        }).to_list(length=50)
+        })
         
         return {
             'stage': stage,
@@ -11758,18 +11445,13 @@ async def update_stage_amount(
         
         # Update the stage amount
         result = # TODO: db.visa_stages.update_one needs manual conversion → table "visa_stages"
-  db.visa_stages.update_one(
-            {
+  update("visa_stages", {
                 'caseId': case_id,
                 'stageNumber': stage_number
-            },
-            {
-                '$set': {
+            }, {
                     'amount': request.amount,
                     'updatedAt': datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         if result.modified_count == 0:
             raise HTTPException(status_code=500, detail="Failed to update stage amount")
@@ -11857,14 +11539,14 @@ async def mark_intake_completed(phone: str = Form(...)):
         # Find the "Formulario de Intake" document
         # Try both old format (documentName) and new format (name.es or name.en)
         intake_doc = # TODO: Complex query — needs manual conversion
- # Original: db.visa_client_documents.find_one({
+ # Original: select("visa_documents", filters={
             "caseId": visa_case["id"],
             "$or": [
                 {"documentName": "Formulario de Intake"},
                 {"name.es": "Formulario de Intake"},
                 {"name.en": "Intake Form"}
             ]
-        })
+        }, single=True)
  select("visa_documents", single=True)  # FIXME: add proper filters
         
         if not intake_doc:
@@ -11874,16 +11556,11 @@ async def mark_intake_completed(phone: str = Form(...)):
         # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
 
         
-        db.visa_client_documents.update_one(
-            {"_id": intake_doc["_id"]},
-            {
-                "$set": {
+        update("visa_documents", {"id": intake_doc["id"]}, {
                     "status": "uploaded",  # Changed from pending to uploaded
                     "completedAt": datetime.now(timezone.utc).isoformat(),
                     "updatedAt": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         logger.info(f"Intake form marked as completed for user {phone}")
         
@@ -11934,17 +11611,12 @@ async def submit_document_text(
         # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
 
         
-        db.visa_client_documents.update_one(
-            {"_id": document_id},
-            {
-                "$set": {
+        update("visa_documents", {"id": document_id}, {
                     "textValue": text_value,
                     "status": "uploaded",  # Mark as uploaded for review
                     "uploadedAt": datetime.now(timezone.utc).isoformat(),
                     "updatedAt": datetime.now(timezone.utc).isoformat()
-                }
-            }
-        )
+                })
         
         logger.info(f"Text document submitted: {document_id} by user {user_id}")
         
@@ -12001,14 +11673,14 @@ async def upload_intake_form(
         # Find the "Formulario de Intake" document
         # Try both old format (documentName) and new format (name.es or name.en)
         intake_doc = # TODO: Complex query — needs manual conversion
- # Original: db.visa_client_documents.find_one({
+ # Original: select("visa_documents", filters={
             "caseId": visa_case["id"],
             "$or": [
                 {"documentName": "Formulario de Intake"},
                 {"name.es": "Formulario de Intake"},
                 {"name.en": "Intake Form"}
             ]
-        })
+        }, single=True)
  select("visa_documents", single=True)  # FIXME: add proper filters
         
         file_url = f"/api/documents/download/{unique_filename}"
@@ -12033,27 +11705,27 @@ async def upload_intake_form(
         # Also update "Formulario I-140 Completado" with the same file
         # Try both old format (documentName) and new format (name.es or name.en)
         i140_doc = # TODO: Complex query — needs manual conversion
- # Original: db.visa_client_documents.find_one({
+ # Original: select("visa_documents", filters={
             "caseId": visa_case["id"],
             "$or": [
                 {"documentName": "Formulario I-140 Completado"},
                 {"name.es": "Formulario I-140 Completado"},
                 {"name.en": "Completed I-140 Form"}
             ]
-        })
+        }, single=True)
  select("visa_documents", single=True)  # FIXME: add proper filters
         
         # If I-140 doesn't exist in documents, check deliverables
         if not i140_doc:
             i140_deliverable = # TODO: Complex query — needs manual conversion
- # Original: db.visa_deliverables.find_one({
+ # Original: select("visa_deliverables", filters={
                 "caseId": visa_case["id"],
                 "$or": [
                     {"deliverableName": "Formulario I-140 Completado"},
                     {"name.es": "Formulario I-140 Completado"},
                     {"name.en": "Completed I-140 Form"}
                 ]
-            })
+            }, single=True)
  select("visa_deliverables", single=True)  # FIXME: add proper filters
             
             if i140_deliverable:
@@ -12061,18 +11733,13 @@ async def upload_intake_form(
                 # TODO: db.visa_deliverables.update_one needs manual conversion → table "visa_deliverables"
 
                 
-                db.visa_deliverables.update_one(
-                    {"_id": i140_deliverable["_id"]},
-                    {
-                        "$set": {
+                update("visa_deliverables", {"id": i140_deliverable["id"]}, {
                             "status": "completed",
                             "fileUrl": file_url,
                             "fileName": file.filename,
                             "completedAt": datetime.now(timezone.utc).isoformat(),
                             "updatedAt": datetime.now(timezone.utc).isoformat()
-                        }
-                    }
-                )
+                        })
         else:
             # Update I-140 document with the same file
             # TODO: db.visa_client_documents.update_one needs manual conversion → table "visa_documents"
@@ -12197,7 +11864,7 @@ async def delete_test_user(request: DeleteTestUserRequest):
         elif request.phone:
             query['phone'] = request.phone
         
-        user = # TODO: db.users.find_one needs manual conversion → table "clients"
+        user = select("clients", single=True)  # REVIEW: add filters
   db.users.find_one(query)
         
         if not user:
@@ -12351,20 +12018,20 @@ async def export_uscis_migration_data():
         migration_data = {}
         
         # Export uscis_templates
-        templates = # TODO: db.uscis_templates.find needs manual conversion → table "uscis_templates"
-  db.uscis_templates.find({}).to_list(None)
+        templates = select("uscis_templates")  # REVIEW: add filters
+  select("uscis_templates")
         migration_data['uscis_templates'] = [serialize_doc(t) for t in templates]
         logger.info(f"Exported {len(templates)} USCIS templates")
         
         # Export uscis_shared_forms
-        shared_forms = # TODO: db.uscis_shared_forms.find needs manual conversion → table "uscis_submissions"
-  db.uscis_shared_forms.find({}).to_list(None)
+        shared_forms = select("uscis_submissions")  # REVIEW: add filters
+  select("uscis_shared_forms")
         migration_data['uscis_shared_forms'] = [serialize_doc(sf) for sf in shared_forms]
         logger.info(f"Exported {len(shared_forms)} USCIS shared forms")
         
         # Export uscis_submissions
-        submissions = # TODO: db.uscis_submissions.find needs manual conversion → table "uscis_submissions"
-  db.uscis_submissions.find({}).to_list(None)
+        submissions = select("uscis_submissions")  # REVIEW: add filters
+  select("uscis_submissions")
         migration_data['uscis_submissions'] = [serialize_doc(s) for s in submissions]
         logger.info(f"Exported {len(submissions)} USCIS submissions")
         
@@ -12420,20 +12087,12 @@ async def import_uscis_migration_data(
                         # TODO: db.uscis_templates.update_one needs manual conversion → table "uscis_templates"
 
                         
-                        db.uscis_templates.update_one(
-                            {'_id': obj_id},
-                            {'$set': {**template, '_id': obj_id}},
-                            upsert=True
-                        )
+                        update("uscis_templates", {'id': obj_id}, {**template, '_id': obj_id})
                     except:
                         # TODO: db.uscis_templates.update_one needs manual conversion → table "uscis_templates"
 
                         
-                        db.uscis_templates.update_one(
-                            {'_id': t_id},
-                            {'$set': {**template, '_id': t_id}},
-                            upsert=True
-                        )
+                        update("uscis_templates", {'id': t_id}, {**template, '_id': t_id})
                 else:
                     insert("uscis_templates", template)
             results['uscis_templates'] = len(request.uscis_templates)
@@ -12447,11 +12106,7 @@ async def import_uscis_migration_data(
                     # TODO: db.uscis_shared_forms.update_one needs manual conversion → table "uscis_submissions"
 
                     
-                    db.uscis_shared_forms.update_one(
-                        {'_id': s_id},
-                        {'$set': {**shared, '_id': s_id}},
-                        upsert=True
-                    )
+                    update("uscis_shared_forms", {'id': s_id}, {**shared, '_id': s_id})
                 else:
                     insert("uscis_submissions", shared)
             results['uscis_shared_forms'] = len(request.uscis_shared_forms)
@@ -12465,11 +12120,7 @@ async def import_uscis_migration_data(
                     # TODO: db.uscis_submissions.update_one needs manual conversion → table "uscis_submissions"
 
                     
-                    db.uscis_submissions.update_one(
-                        {'_id': sub_id},
-                        {'$set': {**submission, '_id': sub_id}},
-                        upsert=True
-                    )
+                    update("uscis_submissions", {'id': sub_id}, {**submission, '_id': sub_id})
                 else:
                     insert("uscis_submissions", submission)
             results['uscis_submissions'] = len(request.uscis_submissions)
