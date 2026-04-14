@@ -96,7 +96,8 @@ class VersionManager:
     
     def __init__(self, db):
         self.db = db
-        self.versions_collection = db['document_versions']
+        # Backwards-compat — only access if db is provided (legacy MongoDB)
+        self.versions_collection = db['document_versions'] if db else None
     
     async def create_version(
         self,

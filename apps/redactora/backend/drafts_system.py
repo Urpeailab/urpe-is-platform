@@ -38,7 +38,7 @@ class DraftsManager:
     
     def __init__(self, db):
         self.db = db
-        self.drafts_collection = db['drafts']
+        self.drafts_collection = db['drafts'] if db is not None else None
     
     async def create_draft(
         self,

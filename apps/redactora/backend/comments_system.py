@@ -67,8 +67,8 @@ class CommentsManager:
     
     def __init__(self, db):
         self.db = db
-        self.comments_collection = db['document_comments']
-        self.notifications_collection = db['comment_notifications']
+        self.comments_collection = db['document_comments'] if db is not None else None
+        self.notifications_collection = db['comment_notifications'] if db is not None else None
     
     async def check_document_access(
         self,
