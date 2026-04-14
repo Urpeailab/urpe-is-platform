@@ -6454,12 +6454,9 @@ Provide ONLY the translated content in English, maintaining all HTML formatting.
             logging.error(f"Error translating book content: {str(e)}")
             update_data['content_en'] = book['content']  # Fallback
     
-    # Update book in database (use correct collection)
+    # Update book in database
     if update_data:
-        await collection.update_one(
-            {"id": book_id},
-            {"$set": update_data}
-        )
+        update("generated_documents", {"id": book_id}, update_data)
     
     return {"success": True, "message": "Translation prepared successfully"}
 
@@ -7818,18 +7815,13 @@ async def generate_complete_patent(
         logging.warning("⚠️ Using English version for both languages due to translation error")
         complete_patent_es = complete_patent_en
     
-    # Save complete specifications to database - use the same collection where we found the patent
-    result = await patent_collection.update_one(
-        {"id": patent_id},
-        {
-            "$set": {
-                "complete_specification_en": complete_patent_en,
-                "complete_specification_es": complete_patent_es,
-                "generation_method": "complete_single_call",
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+    # Save complete specifications to database
+    update("patents", {"id": patent_id}, {
+        "complete_specification_en": complete_patent_en,
+        "complete_specification_es": complete_patent_es,
+        "generation_method": "complete_single_call",
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    })
     
     # AUTO-REMOVED: collection_name = "patents_in_progress" if True  # was patent_collection == db.patents_in_progress else "patents"
     # AUTO-REMOVED: logging.info(f"💾 Complete specifications saved to {collection_name} (matched: {1  # matched_count removed}, modified: {1  # modified_count removed})")
@@ -8165,7 +8157,7 @@ Write all content {language_instruction} following USPTO standards. Keep content
             
             
             
-            update("patents", {"id": patent_id}, {"$set": update_field})
+            update("patents", {"id": patent_id}, update_field)
             
             return {"message": "Section updated successfully"}
         
@@ -8521,12 +8513,12 @@ async def generate_patent_drawings(
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
     
-    # Clear old drawings to force regeneration with new system
-    collection_name = "patents" if is_finalized else db.patents_in_progress
-    await collection.update_one(
-        {"id": patent_id},
-        {"$unset": {"drawings_content": "", "drawings_content_en": "", "drawings_content_es": ""}}
-    )
+    # Clear old drawings to force regeneration (set to empty strings)
+    update("patents", {"id": patent_id}, {
+        "drawings_content": "",
+        "drawings_content_en": "",
+        "drawings_content_es": ""
+    })
     logging.info("🗑️ Cleared old drawings from database to force regeneration")
     
     try:
@@ -8561,11 +8553,7 @@ async def generate_patent_drawings(
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
-        collection_name = "patents" if is_finalized else db.patents_in_progress
-        await collection.update_one(
-            {"id": patent_id},
-            {"$set": update_data}
-        )
+        update("patents", {"id": patent_id}, update_data)
         
         return {
             "drawings": drawings_html, 
@@ -9277,7 +9265,7 @@ Keep the translations professional, technical, and concise."""
     # Update patent in database
 
     
-    update("patents", {"id": patent_id}, {"$set": update_data})
+    update("patents", {"id": patent_id}, update_data)
     
     return {"success": True, "message": "Translations generated successfully"}
 
@@ -11264,16 +11252,17 @@ async def edit_econometric_section_direct(
     if not section_number or not new_content:
         raise HTTPException(status_code=400, detail="Section number and content required")
     
-    # Update the specific section
-    await collection.update_one(
-        {"id": study_id, "sections.number": section_number},
-        {
-            "$set": {
-                "sections.$.content": new_content,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }
-        }
-    )
+    # Update the specific section (read-modify-write for array element)
+    _study = select("econometric_studies", filters={"id": study_id}, single=True)
+    if _study and _study.get("sections"):
+        _sections = _study["sections"]
+        for _s in _sections:
+            if _s.get("number") == section_number:
+                _s["content"] = new_content
+        update("econometric_studies", {"id": study_id}, {
+            "sections": _sections,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
     
     # If it's a completed study, also update full_content
     # AUTO-REMOVED: if True  # was collection == db.econometric_studies:
@@ -13432,7 +13421,7 @@ Use USPTO format with paragraph markers."""
                     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
                     
-                    update("patents", {"id": patent_id}, {"$set": update_data})
+                    update("patents", {"id": patent_id}, update_data)
                     logging.info(f"✅ Applied {len(corrections)} language corrections to database")
             else:
                 logging.info(f"✅ No Spanish contamination detected in final document")
@@ -13538,7 +13527,7 @@ Use USPTO format with paragraph markers."""
             
             
             
-            update("patents", {"id": patent_id}, {"$set": update_fields})
+            update("patents", {"id": patent_id}, update_fields)
             
             break
             
@@ -13604,7 +13593,7 @@ Use USPTO format with paragraph markers."""
             
             
             
-            update("patents", {"id": patent_id}, {"$set": update_fields})
+            update("patents", {"id": patent_id}, update_fields)
         else:
             # If evaluation failed completely, just mark as completed
 
@@ -14627,7 +14616,7 @@ async def update_client(
         
         
         
-        update("clients", {"id": client_id}, {"$set": update_dict})
+        update("clients", {"id": client_id}, update_dict)
         
         # Log activity
         activity = {
