@@ -53,7 +53,18 @@ _COLUMN_ALIASES = {
     'passwordHash': 'password_hash',
     'password': 'password_hash',
     'lastLogin': 'last_login_at',  # column may not exist
+    'user': 'client_name',  # generic 'user' field — assume client_name
+    'users': 'clients',  # tabla
+    'salesRepId': 'sales_rep_id',
+    'overallProgress': 'overall_progress',
+    'clientName': 'client_name',
+    'paidAmount': 'paid_amount',
+    'remainingBalance': 'remaining_balance',
+    'totalFee': 'total_fee',
 }
+
+# Columns that don't exist in any table - filter out from selects
+_UNKNOWN_COLUMNS = set()
 
 def _translate_key(k: str) -> str:
     """Convert a camelCase field name to snake_case for Supabase."""
@@ -67,6 +78,25 @@ def _translate_dict(d):
     if not isinstance(d, dict):
         return d
     return {_translate_key(k): v for k, v in d.items()}
+
+
+# Reverse alias map: snake_case → camelCase for backward compat
+def _snake_to_camel(s: str) -> str:
+    parts = s.split('_')
+    return parts[0] + ''.join(p.capitalize() for p in parts[1:])
+
+
+def _add_camel_aliases(d):
+    """Augment dict with camelCase aliases of snake_case keys (so legacy code keeps working)."""
+    if not isinstance(d, dict):
+        return d
+    out = dict(d)
+    for k, v in list(d.items()):
+        if '_' in k:
+            camel = _snake_to_camel(k)
+            if camel not in out:
+                out[camel] = v
+    return out
 
 
 def get_supabase() -> Client:
@@ -106,7 +136,7 @@ def select(table: str, columns: str = "*", filters: dict = None, single: bool = 
             q = q.eq(_translate_key(key), val)
 
     if order:
-        q = q.order(order, desc=order_desc)
+        q = q.order(_translate_key(order), desc=order_desc)
 
     if limit:
         q = q.limit(limit)
@@ -114,15 +144,19 @@ def select(table: str, columns: str = "*", filters: dict = None, single: bool = 
     result = q.execute()
 
     if single:
-        return result.data[0] if result.data else None
-    return result.data
+        if result.data:
+            return _add_camel_aliases(result.data[0])
+        return None
+    return [_add_camel_aliases(d) for d in result.data]
 
 
 def insert(table: str, data: dict) -> dict:
     """INSERT helper. Returns the inserted row."""
     sb = get_supabase()
     result = sb.table(table).insert(_translate_dict(data)).execute()
-    return result.data[0] if result.data else {}
+    if result.data:
+        return _add_camel_aliases(result.data[0])
+    return {}
 
 
 def update(table: str, filters: dict, data: dict) -> list:

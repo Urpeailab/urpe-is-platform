@@ -9,6 +9,7 @@ from uuid import uuid4
 from typing import Optional, List
 from pydantic import BaseModel
 import logging
+from db.supabase_client import select, insert, update as sb_update, delete, count, get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,7 @@ def setup_webinars_router(db, verify_staff_token):
     ):
         """Get all webinars"""
         try:
-            cursor = db.webinars.find({}, {'_id': 0}).limit(limit)
-            webinars = await cursor.to_list(length=limit)
+            webinars = select('webinars', limit=limit)
             
             return {
                 "success": True,
@@ -99,7 +99,7 @@ def setup_webinars_router(db, verify_staff_token):
                 "updatedAt": datetime.now(timezone.utc).isoformat()
             }
             
-            await db.webinars.insert_one(webinar)
+            insert('webinars', webinar)
             logger.info(f"Webinar created: {webinar_id} by {staff_payload.get('name', 'admin')}")
             
             return {
@@ -120,7 +120,7 @@ def setup_webinars_router(db, verify_staff_token):
         """Update a webinar"""
         try:
             # Check if webinar exists
-            webinar = await db.webinars.find_one({'id': webinar_id}, {'_id': 0})
+            webinar = select('webinars', filters={'id': webinar_id}, single=True)
             if not webinar:
                 raise HTTPException(status_code=404, detail="Webinar not found")
             
@@ -156,15 +156,12 @@ def setup_webinars_router(db, verify_staff_token):
                 update_data['language'] = request.language
             
             # Update webinar
-            await db.webinars.update_one(
-                {'id': webinar_id},
-                {'$set': update_data}
-            )
+            sb_update('webinars', {'id': webinar_id}, update_data)
             
             logger.info(f"Webinar updated: {webinar_id} by {staff_payload.get('name', 'admin')}")
             
             # Get updated webinar
-            updated_webinar = await db.webinars.find_one({'id': webinar_id}, {'_id': 0})
+            updated_webinar = select('webinars', filters={'id': webinar_id}, single=True)
             
             return {
                 "success": True,
@@ -185,12 +182,12 @@ def setup_webinars_router(db, verify_staff_token):
         """Delete a webinar"""
         try:
             # Check if webinar exists
-            webinar = await db.webinars.find_one({'id': webinar_id}, {'_id': 0})
+            webinar = select('webinars', filters={'id': webinar_id}, single=True)
             if not webinar:
                 raise HTTPException(status_code=404, detail="Webinar not found")
             
             # Delete webinar
-            await db.webinars.delete_one({'id': webinar_id})
+            delete('webinars', {'id': webinar_id})
             logger.info(f"Webinar deleted: {webinar_id} by {staff_payload.get('name', 'admin')}")
             
             return {
@@ -218,8 +215,7 @@ def setup_webinars_router(db, verify_staff_token):
             if webinar_type:
                 query['type'] = webinar_type
             
-            cursor = db.webinars.find(query, {'_id': 0}).sort('date', -1).limit(limit)
-            webinars = await cursor.to_list(length=limit)
+            webinars = select('webinars', filters=query, order='date', order_desc=True, limit=limit)
             
             return {
                 "success": True,
@@ -234,7 +230,7 @@ def setup_webinars_router(db, verify_staff_token):
     async def get_public_webinar_detail(webinar_id: str):
         """Get single webinar details for users"""
         try:
-            webinar = await db.webinars.find_one({'id': webinar_id}, {'_id': 0})
+            webinar = select('webinars', filters={'id': webinar_id}, single=True)
             if not webinar:
                 raise HTTPException(status_code=404, detail="Webinar not found")
             
@@ -256,7 +252,7 @@ def setup_webinars_router(db, verify_staff_token):
         """Register user to a webinar (requires user authentication in production)"""
         try:
             # Find webinar
-            webinar = await db.webinars.find_one({'id': webinar_id}, {'_id': 0})
+            webinar = select('webinars', filters={'id': webinar_id}, single=True)
             if not webinar:
                 raise HTTPException(status_code=404, detail="Webinar not found")
             
@@ -270,10 +266,10 @@ def setup_webinars_router(db, verify_staff_token):
             # Check if already registered
             user_id = user_data.get('userId')
             if user_id:
-                existing_registration = await db.webinar_registrations.find_one({
+                existing_registration = select('webinar_registrations', filters={
                     'webinarId': webinar_id,
                     'userId': user_id
-                })
+                }, single=True)
                 if existing_registration:
                     raise HTTPException(status_code=400, detail="Already registered")
             
@@ -287,13 +283,12 @@ def setup_webinars_router(db, verify_staff_token):
                 "registeredAt": datetime.now(timezone.utc).isoformat()
             }
             
-            await db.webinar_registrations.insert_one(registration)
+            insert('webinar_registrations', registration)
             
-            # Update registered count
-            await db.webinars.update_one(
-                {'id': webinar_id},
-                {'$inc': {'registeredCount': 1}}
-            )
+            # Update registered count (read-modify-write)
+            _w = select('webinars', filters={'id': webinar_id}, single=True)
+            if _w:
+                sb_update('webinars', {'id': webinar_id}, {'registered_count': (_w.get('registered_count', 0) or 0) + 1})
             
             logger.info(f"User registered to webinar: {webinar_id}")
             

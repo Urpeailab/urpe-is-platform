@@ -4265,6 +4265,20 @@ async def get_case_activities(
 @api_router.get("/admin/dashboard/stats")
 async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token)):
     """Dashboard avanzado: métricas por tipo de caso + top 10 prioritarios."""
+    try:
+        return await _dashboard_stats_impl(staff_payload)
+    except Exception as e:
+        logger.error(f"dashboard/stats error: {e}", exc_info=True)
+        # Return safe fallback so dashboard still loads
+        return {
+            "visa": {"total": 0, "byStatus": {}, "byType": {}, "avgProgress": 0, "totalPaid": 0, "totalPending": 0, "topPriority": []},
+            "classic": {"total": 0, "byStatus": {}, "byWorkStatus": {}, "avgProgress": 0, "topPriority": []},
+            "appointmentsPending": 0,
+            "error": str(e)[:200]
+        }
+
+
+async def _dashboard_stats_impl(staff_payload):
     from datetime import timedelta
     from collections import Counter
     now = datetime.now(timezone.utc)
@@ -4521,11 +4535,16 @@ async def get_dashboard_stats(staff_payload: dict = Depends(verify_staff_token))
 @api_router.get("/admin/dashboard/recent-activity")
 async def get_dashboard_recent_activity(staff_payload: dict = Depends(verify_staff_token), limit: int = 10):
     """Get recent activity across all cases."""
-    activities = select("case_audit_logs", order="timestamp", order_desc=True, limit=limit)
-    for a in activities:
-        if isinstance(a.get("timestamp"), datetime):
-            a["timestamp"] = a["timestamp"].isoformat()
-    return {"activity": activities}
+    try:
+        activities = select("case_audit_logs", order="created_at", order_desc=True, limit=limit)
+        for a in activities:
+            for k, v in list(a.items()):
+                if isinstance(v, datetime):
+                    a[k] = v.isoformat()
+        return {"activity": activities}
+    except Exception as e:
+        logger.error(f"recent-activity error: {e}")
+        return {"activity": [], "error": str(e)[:200]}
 
 
 @api_router.post("/admin/backfill-activity-dates")
@@ -4951,31 +4970,16 @@ async def get_all_staff(
 async def get_unique_advisors(
     staff_payload: dict = Depends(verify_staff_token)
 ):
-    """Get list of unique advisor names from users (for filtering visa cases)"""
+    """Get list of unique advisor names from staff (was: from users.advisor field)"""
     try:
-        # Obtener todos los usuarios que tienen advisor definido
-        # Fetch all clients and filter for those with advisor in Python
-        users_with_advisor = [u for u in select("clients", columns="advisor", limit=10000) if u.get("advisor")]
-        
-        # Extraer nombres únicos de advisors
-        advisor_names = set()
-        for user in users_with_advisor:
-            advisor = user.get('advisor')
-            if advisor:
-                if isinstance(advisor, dict):
-                    name = advisor.get('name')
-                    if name:
-                        advisor_names.add(name)
-                elif isinstance(advisor, str):
-                    advisor_names.add(advisor)
-        
-        # Ordenar y retornar
-        sorted_advisors = sorted(list(advisor_names))
-        
+        # Get all active advisors from staff table
+        all_staff = select("staff", columns="id,name,role", filters={"is_active": True})
+        advisor_names = sorted({s.get('name') for s in all_staff if s.get('name')})
+
         return {
             'success': True,
-            'advisors': sorted_advisors,
-            'total': len(sorted_advisors)
+            'advisors': list(advisor_names),
+            'total': len(advisor_names)
         }
         
     except Exception as e:
@@ -5365,7 +5369,7 @@ async def export_master_case():
     """
     try:
         # Buscar caso maestro
-        master_case = select("visa_cases", filters={"id": 'master_case_eb2_niw'}, single=True)
+        master_case = select("visa_cases", filters={"case_id": "master_case_eb2_niw"}, single=True)
         
         if not master_case:
             raise HTTPException(
@@ -5461,7 +5465,7 @@ async def import_master_case(
             )
         
         # Verificar si ya existe
-        existing_case = select("visa_cases", filters={"id": 'master_case_eb2_niw'}, single=True)
+        existing_case = select("visa_cases", filters={"case_id": "master_case_eb2_niw"}, single=True)
         
         if existing_case and not force:
             raise HTTPException(
@@ -5484,7 +5488,7 @@ async def import_master_case(
         
         # Eliminar existente si force=true
         if existing_case and force:
-            delete("visa_cases", {"id": "master_case_eb2_niw"})
+            delete("visa_cases", {"case_id": "master_case_eb2_niw"})
             results['previousCaseDeleted'] = True
             
             stages_result = delete("visa_stages", {'caseId': 'master_case_eb2_niw'})
@@ -5804,15 +5808,18 @@ async def export_staff(
                 staff.get('lastLogin', '')
             ])
         
-        # Log de actividad
-        log = ActivityLog.create_log(
-            staff_id=staff_payload['id'],
-            action='export',
-            resource='staff',
-            details={'count': len(staff_list), 'filters': query}
-        )
-        insert("activity_logs", log)
-        
+        # Log de actividad (best effort)
+        try:
+            log = ActivityLog.create_log(
+                staff_id=staff_payload['id'],
+                action='export',
+                resource='staff',
+                details={'count': len(staff_list), 'filters': {k: str(v) for k, v in (query or {}).items()}}
+            )
+            insert("activity_logs", log)
+        except Exception as _le:
+            logger.warning(f"activity_log skip: {_le}")
+
         # Preparar respuesta
         output.seek(0)
         filename = f"staff_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -8127,10 +8134,14 @@ async def get_all_visa_cases(
         stages_map = {}  # case_id -> last_paid_stage
         total_stages_map = {}  # case_id -> total_stages
         if case_ids:
-            # Get all stages for these cases in one query
+            # Get all stages for these cases — chunked to avoid PostgREST URL length limit
             sb = get_supabase()
-            _all_stages_result = sb.table("visa_stages").select("case_id,stage_number,is_paid").in_("case_id", list(case_ids)).execute()
-            _all_stages = _all_stages_result.data or []
+            _all_stages = []
+            _case_ids_list = list(case_ids)
+            for _i in range(0, len(_case_ids_list), 100):
+                _chunk = _case_ids_list[_i:_i + 100]
+                _r = sb.table("visa_stages").select("case_id,stage_number,is_paid").in_("case_id", _chunk).execute()
+                _all_stages.extend(_r.data or [])
 
             # Compute last paid stage and total per case
             from collections import defaultdict
@@ -8145,7 +8156,26 @@ async def get_all_visa_cases(
 
             stages_map = dict(_paid_max)
             total_stages_map = dict(_stage_counts)
-        
+
+        # Pre-fetch ALL docs/deliverables/stages for the cases (chunked)
+        _all_docs_map = defaultdict(list)
+        _all_delivs_map = defaultdict(list)
+        _all_stages_map = defaultdict(list)
+        if case_ids:
+            sb = get_supabase()
+            _case_ids_list = list(case_ids)
+            for _i in range(0, len(_case_ids_list), 100):
+                _chunk = _case_ids_list[_i:_i + 100]
+                _docs_r = sb.table("visa_documents").select("case_id,stage_number,required,status").in_("case_id", _chunk).execute()
+                for d in (_docs_r.data or []):
+                    _all_docs_map[d.get('case_id')].append(d)
+                _delivs_r = sb.table("visa_deliverables").select("case_id,stage_number,is_completed").in_("case_id", _chunk).execute()
+                for d in (_delivs_r.data or []):
+                    _all_delivs_map[d.get('case_id')].append(d)
+                # stages already loaded above into _all_stages
+            for s in _all_stages:
+                _all_stages_map[s.get('case_id')].append(s)
+
         # ============ FIN BATCH QUERIES ============
         
         # Para cada caso, usar los datos pre-cargados
@@ -8196,13 +8226,12 @@ async def get_all_visa_cases(
             case['totalStages'] = total_stages_map.get(case_id_for_stages, 11)
             
             # ============ CALCULAR SCORE DE PRIORIDAD (siempre) ============
-            # El score siempre se calcula para mostrarlo en las cards
-            if True:  # Siempre calcular
+            if True:
                 case_id = case.get('id')
                 current_stage = case.get('currentStage', 1)
-                
-                # Obtener stats de documentos de la etapa actual
-                _case_docs = select("visa_documents", filters={"case_id": case_id, "stage_number": current_stage})
+
+                # Use pre-fetched batch data instead of per-case queries
+                _case_docs = [d for d in (_all_docs_map.get(case_id) or []) if d.get('stage_number') == current_stage]
                 docs_stats = []
                 if _case_docs:
                     _total_required = sum(1 for d in _case_docs if d.get('required'))
@@ -8210,12 +8239,10 @@ async def get_all_visa_cases(
                     _uploaded_pending = sum(1 for d in _case_docs if d.get('status') == 'uploaded')
                     docs_stats = [{'total_required': _total_required, 'required_validated': _required_validated, 'uploaded_pending': _uploaded_pending}]
 
-                # Entregables pendientes de etapa actual
-                _case_delivs = select("visa_deliverables", filters={"case_id": case_id, "stage_number": current_stage})
+                _case_delivs = [d for d in (_all_delivs_map.get(case_id) or []) if d.get('stage_number') == current_stage]
                 deliverables_pending = sum(1 for d in _case_delivs if not d.get('is_completed', False))
 
-                # Etapas sin pagar
-                _case_stages = select("visa_stages", filters={"case_id": case_id})
+                _case_stages = _all_stages_map.get(case_id) or []
                 stages_unpaid = sum(1 for s in _case_stages if not s.get('is_paid', False))
                 
                 # Calcular días desde última actualización
