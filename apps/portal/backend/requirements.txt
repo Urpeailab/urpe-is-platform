@@ -91,8 +91,8 @@ pyflakes==3.4.0
 Pygments==2.19.2
 PyJWT==2.10.1
 pymongo==4.5.0
-PyMuPDF==1.24.0
-PyMuPDFb==1.24.0
+PyMuPDF==1.25.5
+# PyMuPDFb removed (bundled with PyMuPDF)
 pyparsing==3.3.1
 pypdf==6.9.1
 PyPDF2==3.0.1

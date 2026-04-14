@@ -21,11 +21,9 @@ load_dotenv(ROOT_DIR / '.env')
 # Supabase client helpers (replaces MongoDB motor)
 from db.supabase_client import select, insert, update, delete, count, upsert, get_supabase
 
-# TODO: Remove MongoDB connection once ALL endpoints are migrated to Supabase.
-# Kept temporarily because endpoints after line ~1770 still use the old `db` variable.
-_mongo_url = os.environ.get('MONGO_URL', '')
-_mongo_client = AsyncIOMotorClient(_mongo_url) if _mongo_url else None
-db = _mongo_client[os.environ.get('DB_NAME', 'urpe')] if _mongo_client else None
+# MongoDB removed — all endpoints use Supabase via db/supabase_client.py
+# `db` kept as compatibility alias for legacy code paths
+db = None
 
 # Database dependency for endpoints (legacy — used by non-migrated endpoints)
 def get_db():

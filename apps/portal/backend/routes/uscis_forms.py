@@ -24,8 +24,8 @@ from utils.auth_helpers import verify_staff_token_impl
 from bson import ObjectId
 
 # Import N8N mapping module
-import sys
-sys.path.append('/app/backend/data')
+import sys, os as _os
+sys.path.append(_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), 'data'))
 from i140_n8n_pdf_mapping import fill_i140_form_n8n
 
 # Import Gemini
