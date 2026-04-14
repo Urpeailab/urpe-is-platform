@@ -142,7 +142,7 @@ async def migrate_clients(db, supabase: Client) -> int:
             "cv_url": safe_str(doc.get("cvUrl")),
             "original_file_url": safe_str(doc.get("originalFileUrl")),
             "is_eligible": doc.get("eligible", False),
-            "eligible_report": json.dumps(doc["report"]) if doc.get("report") and isinstance(doc["report"], dict) else None,
+            "eligible_report": doc["report"] if doc.get("report") and isinstance(doc["report"], dict) else None,
             "welcome_shown": doc.get("welcome", False),
             "advisor_id": advisor_id,
             "mongo_portal_id": mongo_id,

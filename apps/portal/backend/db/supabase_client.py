@@ -1,27 +1,32 @@
 """
-Supabase client for URPE IS Portal.
+Supabase client for URPE IS Platform.
 Replaces MongoDB motor client. All database operations go through this module.
+Shared by both Portal and Redactora apps.
 """
 
 import os
 import logging
+import threading
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
 
 _supabase: Client = None
+_lock = threading.Lock()
 
 
 def get_supabase() -> Client:
-    """Get or create a Supabase client."""
+    """Get or create a Supabase client (thread-safe)."""
     global _supabase
     if _supabase is None:
-        url = os.environ.get("SUPABASE_URL")
-        key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-        if not url or not key:
-            raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
-        _supabase = create_client(url, key)
-        logger.info(f"Supabase client initialized: {url[:30]}...")
+        with _lock:
+            if _supabase is None:
+                url = os.environ.get("SUPABASE_URL")
+                key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+                if not url or not key:
+                    raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
+                _supabase = create_client(url, key)
+                logger.info(f"Supabase client initialized: {url[:30]}...")
     return _supabase
 
 
@@ -63,7 +68,12 @@ def insert(table: str, data: dict) -> dict:
 
 
 def update(table: str, filters: dict, data: dict) -> list:
-    """UPDATE helper. Returns updated rows."""
+    """UPDATE helper. Returns updated rows.
+
+    SAFETY: filters must not be empty to prevent updating all rows.
+    """
+    if not filters:
+        raise ValueError("update() requires non-empty filters to prevent updating all rows")
     sb = get_supabase()
     q = sb.table(table).update(data)
     for key, val in filters.items():
@@ -80,7 +90,12 @@ class _DeleteResult(list):
 
 
 def delete(table: str, filters: dict) -> "_DeleteResult":
-    """DELETE helper. Returns deleted rows with .deleted_count property."""
+    """DELETE helper. Returns deleted rows with .deleted_count property.
+
+    SAFETY: filters must not be empty to prevent deleting all rows.
+    """
+    if not filters:
+        raise ValueError("delete() requires non-empty filters to prevent deleting all rows")
     sb = get_supabase()
     q = sb.table(table).delete()
     for key, val in filters.items():

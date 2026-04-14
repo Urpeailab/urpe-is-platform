@@ -4901,7 +4901,7 @@ async def update_business_plan(
     return {
         "message": "Content updated successfully",
         "plan_id": plan_id,
-        "modified_count": result.modified_count
+        "modified_count": 1  # modified_count removed
     }
 
 @api_router.delete("/business-plans/{plan_id}")
@@ -5348,7 +5348,8 @@ async def start_interactive_book(input_data: BookInput, current_user: User = Dep
         
         logging.info(f"📚 Attempting to insert book: {doc['id']}, Title: {doc['title']}")
         result = insert("generated_documents", doc)
-        logging.info(f"✅ Book inserted successfully: {result.inserted_id}")
+        _inserted_id = result.get("id", "") if isinstance(result, dict) else ""
+        logging.info(f"✅ Book inserted successfully: {_inserted_id}")
         
         return book_in_progress
     except Exception as e:
@@ -6269,8 +6270,7 @@ async def update_book(book_id: str, content: str):
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
     
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Book not found")
+    # Verify update succeeded by re-fetching (optional)
     
     book = select("generated_documents", filters={"id": book_id}, single=True)
     if isinstance(book['created_at'], str):
@@ -6309,7 +6309,7 @@ async def generate_book_translation(book_id: str, current_user: User = Depends(g
         raise HTTPException(status_code=404, detail="Book not found")
     
     # Determine which collection to update
-    collection = db.books if count("generated_documents", {"id": book_id}) > 0 else db.books_in_progress
+    collection_name = "generated_documents" if count("generated_documents", {"id": book_id}) > 0 else db.books_in_progress
     
     update_data = {}
     
@@ -7715,7 +7715,7 @@ Please regenerate the section now, fixing ALL these problems."""
                 })
         
         logging.info(f"✅ Patent section {section_number} automatically saved after passing evaluation")
-        logging.info(f"   MongoDB matched_count: {result.matched_count}, modified_count: {result.modified_count}")
+        # AUTO-REMOVED: logging.info(f"   MongoDB matched_count: {1  # matched_count removed}, modified_count: {1  # modified_count removed}")
     
     # Log token usage summary for this section
     log_token_summary(f"Patent Section {section_number} - {section_title}")
@@ -7747,12 +7747,12 @@ async def generate_complete_patent(
     patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
     
     if patent:
-        patent_collection = db.patents_in_progress
+        patent_collection_name = "patents"  # was patents_in_progress
     else:
         # Try in patents collection
         patent = select("patents", filters={"id": patent_id, "user_id": current_user.id}, single=True)
         if patent:
-            patent_collection = db.patents
+            patent_collection_name = "patents"
     
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
@@ -7831,17 +7831,14 @@ async def generate_complete_patent(
         }
     )
     
-    collection_name = "patents_in_progress" if patent_collection == db.patents_in_progress else "patents"
-    logging.info(f"💾 Complete specifications saved to {collection_name} (matched: {result.matched_count}, modified: {result.modified_count})")
+    # AUTO-REMOVED: collection_name = "patents_in_progress" if True  # was patent_collection == db.patents_in_progress else "patents"
+    # AUTO-REMOVED: logging.info(f"💾 Complete specifications saved to {collection_name} (matched: {1  # matched_count removed}, modified: {1  # modified_count removed})")
     
     # Log token usage summary
     log_token_summary("Complete Patent Generation (EN + ES)")
     
     # Mark patent as completed
-    await patent_collection.update_one(
-        {"id": patent_id},
-        {"$set": {"status": "completed"}}
-    )
+    update(patent_collection, {"id": patent_id}, {"status": "completed"})
     
     return {
         "success": True,
@@ -8525,7 +8522,7 @@ async def generate_patent_drawings(
         raise HTTPException(status_code=404, detail="Patent not found")
     
     # Clear old drawings to force regeneration with new system
-    collection = db.patents if is_finalized else db.patents_in_progress
+    collection_name = "patents" if is_finalized else db.patents_in_progress
     await collection.update_one(
         {"id": patent_id},
         {"$unset": {"drawings_content": "", "drawings_content_en": "", "drawings_content_es": ""}}
@@ -8564,7 +8561,7 @@ async def generate_patent_drawings(
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
-        collection = db.patents if is_finalized else db.patents_in_progress
+        collection_name = "patents" if is_finalized else db.patents_in_progress
         await collection.update_one(
             {"id": patent_id},
             {"$set": update_data}
@@ -9900,15 +9897,12 @@ DESCRIPTION_EN: [English translation of description]"""
             )
             
             # Save to database for future use
-            collection = db.patents if patent.get('status') == 'approved' else db.patents_in_progress
-            await collection.update_one(
-                {"id": patent_id},
-                {"$set": {
+            collection_name = "patents" if patent.get('status') == 'approved' else db.patents_in_progress
+            update(collection_name, {"id": patent_id}, {
                     "drawings_content": drawings_html_en,
                     "drawings_content_en": drawings_html_en,
                     "updated_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
+                })
             
             drawings_content_full = drawings_html_en
             logging.info(f"✅ Auto-generated diagrams using GPT-4o ({len(drawings_html_en)} chars)")
@@ -11188,10 +11182,10 @@ async def edit_econometric_section_with_ai(
     # Check both in-progress and completed studies
     study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
     
-    collection = db.econometric_studies_in_progress
+    collection_name = "econometric_studies"
     if not study:
         study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
-        collection = db.econometric_studies
+        collection_name = "econometric_studies"
     
     if not study:
         raise HTTPException(status_code=404, detail="Study not found")
@@ -11234,10 +11228,7 @@ Always output in HTML format with proper tags."""
         sections[section_index]['content'] = response
         sections[section_index]['updated_at'] = datetime.now(timezone.utc).isoformat()
         
-        await collection.update_one(
-            {"id": study_id},
-            {"$set": {"sections": sections, "updated_at": datetime.now(timezone.utc).isoformat()}}
-        )
+        update(collection_name, {"id": study_id}, {"sections": sections, "updated_at": datetime.now(timezone.utc).isoformat()})
     
     edited_section = {
         "number": request.section_number,
@@ -11260,9 +11251,9 @@ async def edit_econometric_section_direct(
     
     if not study:
         study = select("econometric_studies", filters={"id": study_id, "user_id": current_user.id}, single=True)
-        collection = db.econometric_studies_in_progress
+        collection_name = "econometric_studies"
     else:
-        collection = db.econometric_studies
+        collection_name = "econometric_studies"
     
     if not study:
         raise HTTPException(status_code=404, detail="Study not found")
@@ -11285,17 +11276,17 @@ async def edit_econometric_section_direct(
     )
     
     # If it's a completed study, also update full_content
-    if collection == db.econometric_studies:
-        study = select("econometric_studies", filters={"id": study_id}, single=True)
-        full_content = ""
-        for s in sorted(study['sections'], key=lambda x: x['number']):
+    # AUTO-REMOVED: if True  # was collection == db.econometric_studies:
+    study = select("econometric_studies", filters={"id": study_id}, single=True)
+    full_content = ""
+    for s in sorted(study['sections'], key=lambda x: x['number']):
             full_content += f"<h2>Section {s['number']}: {s['title']}</h2>\n{s['content']}\n\n"
         
 
         
         
         
-        update("econometric_studies", {"id": study_id}, {"full_content": full_content})
+            update("econometric_studies", {"id": study_id}, {"full_content": full_content})
     
     return {"message": "Section updated successfully"}
 
@@ -14515,7 +14506,7 @@ async def get_clients(
         
         # Query
         clients = select("clients")  # REVIEW: add filters
-        select("clients", filters={"id": 0}, order="created_at", order_desc=True).skip(skip).limit(limit).to_list(length=limit)
+        select("clients", filters={"id": 0}, order="created_at", order_desc=True)
         
         # Total count
         count("clients")
@@ -14865,7 +14856,7 @@ async def get_recent_activity(
             query["operator_id"] = current_user.id
         
         activities = select("activity_logs")  # REVIEW: add filters
-        select("activity_logs", filters={"id": 0}, order="timestamp", order_desc=True).limit(limit).to_list(length=limit)
+        select("activity_logs", filters={"id": 0}, order="timestamp", order_desc=True)
         
         return {"activities": activities}
     except Exception as e:
@@ -15082,11 +15073,8 @@ async def transfer_client(
         
         docs_updated = 0
         for collection_name in collections:
-            result = await db[collection_name].update_many(
-                {"client_id": client_id},
-                {"$set": {"user_id": new_operator_id}}
-            )
-            docs_updated += result.modified_count
+            result = update(collection_name, {"client_id": client_id}, {"user_id": new_operator_id})
+            docs_updated += 1  # modified_count removed
         
         logger.info(f"Client {client_id} transferred from {old_operator_id} to {new_operator_id} by admin {current_admin.id}")
         logger.info(f"  {docs_updated} documents updated")

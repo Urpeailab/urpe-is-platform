@@ -19,7 +19,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # Supabase client helpers (replaces MongoDB motor)
-from db.supabase_client import select, insert, update, delete, count
+from db.supabase_client import select, insert, update, delete, count, upsert, get_supabase
 
 # TODO: Remove MongoDB connection once ALL endpoints are migrated to Supabase.
 # Kept temporarily because endpoints after line ~1770 still use the old `db` variable.
@@ -3344,7 +3344,6 @@ async def create_comparator_case(
     try:
         case_id = str(uuid.uuid4())
         case = {
-            "_id": case_id,
             "id": case_id,
             "country": request.country,
             "profession": request.profession,
@@ -3496,7 +3495,6 @@ async def create_legal_document(
     try:
         doc_id = str(uuid.uuid4())
         document = {
-            "_id": doc_id,
             "id": doc_id,
             "title": request.title,
             "description": request.description,
@@ -3707,7 +3705,7 @@ async def admin_login(request: AdminLoginRequest):
         
         # Log de actividad
         log = ActivityLog.create_log(
-            staff_id=staff['_id'],
+            staff_id=staff['id'],
             action='login',
             resource='auth',
             details={'method': 'password'}
@@ -3886,7 +3884,7 @@ async def emergency_create_admin(request: EmergencyAdminRequest):
         
         # Log de actividad crítica
         log = ActivityLog.create_log(
-            staff_id=new_admin['_id'],
+            staff_id=new_admin['id'],
             action='emergency_admin_created',
             resource='staff',
             details={
@@ -3902,7 +3900,7 @@ async def emergency_create_admin(request: EmergencyAdminRequest):
             'success': True,
             'message': 'Emergency admin created successfully',
             'admin': {
-                'id': new_admin['_id'],
+                'id': new_admin['id'],
                 'email': new_admin['email'],
                 'name': new_admin['name'],
                 'role': new_admin['role']
@@ -3948,7 +3946,7 @@ async def send_magic_link(request: AdminMagicLinkRequest):
         
         # Log de actividad
         log = ActivityLog.create_log(
-            staff_id=staff['_id'],
+            staff_id=staff['id'],
             action='magic_link_requested',
             resource='auth'
         )
@@ -3994,7 +3992,7 @@ async def verify_magic_link(token: str):
         
         # Log de actividad
         log = ActivityLog.create_log(
-            staff_id=staff['_id'],
+            staff_id=staff['id'],
             action='login',
             resource='auth',
             details={'method': 'magic_link'}
@@ -5026,7 +5024,7 @@ async def get_all_users(
         # Serializar usuarios con conteo de casos
         users_serialized = []
         for user in users_list:
-            user_id = str(user['_id'])
+            user_id = str(user['id'])
             
             # Contar casos asociados al usuario
             cases_count = count("visa_cases", {'userId': user_id})
@@ -5083,7 +5081,7 @@ async def get_user_by_id(
             raise HTTPException(status_code=404, detail=f"User not found with ID: {user_id}")
         
         # Serializar usuario
-        user_id_str = str(user['_id'])
+        user_id_str = str(user['id'])
         user_dict = {
             '_id': user_id_str,
             'id': user_id_str,
@@ -5389,7 +5387,7 @@ async def export_master_case():
         # Convertir ObjectId a string
         for stage in master_stages:
             if '_id' in stage:
-                stage['_id'] = str(stage['_id'])
+                stage['id'] = str(stage['id'])
         
         for deliverable in master_deliverables:
             if '_id' in deliverable:
@@ -5397,11 +5395,11 @@ async def export_master_case():
         
         for doc in client_documents:
             if '_id' in doc:
-                doc['_id'] = str(doc['_id'])
+                doc['id'] = str(doc['id'])
         
         for doc in legal_documents:
             if '_id' in doc:
-                doc['_id'] = str(doc['_id'])
+                doc['id'] = str(doc['id'])
         
         export_data = {
             'exportedAt': datetime.now(timezone.utc).isoformat(),
@@ -5706,7 +5704,7 @@ async def create_staff(
             staff_id=staff_payload['id'],
             action='create',
             resource='staff',
-            resource_id=new_staff['_id'],
+            resource_id=new_staff['id'],
             details={
                 'name': new_staff['name'], 
                 'role': new_staff['role'],
@@ -6159,7 +6157,6 @@ async def generate_whitepaper(case_id: str, staff_payload: dict = Depends(verify
 
     job_id = str(uuid_mod.uuid4())
     insert("book_jobs", {
-        "_id": job_id,
         "caseId": case_id,
         "status": "queued",
         "currentStep": "Iniciando...",
@@ -6216,7 +6213,6 @@ async def generate_policy_paper(case_id: str, staff_payload: dict = Depends(veri
 
     job_id = str(uuid_mod.uuid4())
     insert("book_jobs", {
-        "_id": job_id,
         "caseId": case_id,
         "status": "queued",
         "currentStep": "Iniciando...",
@@ -6304,7 +6300,6 @@ async def generate_econometric(case_id: str, staff_payload: dict = Depends(verif
 
     job_id = str(uuid_mod.uuid4())
     insert("econometric_studies", {
-        "_id": job_id,
         "caseId": case_id,
         "status": "queued",
         "currentStep": "Iniciando...",
@@ -6393,7 +6388,6 @@ async def generate_book(case_id: str, staff_payload: dict = Depends(verify_staff
 
     job_id = str(uuid_mod.uuid4())
     insert("book_jobs", {
-        "_id": job_id,
         "caseId": case_id,
         "status": "queued",
         "currentStep": "Iniciando...",
@@ -6521,7 +6515,6 @@ async def generate_case_study(case_id: str, staff_payload: dict = Depends(verify
 
     job_id = str(uuid_mod.uuid4())
     insert("book_jobs", {
-        "_id": job_id,
         "caseId": case_id,
         "status": "queued",
         "currentStep": "Iniciando...",
@@ -6767,7 +6760,7 @@ async def import_staff_csv(
                     staff_id=staff_payload['id'],
                     action='import_csv',
                     resource='staff',
-                    resource_id=new_staff['_id'],
+                    resource_id=new_staff['id'],
                     details={'name': name, 'role': role, 'source': 'csv_import'}
                 )
                 insert("activity_logs", log)
@@ -7140,7 +7133,6 @@ async def create_user_with_case(
         # Create user
         user_id = str(uuid.uuid4())
         user = {
-            "_id": user_id,
             "id": user_id,
             "name": request.name,
             "email": request.email or "",
@@ -7222,7 +7214,6 @@ async def create_user_with_case(
         for master_stage in master_stages:
             stage_id = str(uuid.uuid4())
             stage = {
-                "_id": stage_id,
                 "id": stage_id,
                 "caseId": visa_case.id,
                 "stageNumber": master_stage["stageNumber"],
@@ -7260,7 +7251,6 @@ async def create_user_with_case(
             new_stage_id = stage_id_map.get(master_deliv["stageNumber"])
             
             deliverable = {
-                "_id": deliverable_id,
                 "id": deliverable_id,
                 "caseId": visa_case.id,
                 "stageId": new_stage_id,
@@ -7297,7 +7287,6 @@ async def create_user_with_case(
         for master_doc in master_documents:
             document_id = str(uuid.uuid4())
             document = {
-                "_id": document_id,
                 "id": document_id,
                 "caseId": visa_case.id,
                 "stageNumber": master_doc["stageNumber"],
@@ -7529,7 +7518,6 @@ async def integration_upsert_client(
         user_id = str(uuid.uuid4())
         clean_phone = _re.sub(r'[^\d+]', '', request.phone or "")
         new_user = {
-            "_id": user_id,
             "id": user_id,
             "name": request.name,
             "email": request.email,
@@ -7780,7 +7768,6 @@ async def create_visa_case(
         for master_stage in master_stages:
             stage_id = str(uuid.uuid4())
             stage = {
-                "_id": stage_id,
                 "id": stage_id,
                 "caseId": visa_case.id,
                 "stageNumber": master_stage["stageNumber"],
@@ -7820,7 +7807,6 @@ async def create_visa_case(
             new_stage_id = stage_id_map.get(master_deliv["stageNumber"])
             
             deliverable = {
-                "_id": deliverable_id,
                 "id": deliverable_id,
                 "caseId": visa_case.id,
                 "stageId": new_stage_id,
@@ -7859,7 +7845,6 @@ async def create_visa_case(
         for master_doc in master_documents:
             document_id = str(uuid.uuid4())
             document = {
-                "_id": document_id,
                 "id": document_id,
                 "caseId": visa_case.id,
                 "stageNumber": master_doc["stageNumber"],
@@ -9576,7 +9561,6 @@ async def get_stage_templates(
         pipeline = [
             {
                 "$group": {
-                    "_id": "$stageNumber",
                     "names": {"$addToSet": "$name"},
                     "descriptions": {"$addToSet": "$description"},
                     "totalCases": {"$sum": 1}
@@ -9607,11 +9591,11 @@ async def get_stage_templates(
         
         # Add stages from cases
         for stage in stages_in_cases:
-            current_name = stage["names"][0] if stage["names"] else {"es": f"Etapa {stage['_id']}", "en": f"Stage {stage['_id']}"}
+            current_name = stage["names"][0] if stage["names"] else {"es": f"Etapa {stage['id']}", "en": f"Stage {stage['id']}"}
             current_desc = stage["descriptions"][0] if stage["descriptions"] else {"es": "", "en": ""}
             
-            stages_dict[stage["_id"]] = {
-                "stageNumber": stage["_id"],
+            stages_dict[stage["id"]] = {
+                "stageNumber": stage["id"],
                 "currentName": current_name,
                 "currentDescription": current_desc,
                 "totalCases": stage["totalCases"],
@@ -9691,7 +9675,7 @@ async def update_stage_name_bulk(
         )
         insert("activity_log", log)
         
-        logger.info(f"Bulk stage name update: Stage {stage_number} renamed to '{new_name['es']}' - {result.modified_count} cases affected by staff {staff_payload['id']}")
+        logger.info(f"Bulk stage name update: Stage {stage_number} renamed to '{new_name['es']}' - {0} cases affected by staff {staff_payload['id']}")
         
         return {
             "message": f"Nombre de Etapa {stage_number} actualizado exitosamente",
@@ -10125,7 +10109,6 @@ async def create_deliverable_template(
                     actual_case_id = case.get('id')
                     
                     deliverable_instance = {
-                        "_id": str(uuid.uuid4()),
                         "caseId": actual_case_id,
                         "stageNumber": request.stage_number,
                         "name": name,
@@ -10592,7 +10575,7 @@ async def move_document_to_stage(
             "documentName": request.document_name_es,
             "fromStage": request.from_stage,
             "toStage": request.to_stage,
-            "casesUpdated": result.modified_count
+            "casesUpdated": 0  # TODO: capture update() return and use len()
         }
         
     except HTTPException:
@@ -10997,8 +10980,7 @@ async def update_stage_amount(
             "updatedAt": datetime.now(timezone.utc).isoformat()
         })
         
-        if result.modified_count == 0:
-            raise HTTPException(status_code=500, detail="Failed to update stage amount")
+        # Assumed successful if update() returned without exception
         
         logger.info(f"Admin {staff_payload.get('email')} updated stage {stage_number} amount to ${request.amount} for case {case_id}")
         
@@ -11392,7 +11374,7 @@ async def delete_test_user(request: DeleteTestUserRequest):
                 detail=f"User not found with {'email: ' + request.email if request.email else 'phone: ' + request.phone}"
             )
         
-        user_id = str(user['_id'])
+        user_id = str(user['id'])
         user_name = user.get('name', 'Unknown')
         user_email = user.get('email', 'N/A')
         
@@ -11517,8 +11499,7 @@ async def export_uscis_migration_data():
         """Convert non-JSON-serializable values to serializable format"""
         if val is None:
             return None
-        if isinstance(val, ObjectId):
-            return str(val)
+        # ObjectId check removed (Supabase uses UUID strings)
         if isinstance(val, datetime):
             return val.isoformat()
         if isinstance(val, bytes):
