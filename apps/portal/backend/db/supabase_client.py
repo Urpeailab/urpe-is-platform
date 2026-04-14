@@ -6,6 +6,7 @@ Shared by both Portal and Redactora apps.
 
 import os
 import logging
+import re
 import threading
 from supabase import create_client, Client
 
@@ -13,6 +14,59 @@ logger = logging.getLogger(__name__)
 
 _supabase: Client = None
 _lock = threading.Lock()
+
+# Column name aliases: camelCase → snake_case
+# Auto-translates legacy camelCase field names to new PostgreSQL snake_case columns
+_COLUMN_ALIASES = {
+    'userId': 'client_id',
+    'clientId': 'client_id',
+    'caseId': 'case_id',
+    'stageId': 'stage_id',
+    'stageNumber': 'stage_number',
+    'staffId': 'staff_id',
+    'advisorId': 'advisor_id',
+    'coordinatorId': 'coordinator_id',
+    'salesRepId': 'advisor_id',  # alias
+    'createdAt': 'created_at',
+    'updatedAt': 'updated_at',
+    'userState': 'user_state',
+    'isActive': 'is_active',
+    'isPaid': 'is_paid',
+    'isMasterCase': 'is_master_case',
+    'currentStage': 'current_stage',
+    'paymentMethod': 'payment_method',
+    'paymentDate': 'paid_at',
+    'visaType': 'visa_type',
+    'fileUrl': 'file_url',
+    'fileName': 'file_name',
+    'documentType': 'document_type',
+    'rejectionReason': 'rejection_reason',
+    'revisionCount': 'revision_count',
+    'scheduledAt': 'scheduled_at',
+    'meetingUrl': 'meeting_url',
+    'receiptUrl': 'receipt_url',
+    'cvUrl': 'cv_url',
+    'originalFileUrl': 'original_file_url',
+    'templateId': 'template_id',
+    'formType': 'form_type',
+    'formData': 'form_data',
+    'passwordHash': 'password_hash',
+    'password': 'password_hash',
+    'lastLogin': 'last_login_at',  # column may not exist
+}
+
+def _translate_key(k: str) -> str:
+    """Convert a camelCase field name to snake_case for Supabase."""
+    if k in _COLUMN_ALIASES:
+        return _COLUMN_ALIASES[k]
+    # Generic camelCase → snake_case fallback
+    return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', k).lower()
+
+def _translate_dict(d):
+    """Translate dict keys recursively."""
+    if not isinstance(d, dict):
+        return d
+    return {_translate_key(k): v for k, v in d.items()}
 
 
 def get_supabase() -> Client:
@@ -41,11 +95,15 @@ def select(table: str, columns: str = "*", filters: dict = None, single: bool = 
         select("visa_cases", filters={"client_id": uuid}, order="created_at", limit=10)
     """
     sb = get_supabase()
+    # Translate columns string (e.g. "coordinatorId,userId" → "coordinator_id,client_id")
+    if columns and columns != "*":
+        cols = [_translate_key(c.strip()) for c in columns.split(",")]
+        columns = ",".join(cols)
     q = sb.table(table).select(columns)
 
     if filters:
         for key, val in filters.items():
-            q = q.eq(key, val)
+            q = q.eq(_translate_key(key), val)
 
     if order:
         q = q.order(order, desc=order_desc)
@@ -63,7 +121,7 @@ def select(table: str, columns: str = "*", filters: dict = None, single: bool = 
 def insert(table: str, data: dict) -> dict:
     """INSERT helper. Returns the inserted row."""
     sb = get_supabase()
-    result = sb.table(table).insert(data).execute()
+    result = sb.table(table).insert(_translate_dict(data)).execute()
     return result.data[0] if result.data else {}
 
 
@@ -75,9 +133,9 @@ def update(table: str, filters: dict, data: dict) -> list:
     if not filters:
         raise ValueError("update() requires non-empty filters to prevent updating all rows")
     sb = get_supabase()
-    q = sb.table(table).update(data)
+    q = sb.table(table).update(_translate_dict(data))
     for key, val in filters.items():
-        q = q.eq(key, val)
+        q = q.eq(_translate_key(key), val)
     result = q.execute()
     return result.data
 
@@ -99,7 +157,7 @@ def delete(table: str, filters: dict) -> "_DeleteResult":
     sb = get_supabase()
     q = sb.table(table).delete()
     for key, val in filters.items():
-        q = q.eq(key, val)
+        q = q.eq(_translate_key(key), val)
     result = q.execute()
     return _DeleteResult(result.data)
 
@@ -117,7 +175,7 @@ def count(table: str, filters: dict = None) -> int:
     q = sb.table(table).select("id", count="exact")
     if filters:
         for key, val in filters.items():
-            q = q.eq(key, val)
+            q = q.eq(_translate_key(key), val)
     result = q.execute()
     return result.count or 0
 

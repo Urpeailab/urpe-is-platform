@@ -18,11 +18,10 @@ class ActivityLog:
             details: Additional details about the action
         """
         return {
-            'id': str(uuid4()),
-            'staffId': staff_id,
+            'staff_id': staff_id,
             'action': action,
-            'resource': resource,
-            'resourceId': resource_id,
+            'entity_type': resource,
+            'entity_id': resource_id,
             'details': details or {},
-            'timestamp': datetime.now(timezone.utc)
+            'created_at': datetime.now(timezone.utc).isoformat(),
         }

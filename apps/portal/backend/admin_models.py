@@ -133,7 +133,7 @@ class StaffModel:
         permissions = staff.get('permissions', DEFAULT_PERMISSIONS.get(role, {}))
         
         payload = {
-            'id': staff['_id'],
+            'id': staff.get('id') or staff.get('_id'),
             'email': staff['email'],
             'name': staff.get('name', ''),
             'role': role,
@@ -217,15 +217,14 @@ def serialize_staff(staff: Dict[str, Any]) -> Dict[str, Any]:
     """Serialize staff for JSON response (remove sensitive data)"""
     staff_copy = staff.copy()
     staff_copy.pop('passwordHash', None)
+    staff_copy.pop('password_hash', None)
+    staff_copy.pop('password', None)
     staff_copy.pop('magicLinkToken', None)
     staff_copy.pop('magicLinkExpires', None)
-    
-    # Convert datetime to ISO string
-    if 'createdAt' in staff_copy and isinstance(staff_copy['createdAt'], datetime):
-        staff_copy['createdAt'] = staff_copy['createdAt'].isoformat()
-    if 'updatedAt' in staff_copy and isinstance(staff_copy['updatedAt'], datetime):
-        staff_copy['updatedAt'] = staff_copy['updatedAt'].isoformat()
-    if 'lastLogin' in staff_copy and staff_copy['lastLogin'] and isinstance(staff_copy['lastLogin'], datetime):
-        staff_copy['lastLogin'] = staff_copy['lastLogin'].isoformat()
-    
+
+    # Convert any datetime values to ISO string
+    for k, v in list(staff_copy.items()):
+        if isinstance(v, datetime):
+            staff_copy[k] = v.isoformat()
+
     return staff_copy

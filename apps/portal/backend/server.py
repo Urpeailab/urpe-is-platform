@@ -3688,27 +3688,30 @@ async def admin_login(request: AdminLoginRequest):
         if not staff:
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # Verificar contraseña - support both 'passwordHash' and 'password' fields
-        password_hash = staff.get('passwordHash') or staff.get('password')
+        # Verificar contraseña - support both 'passwordHash'/'password'/'password_hash'
+        password_hash = staff.get('password_hash') or staff.get('passwordHash') or staff.get('password')
         if not password_hash or not StaffModel.verify_password(request.password, password_hash):
             raise HTTPException(status_code=401, detail="Invalid email or password")
 
-        # Verificar estado (check both 'active' and 'status' for compatibility)
-        is_active = staff.get('active', True) or staff.get('status') == 'active'
+        # Verificar estado (check both 'active', 'is_active', and 'status')
+        is_active = staff.get('is_active', staff.get('active', True)) or staff.get('status') == 'active'
         if not is_active:
             raise HTTPException(status_code=403, detail="Account is inactive. Contact administrator.")
 
-        # Actualizar último login
-        update("staff", {'id': staff['id']}, {'lastLogin': datetime.utcnow()})
+        # Actualizar último login (columna no existe en schema — skip)
+        pass
         
-        # Log de actividad
-        log = ActivityLog.create_log(
-            staff_id=staff['id'],
-            action='login',
-            resource='auth',
-            details={'method': 'password'}
-        )
-        insert("activity_logs", log)
+        # Log de actividad (skipped temporarily)
+        try:
+            log = ActivityLog.create_log(
+                staff_id=staff['id'],
+                action='login',
+                resource='auth',
+                details={'method': 'password'}
+            )
+            insert("activity_logs", log)
+        except Exception as log_err:
+            logger.warning(f"activity_log failed: {log_err}")
         
         # Generar JWT
         token = StaffModel.generate_jwt(staff)
