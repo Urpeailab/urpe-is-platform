@@ -119,18 +119,19 @@ async def generate_api_token(
 
     token = _jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-    # Save token record
-    insert("admin_api_tokens", {
-        "id": token_id,
-        "staff_id": staff_payload['id'],
-        "staff_email": staff_payload.get('email', ''),
-        "staff_name": staff_payload.get('name', ''),
-        "role": staff_payload.get('role', ''),
-        "label": data.label,
-        "expires_at": exp.isoformat(),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "active": True,
-    })
+    # Save token record (schema: id, staff_id, token_hash, name, expires_at, is_active, created_at)
+    try:
+        insert("admin_api_tokens", {
+            "id": token_id,
+            "staff_id": staff_payload['id'],
+            "name": data.label or "API Token",
+            "token_hash": token_id,  # tracking ID; actual token is JWT returned below
+            "expires_at": exp.isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "is_active": True,
+        })
+    except Exception as _e:
+        logger.warning(f"admin_api_tokens insert failed (non-fatal): {_e}")
 
     return {
         "success": True,
@@ -4294,13 +4295,11 @@ async def _dashboard_stats_impl(staff_payload):
     if not is_admin:
         visa_filter["$or"] = [{"coordinatorId": user_id}, {"salesRepId": user_id}]
 
-    all_visa_raw = select("visa_cases", columns="id,userId,status,overallProgress,currentStage,visaType,coordinatorId,salesRepId,updatedAt,createdAt,clientName,user,paidAmount,remainingBalance,totalFee,isMasterCase", limit=5000)
-    # Apply filters in Python: exclude master cases, progress > 18, and permission-based filters
+    all_visa_raw = select("visa_cases", columns="id,userId,status,overallProgress,currentStage,visaType,coordinatorId,salesRepId,updatedAt,createdAt,clientName,paidAmount,remainingBalance,totalFee,isMasterCase", limit=5000)
+    # Apply filters in Python: exclude master cases + permission-based filters (include 0-progress cases)
     visa_cases = []
     for _vc in all_visa_raw:
         if _vc.get("isMasterCase"):
-            continue
-        if (_vc.get("overallProgress") or 0) <= 18:
             continue
         if not is_admin:
             if _vc.get("coordinatorId") != user_id and _vc.get("salesRepId") != user_id:
@@ -4314,7 +4313,7 @@ async def _dashboard_stats_impl(staff_payload):
     visa_total_pending = sum(c.get("remainingBalance", 0) or 0 for c in visa_cases)
 
     # Batch lookup de nombres de clientes por userId
-    raw_user_ids = list(set(c.get("userId") for c in visa_cases if c.get("userId")))
+    raw_user_ids = list(set((c.get("clientId") or c.get("client_id") or c.get("userId")) for c in visa_cases if (c.get("clientId") or c.get("client_id") or c.get("userId"))))
 
     user_name_map = {}
     if raw_user_ids:
@@ -4327,8 +4326,8 @@ async def _dashboard_stats_impl(staff_payload):
                 user_name_map[uid_str] = u.get("name", "")
 
     def _client_name(c):
-        uid = str(c.get("userId", ""))
-        return user_name_map.get(uid) or (c.get("user") or {}).get("name") or c.get("clientName") or "Sin nombre"
+        uid = str(c.get("clientId") or c.get("client_id") or c.get("userId") or "")
+        return user_name_map.get(uid) or c.get("clientName") or c.get("client_name") or "Sin nombre"
 
     # "Por Coordinador": incluye TODOS los casos (con y sin progreso)
     # Admins ven todos; staff solo ven sus casos
@@ -4377,9 +4376,9 @@ async def _dashboard_stats_impl(staff_payload):
 
     # Construir byCoordinator con label legible
     visa_by_coord_display = {}
-    for key, count in sorted(coord_counter.items(), key=lambda x: -x[1]):
+    for key, _coord_count in sorted(coord_counter.items(), key=lambda x: -x[1]):
         label = "Sin asignar" if key == "__unassigned__" else coord_names.get(key, key)
-        visa_by_coord_display[label] = visa_by_coord_display.get(label, 0) + count
+        visa_by_coord_display[label] = visa_by_coord_display.get(label, 0) + _coord_count
 
     # Top 10 prioritarios — ordenados por updatedAt más antiguo (más tiempo sin tocar)
     visa_sorted = sorted(visa_cases, key=lambda c: c.get("updatedAt", c.get("createdAt", "")) or "")
@@ -8082,6 +8081,10 @@ async def get_all_visa_cases(
 
         all_cases = q.execute().data or []
 
+        # Add camelCase aliases so downstream code using case.get('clientId'), case.get('coordinatorId'), etc. works
+        from db.supabase_client import _add_camel_aliases as _acr
+        all_cases = [_acr(c) for c in all_cases]
+
         # Post-filter: unassigned (no coordinator)
         if _filter_unassigned:
             all_cases = [c for c in all_cases if not c.get('coordinator_id')]
@@ -8098,22 +8101,24 @@ async def get_all_visa_cases(
         case_ids = set()
         
         for case in all_cases:
-            if case.get('userId'):
-                user_ids.add(case.get('userId'))
-            if case.get('coordinatorId'):
-                coordinator_ids.add(case.get('coordinatorId'))
-            seller_id = case.get('salesRepId') or case.get('sellerId')
+            _cid = case.get('clientId') or case.get('client_id') or case.get('userId')
+            if _cid:
+                user_ids.add(_cid)
+            _coord = case.get('coordinatorId') or case.get('coordinator_id')
+            if _coord:
+                coordinator_ids.add(_coord)
+            seller_id = case.get('salesRepId') or case.get('sales_rep_id') or case.get('sellerId') or case.get('advisor_id') or case.get('advisorId')
             if seller_id:
                 seller_ids.add(seller_id)
             case_id = case.get('id') or case.get('_id')
             if case_id:
                 case_ids.add(str(case_id))
-        
-        # 2. Cargar todos los usuarios en batch
+
+        # 2. Cargar todos los clientes en batch (tabla es clients, no users)
         users_map = {}
         if user_ids:
             sb = get_supabase()
-            _users_result = sb.table("users").select("*").in_("id", list(user_ids)).execute()
+            _users_result = sb.table("clients").select("*").in_("id", list(user_ids)).execute()
             users_list = _users_result.data or []
             for u in users_list:
                 if u.get('id'):
@@ -8180,8 +8185,8 @@ async def get_all_visa_cases(
         
         # Para cada caso, usar los datos pre-cargados
         for case in all_cases:
-            # Obtener usuario desde el mapa
-            user_id = case.get('userId')
+            # Obtener cliente desde el mapa
+            user_id = case.get('clientId') or case.get('client_id') or case.get('userId')
             user = users_map.get(str(user_id)) if user_id else None
             
             if user:
@@ -8201,16 +8206,17 @@ async def get_all_visa_cases(
                 case['userPhone'] = 'No disponible'
             
             # Obtener coordinador/a desde el mapa pre-cargado
-            if case.get('coordinatorId'):
-                coordinator = staff_map.get(str(case['coordinatorId']))
+            _coord_id = case.get('coordinatorId') or case.get('coordinator_id')
+            if _coord_id:
+                coordinator = staff_map.get(str(_coord_id))
                 if coordinator:
                     coord_name = coordinator.get('name')
                     if not coord_name:
                         coord_name = f"{coordinator.get('firstName', '')} {coordinator.get('lastName', '')}".strip()
                     case['coordinatorName'] = coord_name if coord_name else 'Coordinador Sin Nombre'
-            
+
             # Obtener vendedora desde el mapa pre-cargado
-            seller_id = case.get('salesRepId') or case.get('sellerId')
+            seller_id = case.get('salesRepId') or case.get('sales_rep_id') or case.get('sellerId') or case.get('advisor_id') or case.get('advisorId')
             if seller_id:
                 sales_rep = staff_map.get(str(seller_id))
                 if sales_rep:

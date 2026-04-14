@@ -179,89 +179,65 @@ async def get_all_payments(
     limit: int = 50,
     caseId: str = None
 ):
-    """Get all payments from manual_payments collection, with optional caseId filter."""
+    """Get all payments from manual_payments table, with optional caseId filter (Supabase)."""
     try:
         verify_staff_token_impl(authorization)
-        
-        # Add logging message as requested
+        from db.supabase_client import get_supabase, _add_camel_aliases
+        sb = get_supabase()
+
         logger.info(f"📊 GET /admin/payments called with caseId={caseId}, page={page}, limit={limit}")
-        
-        # Build query for manual_payments collection
-        query = {}
+
+        # Build query on payments (unified table)
+        q = sb.table("payments").select("*", count="exact")
         if caseId:
-            query['caseId'] = caseId
-        
-        # Get payments from manual_payments collection in reverse chronological order (newest first)
-        skip = (page - 1) * limit
-        payments_raw = await db.manual_payments.find(query, {'_id': 0}).sort('createdAt', -1).skip(skip).limit(limit).to_list(limit)
-        
-        logger.info(f"📊 Found {len(payments_raw)} raw payments in manual_payments collection")
-        
-        # Enrich payment data with user and case information
+            q = q.eq("case_id", caseId)
+        q = q.order("created_at", desc=True).range((page - 1) * limit, (page - 1) * limit + limit - 1)
+        res = q.execute()
+        payments_raw = [_add_camel_aliases(p) for p in (res.data or [])]
+        total_payments = res.count or 0
+
+        # Batch enrich — collect ids
+        user_ids = list({p.get('client_id') or p.get('userId') or p.get('clientId') for p in payments_raw if (p.get('client_id') or p.get('userId') or p.get('clientId'))})
+        case_ids = list({p.get('case_id') or p.get('caseId') for p in payments_raw if (p.get('case_id') or p.get('caseId'))})
+
+        users_map = {}
+        if user_ids:
+            u_res = sb.table("clients").select("id,name,email,phone").in_("id", user_ids).execute()
+            for u in (u_res.data or []):
+                users_map[str(u['id'])] = u
+
+        cases_map = {}
+        if case_ids:
+            c_res = sb.table("visa_cases").select("id,visa_type,status,overall_progress").in_("id", case_ids).execute()
+            for c in (c_res.data or []):
+                cases_map[str(c['id'])] = c
+
         all_payments = []
-        for payment in payments_raw:
-            try:
-                # Get user info
-                user_id = payment.get('userId')
-                user_info = {}
-                if user_id:
-                    from bson import ObjectId
-                    try:
-                        user_object_id = ObjectId(user_id)
-                        user = await db.users.find_one({'_id': user_object_id}, {'_id': 0, 'name': 1, 'email': 1, 'phone': 1})
-                    except:
-                        user = await db.users.find_one({'id': user_id}, {'_id': 0, 'name': 1, 'email': 1, 'phone': 1})
-                    
-                    if user:
-                        user_info = {
-                            'userName': user.get('name'),
-                            'userEmail': user.get('email'),
-                            'userPhone': user.get('phone')
-                        }
-                
-                # Get case info
-                case_id = payment.get('caseId')
-                case_info = {}
-                if case_id:
-                    case = await db.visa_cases.find_one({'id': case_id}, {'_id': 0, 'visaType': 1, 'status': 1, 'overallProgress': 1})
-                    if case:
-                        case_info = {
-                            'visaType': case.get('visaType'),
-                            'caseStatus': case.get('status'),
-                            'overallProgress': case.get('overallProgress', 0)
-                        }
-                
-                # Normalize registeredBy data
-                if 'createdBy' in payment and isinstance(payment['createdBy'], dict):
-                    payment['registeredByName'] = payment['createdBy'].get('name', 'N/A')
-                    payment['registeredBy'] = payment['createdBy'].get('id', '')
-                elif 'registeredByName' not in payment:
-                    payment['registeredByName'] = 'N/A'
-                
-                # Add enriched data to payment
-                enriched_payment = {
-                    **payment,
-                    **user_info,
-                    **case_info
-                }
-                all_payments.append(enriched_payment)
-            except Exception as e:
-                # If there's an error enriching this payment, still include it with basic data
-                logger.error(f"Error enriching payment {payment.get('id', 'unknown')}: {e}")
-                all_payments.append(payment)
-        
-        # Count total payments
-        total_payments = await db.manual_payments.count_documents(query)
-        
-        logger.info(f"📊 GET /admin/payments returning {len(all_payments)} payments for caseId={caseId}")
-        
+        for p in payments_raw:
+            uid = p.get('client_id') or p.get('userId') or p.get('clientId')
+            cid = p.get('case_id') or p.get('caseId')
+            user = users_map.get(str(uid)) if uid else None
+            case = cases_map.get(str(cid)) if cid else None
+            if user:
+                p['userName'] = user.get('name')
+                p['userEmail'] = user.get('email')
+                p['userPhone'] = user.get('phone')
+            if case:
+                p['visaType'] = case.get('visa_type')
+                p['caseStatus'] = case.get('status')
+                p['overallProgress'] = case.get('overall_progress', 0)
+            if 'createdBy' in p and isinstance(p['createdBy'], dict):
+                p['registeredByName'] = p['createdBy'].get('name', 'N/A')
+                p['registeredBy'] = p['createdBy'].get('id', '')
+            elif 'registeredByName' not in p:
+                p['registeredByName'] = p.get('created_by_name') or 'N/A'
+            all_payments.append(p)
+
         return {
             'payments': all_payments,
             'pagination': {
-                'page': page,
-                'limit': limit,
-                'total': total_payments,
-                'pages': (total_payments + limit - 1) // limit
+                'page': page, 'limit': limit, 'total': total_payments,
+                'pages': (total_payments + limit - 1) // limit if total_payments else 1
             }
         }
         

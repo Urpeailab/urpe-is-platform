@@ -172,16 +172,21 @@ def setup_appointments_router(db, verify_client_token, verify_staff_token):
         caseId: str = None,
         staff_payload: dict = Depends(verify_staff_token)
     ):
-        """Admin: Get all appointments."""
+        """Admin: Get all appointments (Supabase)."""
         try:
-            query = {}
+            from db.supabase_client import get_supabase, _add_camel_aliases
+            sb = get_supabase()
+            q = sb.table("appointments").select("*")
             if status and status != "all":
-                query["status"] = status
+                q = q.eq("status", status)
             if caseId:
-                query["caseId"] = caseId
-            appointments = await db.appointments.find(query, {"_id": 0}).sort("createdAt", -1).to_list(500)
+                q = q.eq("case_id", caseId)
+            q = q.order("created_at", desc=True).limit(500)
+            res = q.execute()
+            appointments = [_add_camel_aliases(a) for a in (res.data or [])]
             return {"success": True, "appointments": appointments}
         except Exception as e:
+            logger.error(f"admin/appointments error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
     @appointments_router.patch("/admin/appointments/{appointment_id}")
