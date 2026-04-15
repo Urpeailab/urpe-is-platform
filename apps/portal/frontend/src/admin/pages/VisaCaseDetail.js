@@ -296,10 +296,10 @@ export const VisaCaseDetail = () => {
     try {
       const token = localStorage.getItem('admin_token');
       
-      // Only fetch if we have user phone
-      if (caseData?.user?.phone) {
+      // Fetch magic links by client UUID
+      if (caseData?.user?.id) {
         const { data } = await axios.get(
-          `${BACKEND_URL}/api/admin/users/${encodeURIComponent(caseData.user.phone)}/magic-links`,
+          `${BACKEND_URL}/api/admin/users/${caseData.user.id}/magic-links`,
           {
             headers: { Authorization: `Bearer ${token}` }
           }
@@ -628,7 +628,7 @@ export const VisaCaseDetail = () => {
       }
       
       const { data } = await axios.post(
-        `${BACKEND_URL}/api/admin/users/${encodeURIComponent(caseData.user.phone)}/generate-magic-link`,
+        `${BACKEND_URL}/api/admin/users/${caseData.user.id}/generate-magic-link`,
         {},
         {
           headers: { Authorization: `Bearer ${token}` }

@@ -10,9 +10,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Configuración de Supabase Storage (proyecto separado SOLO para archivos)
-SUPABASE_URL = os.environ.get('SUPABASE_STORAGE_URL')
-SUPABASE_KEY = os.environ.get('SUPABASE_STORAGE_KEY')
+# Usa las mismas credenciales del cliente principal de Supabase
+SUPABASE_URL = os.environ.get('SUPABASE_STORAGE_URL') or os.environ.get('SUPABASE_URL')
+SUPABASE_KEY = os.environ.get('SUPABASE_STORAGE_KEY') or os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
 BUCKET_NAME = os.environ.get('SUPABASE_STORAGE_BUCKET', 'urpe-documents')
 
 # Cliente de Supabase (SOLO para storage)

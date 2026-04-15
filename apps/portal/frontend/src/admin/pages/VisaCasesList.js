@@ -49,6 +49,7 @@ export const VisaCasesList = () => {
   const [sortBy, setSortBy] = useState('priority');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
+  const [caseStats, setCaseStats] = useState({ active: 0, filed: 0, approved: 0 });
   const [coordinators, setCoordinators] = useState([]);
   const [salesReps, setSalesReps] = useState([]);
   
@@ -185,6 +186,7 @@ export const VisaCasesList = () => {
       
       setCases(data.cases || []);
       setPagination(data.pagination);
+      if (data.stats) setCaseStats(data.stats);
     } catch (error) {
       console.error('Error fetching visa cases:', error);
       toast.error('Error al cargar los casos de visa');
@@ -699,7 +701,7 @@ export const VisaCasesList = () => {
             <div>
               <p className="text-sm text-gray-600">Casos Activos</p>
               <p className="text-3xl font-bold text-success mt-2">
-                {cases.filter(c => c.status === 'active').length}
+                {caseStats.active}
               </p>
             </div>
             <div className="h-12 w-12 bg-green-100 rounded-xl flex items-center justify-center">
@@ -714,7 +716,7 @@ export const VisaCasesList = () => {
             <div>
               <p className="text-sm text-gray-600">Radicados</p>
               <p className="text-3xl font-bold text-indigo-600 mt-2">
-                {cases.filter(c => c.status === 'filed').length}
+                {caseStats.filed}
               </p>
             </div>
             <div className="h-12 w-12 bg-indigo-100 rounded-xl flex items-center justify-center">
@@ -729,7 +731,7 @@ export const VisaCasesList = () => {
             <div>
               <p className="text-sm text-gray-600">Aprobados</p>
               <p className="text-3xl font-bold text-success mt-2">
-                {cases.filter(c => c.status === 'approved').length}
+                {caseStats.approved}
               </p>
             </div>
             <div className="h-12 w-12 bg-green-100 rounded-xl flex items-center justify-center">

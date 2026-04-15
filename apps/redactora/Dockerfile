@@ -1,10 +1,10 @@
 # === Stage 1: Build React frontend ===
 FROM node:18-slim AS frontend-build
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/yarn.lock ./
-RUN yarn install --frozen-lockfile
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install --legacy-peer-deps
 COPY frontend/ ./
-RUN yarn build
+RUN npm run build
 
 # === Stage 2: Python backend + serve built frontend ===
 FROM python:3.11-slim
@@ -14,6 +14,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ libffi-dev libssl-dev libxml2-dev libxslt1-dev \
     libjpeg-dev zlib1g-dev libfreetype6-dev \
+    libcairo2-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps

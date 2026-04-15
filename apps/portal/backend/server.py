@@ -1498,36 +1498,31 @@ async def log_frontend_error(request: dict):
         return {"success": False, "message": str(e)}
 
 
-@api_router.get("/admin/users/{user_phone}/magic-links")
+@api_router.get("/admin/users/{user_id}/magic-links")
 async def get_user_magic_links(
-    user_phone: str,
+    user_id: str,
     authorization: Annotated[str, Header()]
 ):
     """
-    Get all magic links generated for a specific user by phone number.
-    Returns a list of magic links with their creation dates and expiration status.
+    Get all magic links generated for a specific user by client UUID.
     Requires admin authentication.
     """
     try:
         # Verify admin token
         token = authorization.replace('Bearer ', '')
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        
-        # Check if user has admin role
+
         user_type = payload.get('type')
         user_role = payload.get('role')
-        
-        # Allow: type='admin', or type='staff' with role='admin', 'super_admin', 'coordinator', 'advisor', or 'acreditador'
         is_allowed = (
-            user_type == 'admin' or 
+            user_type == 'admin' or
             (user_type == 'staff' and user_role in ['admin', 'super_admin', 'coordinator', 'advisor', 'acreditador'])
         )
-        
         if not is_allowed:
-            raise HTTPException(status_code=403, detail="Se requiere acceso de administrador, coordinador o vendedor")
-        
-        # Get all magic links for this phone number
-        magic_links_list = select("magic_links", filters={"phone": user_phone}, order="created_at", order_desc=True)
+            raise HTTPException(status_code=403, detail="Se requiere acceso de administrador")
+
+        # Get all magic links for this client UUID
+        magic_links_list = select("magic_links", filters={"client_id": user_id}, order="created_at", order_desc=True)
 
         # Get frontend URL for constructing full magic link URLs
         frontend_url = os.getenv('FRONTEND_URL')
@@ -1539,17 +1534,15 @@ async def get_user_magic_links(
         formatted_links = []
         for link in magic_links_list:
             magic_link_url = f"{frontend_url}/welcome/{link['token']}"
-
             formatted_links.append({
                 'magicToken': link['token'],
                 'magicLinkUrl': magic_link_url,
                 'createdAt': link.get('created_at'),
-                'phone': link.get('phone'),
-                'isExpired': False,  # Magic links never expire
+                'isExpired': False,
                 'expiresIn': 'Sin vencimiento'
             })
         
-        logger.info(f"📋 Retrieved {len(formatted_links)} magic links for phone: {user_phone}")
+        logger.info(f"📋 Retrieved {len(formatted_links)} magic links for user_id: {user_id}")
         
         return {
             'success': True,
@@ -1569,9 +1562,9 @@ async def get_user_magic_links(
         )
 
 
-@api_router.post("/admin/users/{user_phone}/generate-magic-link")
+@api_router.post("/admin/users/{user_id}/generate-magic-link")
 async def admin_generate_magic_link(
-    user_phone: str,
+    user_id: str,
     authorization: Annotated[str, Header()]
 ):
     """
@@ -1610,13 +1603,10 @@ async def admin_generate_magic_link(
         if not is_allowed:
             raise HTTPException(status_code=403, detail="Se requiere acceso de administrador, coordinador o vendedor")
         
-        # Find user by phone
-        user = select("clients", filters={"phone": user_phone}, single=True)
+        # Find user by UUID
+        user = select("clients", filters={"id": user_id}, single=True)
         if not user:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Usuario con teléfono {user_phone} no encontrado"
-            )
+            raise HTTPException(status_code=404, detail=f"Usuario {user_id} no encontrado")
 
         # Generate new magic token
         magic_token = secrets.token_urlsafe(16)
@@ -1624,29 +1614,28 @@ async def admin_generate_magic_link(
         # Get frontend URL
         frontend_url = os.getenv('FRONTEND_URL')
         if not frontend_url:
-            backend_url = os.getenv('REACT_APP_BACKEND_URL', 'https://classic-cases-hub.preview.emergentagent.com')
+            backend_url = os.getenv('REACT_APP_BACKEND_URL', 'http://localhost:8001')
             frontend_url = backend_url.replace('/api', '')
 
-        # Create new magic link
+        # Create new magic link (expires_at required by schema — use far future since links don't expire)
         now_ts = datetime.now(timezone.utc).isoformat()
+        far_future = "2099-12-31T23:59:59+00:00"
         insert("magic_links", {
-            'id': str(uuid.uuid4()),
-            'phone': user_phone,
             'token': magic_token,
-            'client_id': user.get('id'),
-            'created_at': now_ts,
+            'client_id': user_id,
+            'expires_at': far_future,
+            'used': False,
         })
 
         magic_link_url = f"{frontend_url}/welcome/{magic_token}"
 
-        logger.info(f"✅ Admin generated new magic link for user: {user_phone}")
+        logger.info(f"✅ Admin generated new magic link for user: {user_id}")
 
         return {
             'success': True,
             'magicToken': magic_token,
             'magicLinkUrl': magic_link_url,
             'createdAt': now_ts,
-            'phone': user_phone,
             'isExpired': False,
             'expiresIn': 'Sin vencimiento'
         }
@@ -2739,11 +2728,14 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
         
         logger.info(f"Payment registered for case {case_id}, stages {stage_numbers}")
         
-        # Notify about payment
-        from services.case_notifications import notify_payment_registered
-        await notify_payment_registered(db, case_id, float(amount), stage_numbers, {
-            "id": created_by_id, "name": staff.get('name', created_by_name) if staff else created_by_name, "role": staff_info.get('role', '')
-        })
+        # Notify about payment (best-effort, uses legacy MongoDB)
+        try:
+            from services.case_notifications import notify_payment_registered
+            await notify_payment_registered(db, case_id, float(amount), stage_numbers, {
+                "id": created_by_id, "name": staff.get('name', created_by_name) if staff else created_by_name, "role": staff_info.get('role', '')
+            })
+        except Exception as notif_err:
+            logger.warning(f"Payment notification failed (non-critical): {notif_err}")
         
         # Guardar nota del pago en case_notes
         stages_str = ', '.join(map(str, stage_numbers))
@@ -3791,38 +3783,40 @@ async def verify_otp(request: OTPVerifyRequest):
     if not otp_record:
         raise HTTPException(status_code=400, detail="No hay codigo pendiente para este email")
     
+    _clear_otp = {"code": None, "expiresAt": None, "attempts": 0}
+
     # Check attempts
     if otp_record.get("attempts", 0) >= 5:
-        delete("staff", {"email": email})
+        update("staff", {"email": email}, _clear_otp)
         raise HTTPException(status_code=429, detail="Demasiados intentos. Solicita un nuevo codigo.")
-    
+
     # Increment attempts (read-modify-write since Supabase doesn't support $inc)
     current_attempts = otp_record.get("attempts", 0)
     update("staff", {"email": email}, {"attempts": current_attempts + 1})
-    
+
     # Check expiry
     expires = otp_record.get("expiresAt", "")
     if expires:
         exp_dt = datetime.fromisoformat(expires.replace('Z', '+00:00')) if isinstance(expires, str) else expires
         if datetime.now(timezone.utc) > exp_dt:
-            delete("staff", {"email": email})
+            update("staff", {"email": email}, _clear_otp)
             raise HTTPException(status_code=400, detail="Codigo expirado. Solicita uno nuevo.")
-    
+
     # Verify code
     if otp_record.get("code") != code:
         remaining = 5 - otp_record.get("attempts", 0) - 1
         raise HTTPException(status_code=400, detail=f"Codigo incorrecto. {remaining} intento(s) restante(s).")
-    
-    # OTP valid — delete it
-    delete("staff", {"email": email})
-    
+
+    # OTP valid — clear OTP fields
+    update("staff", {"email": email}, _clear_otp)
+
     # Get staff and generate token
     staff = select("staff", filters={'email': email}, single=True)
     if not staff:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     
     # Update last login
-    update("staff", {"id": staff.get("id") or staff.get("_id")}, {"lastLogin": datetime.utcnow()})
+    update("staff", {"id": staff.get("id") or staff.get("_id")}, {"lastLogin": datetime.now(timezone.utc).isoformat()})
 
     # Log
     log = ActivityLog.create_log(staff_id=staff.get("id") or staff.get("_id"), action='login', resource='auth', details={'method': 'otp'})
@@ -4252,12 +4246,12 @@ async def get_case_activities(
 ):
     """Get activity log for a case."""
     skip = (page - 1) * limit
-    total = count("case_audit_logs", {"caseId": case_id})
-    all_activities = select("case_audit_logs", filters={"caseId": case_id}, order="timestamp", order_desc=True, limit=skip + limit)
+    total = count("case_audit_logs", {"case_id": case_id})
+    all_activities = select("case_audit_logs", filters={"case_id": case_id}, order="created_at", order_desc=True, limit=skip + limit)
     activities = all_activities[skip:skip + limit]
     for a in activities:
-        if isinstance(a.get("timestamp"), datetime):
-            a["timestamp"] = a["timestamp"].isoformat()
+        if isinstance(a.get("created_at"), datetime):
+            a["created_at"] = a["created_at"].isoformat()
     return {"activities": activities, "total": total, "page": page, "pages": (total + limit - 1) // limit if total > 0 else 1}
 
 
@@ -4702,13 +4696,13 @@ async def backfill_activity_dates(secret: str = ""):
 async def get_my_cvs(user_payload: dict = Depends(verify_token_header)):
     """Get CVs for the logged-in user."""
     user_id = user_payload.get('id')
-    cvs = select("user_cvs", filters={"userId": user_id}, order="uploadedAt", order_desc=True)
+    cvs = select("user_cvs", filters={"client_id": user_id}, order="created_at", order_desc=True)
     return {"success": True, "cvs": cvs, "total": len(cvs)}
 
 @api_router.get("/admin/users/{user_id}/cvs")
 async def get_user_cvs(user_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get all CVs uploaded for a specific user."""
-    cvs = select("user_cvs", filters={"userId": user_id}, order="uploadedAt", order_desc=True)
+    cvs = select("user_cvs", filters={"client_id": user_id}, order="created_at", order_desc=True)
     return {"success": True, "cvs": cvs, "total": len(cvs)}
 
 
@@ -4735,20 +4729,11 @@ async def add_user_cv(
 
     cv_record = {
         "id": str(uuid.uuid4()),
-        "userId": user_id,
-        "url": result["fileUrl"],
-        "fileName": file.filename,
-        "fileSize": len(file_content),
-        "uploadedBy": {
-            "id": staff_payload['id'],
-            "name": staff_payload.get('name', 'Staff'),
-            "email": staff_payload.get('email', '')
-        },
-        "uploadedAt": datetime.now(timezone.utc).isoformat(),
-        "active": True
+        "client_id": user_id,
+        "file_url": result["fileUrl"],
+        "file_name": file.filename,
     }
     insert("user_cvs", cv_record)
-    cv_record.pop("_id", None)
 
     # Also update the user's cvUrl with the latest
     update("clients", {"id": user_id}, {"cvUrl": result["fileUrl"], "updatedAt": datetime.now(timezone.utc).isoformat()})
@@ -4759,9 +4744,10 @@ async def add_user_cv(
 @api_router.delete("/admin/users/{user_id}/cvs/{cv_id}")
 async def delete_user_cv(user_id: str, cv_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Delete a CV from a user's CV list."""
-    result = delete("user_cvs", {"id": cv_id, "userId": user_id})
-    if result.deleted_count == 0:
+    existing = select("user_cvs", filters={"id": cv_id, "client_id": user_id}, single=True)
+    if not existing:
         raise HTTPException(status_code=404, detail="CV no encontrado")
+    delete("user_cvs", {"id": cv_id})
     return {"success": True, "message": "CV eliminado"}
 
 
@@ -7162,16 +7148,9 @@ async def create_user_with_case(
         if request.cvUrl:
             cv_record = {
                 "id": str(uuid.uuid4()),
-                "userId": user_id,
-                "url": request.cvUrl,
-                "fileName": f"CV_{request.name.replace(' ', '_')}",
-                "uploadedBy": {
-                    "id": staff_payload['id'],
-                    "name": staff_payload.get('name', 'Staff'),
-                    "email": staff_payload.get('email', '')
-                },
-                "uploadedAt": datetime.now(timezone.utc).isoformat(),
-                "active": True
+                "client_id": user_id,
+                "file_url": request.cvUrl,
+                "file_name": f"CV_{request.name.replace(' ', '_')}",
             }
             insert("user_cvs", cv_record)
             logger.info(f"CV saved for user {user_id}: {request.cvUrl}")
@@ -7543,34 +7522,24 @@ async def integration_upsert_client(
 
     # ─── Guardar CV en user_cvs si viene ────────────────────────────────────
     if request.cvUrl:
-        existing_cv = select("user_cvs", filters={"userId": user_id, "url": request.cvUrl}, single=True)
+        existing_cv = select("user_cvs", filters={"client_id": user_id, "file_url": request.cvUrl}, single=True)
         if not existing_cv:
             insert("user_cvs", {
                 "id": str(uuid.uuid4()),
-                "userId": user_id,
-                "url": request.cvUrl,
-                "fileName": f"CV_{request.name.replace(' ', '_')}.pdf",
-                "fileType": "cv",
-                "source": "integration",
-                "uploadedBy": {"id": "integration", "name": "Integration API"},
-                "uploadedAt": now_iso,
-                "active": True,
+                "client_id": user_id,
+                "file_url": request.cvUrl,
+                "file_name": f"CV_{request.name.replace(' ', '_')}.pdf",
             })
 
     # ─── Guardar documento original en user_cvs si viene ────────────────────
     if request.originalFileUrl:
-        existing_orig = select("user_cvs", filters={"userId": user_id, "url": request.originalFileUrl}, single=True)
+        existing_orig = select("user_cvs", filters={"client_id": user_id, "file_url": request.originalFileUrl}, single=True)
         if not existing_orig:
             insert("user_cvs", {
                 "id": str(uuid.uuid4()),
-                "userId": user_id,
-                "url": request.originalFileUrl,
-                "fileName": f"Documento_Original_{request.name.replace(' ', '_')}.pdf",
-                "fileType": "original_document",
-                "source": "integration",
-                "uploadedBy": {"id": "integration", "name": "Integration API"},
-                "uploadedAt": now_iso,
-                "active": True,
+                "client_id": user_id,
+                "file_url": request.originalFileUrl,
+                "file_name": f"Documento_Original_{request.name.replace(' ', '_')}.pdf",
             })
 
     # ─── Upsert visa_case ────────────────────────────────────────────────────
@@ -7939,6 +7908,7 @@ async def create_visa_case(
         raise HTTPException(status_code=500, detail=f"Failed to create visa case: {str(e)}")
 
 
+
 @api_router.get("/admin/visa-cases")
 async def get_all_visa_cases(
     staff_payload: dict = Depends(verify_staff_token),
@@ -8024,11 +7994,10 @@ async def get_all_visa_cases(
         # Acreditador: solo ve casos con más de 1 etapa pagada (filtro post-query)
         is_acreditador = user_role == 'acreditador'
         
-        # Si hay búsqueda, buscar en usuarios primero y luego en casos
+        # Si hay búsqueda, buscar en clientes primero y luego filtrar casos
         if search:
-            # Obtener IDs de usuarios que coinciden con la busqueda
             sb = get_supabase()
-            _su_result = sb.table("users").select("id").or_(
+            _su_result = sb.table("clients").select("id").or_(
                 f"name.ilike.%{search}%,email.ilike.%{search}%,phone.ilike.%{search}%"
             ).limit(1000).execute()
             matching_users = _su_result.data or []
@@ -8036,11 +8005,11 @@ async def get_all_visa_cases(
             if not _search_user_ids:
                 _search_user_ids = []  # Empty list = no results
         
-        # Build Supabase query with all filters
+        # Build Supabase query — select all columns from visa_cases
         sb = get_supabase()
         q = sb.table("visa_cases").select("*")
 
-        # Apply simple equality filters from query dict
+        # Apply simple equality filters
         if query.get('userId'):
             q = q.eq("client_id", query['userId'])
         if query.get('status'):
@@ -8072,7 +8041,7 @@ async def get_all_visa_cases(
                 f"coordinator_id.eq.{_filter_staff_assigned},sales_rep_id.eq.{_filter_staff_assigned},seller_id.eq.{_filter_staff_assigned}"
             )
 
-        # Search user IDs filter
+        # Search: filter by client IDs matching name/email/phone
         if search and hasattr(locals(), '_search_user_ids'):
             if _search_user_ids:
                 q = q.in_("client_id", _search_user_ids)
@@ -8080,8 +8049,6 @@ async def get_all_visa_cases(
                 q = q.in_("client_id", ["__no_match__"])
 
         all_cases = q.execute().data or []
-
-        # Add camelCase aliases so downstream code using case.get('clientId'), case.get('coordinatorId'), etc. works
         from db.supabase_client import _add_camel_aliases as _acr
         all_cases = [_acr(c) for c in all_cases]
 
@@ -8091,51 +8058,46 @@ async def get_all_visa_cases(
 
         total = len(all_cases)
         
-        # ============ OPTIMIZACIÓN: BATCH QUERIES ============
-        # Pre-cargar todos los datos relacionados en memoria para evitar N+1 queries
-        
-        # 1. Recopilar todos los IDs únicos
+        # ============ BATCH QUERIES ============
+        from collections import defaultdict
+
+        # Recopilar IDs únicos de casos, clientes y staff
         user_ids = set()
         coordinator_ids = set()
         seller_ids = set()
         case_ids = set()
-        
         for case in all_cases:
-            _cid = case.get('clientId') or case.get('client_id') or case.get('userId')
+            _cid = case.get('clientId') or case.get('client_id')
             if _cid:
                 user_ids.add(_cid)
             _coord = case.get('coordinatorId') or case.get('coordinator_id')
             if _coord:
                 coordinator_ids.add(_coord)
-            seller_id = case.get('salesRepId') or case.get('sales_rep_id') or case.get('sellerId') or case.get('advisor_id') or case.get('advisorId')
-            if seller_id:
-                seller_ids.add(seller_id)
+            _seller = case.get('salesRepId') or case.get('sales_rep_id') or case.get('sellerId') or case.get('advisorId') or case.get('advisor_id')
+            if _seller:
+                seller_ids.add(_seller)
             case_id = case.get('id') or case.get('_id')
             if case_id:
                 case_ids.add(str(case_id))
 
-        # 2. Cargar todos los clientes en batch (tabla es clients, no users)
+        # Cargar clientes en batch
         users_map = {}
         if user_ids:
-            sb = get_supabase()
-            _users_result = sb.table("clients").select("*").in_("id", list(user_ids)).execute()
-            users_list = _users_result.data or []
-            for u in users_list:
+            _users_result = sb.table("clients").select("id,name,email,phone").in_("id", list(user_ids)).execute()
+            for u in (_users_result.data or []):
                 if u.get('id'):
                     users_map[str(u['id'])] = u
 
-        # 3. Cargar todo el staff en batch (para coordinadores y vendedores)
+        # Cargar staff en batch (coordinadores y vendedores)
         staff_map = {}
         all_staff_ids = coordinator_ids | seller_ids
         if all_staff_ids:
-            sb = get_supabase()
-            _staff_result = sb.table("staff").select("*").in_("id", list(all_staff_ids)).execute()
-            staff_list = _staff_result.data or []
-            for s in staff_list:
+            _staff_result = sb.table("staff").select("id,name").in_("id", list(all_staff_ids)).execute()
+            for s in (_staff_result.data or []):
                 if s.get('id'):
                     staff_map[str(s['id'])] = s
-        
-        # 4. Cargar todas las etapas pagadas en batch (última etapa por caso)
+
+        # Cargar todas las etapas pagadas en batch (última etapa por caso)
         stages_map = {}  # case_id -> last_paid_stage
         total_stages_map = {}  # case_id -> total_stages
         if case_ids:
@@ -8149,7 +8111,6 @@ async def get_all_visa_cases(
                 _all_stages.extend(_r.data or [])
 
             # Compute last paid stage and total per case
-            from collections import defaultdict
             _stage_counts = defaultdict(int)
             _paid_max = defaultdict(int)
             for s in _all_stages:
@@ -8182,52 +8143,36 @@ async def get_all_visa_cases(
                 _all_stages_map[s.get('case_id')].append(s)
 
         # ============ FIN BATCH QUERIES ============
-        
-        # Para cada caso, usar los datos pre-cargados
+
+        # Para cada caso, enriquecer con datos de clientes y staff desde los mapas
         for case in all_cases:
-            # Obtener cliente desde el mapa
-            user_id = case.get('clientId') or case.get('client_id') or case.get('userId')
+            user_id = case.get('clientId') or case.get('client_id')
             user = users_map.get(str(user_id)) if user_id else None
-            
             if user:
                 case['userName'] = user.get('name', 'Cliente Sin Nombre')
                 case['userEmail'] = user.get('email', 'No disponible')
                 case['userPhone'] = user.get('phone', 'No disponible')
-                # Obtener advisor/vendedor del usuario
-                advisor = user.get('advisor')
-                if advisor and isinstance(advisor, dict):
-                    case['advisorName'] = advisor.get('name', '')
-                    case['advisorTitle'] = advisor.get('title', '')
-                elif advisor and isinstance(advisor, str):
-                    case['advisorName'] = advisor
             else:
-                case['userName'] = 'Cliente Sin Nombre'
-                case['userEmail'] = 'No disponible'
-                case['userPhone'] = 'No disponible'
-            
-            # Obtener coordinador/a desde el mapa pre-cargado
+                case.setdefault('userName', 'Cliente Sin Nombre')
+                case.setdefault('userEmail', 'No disponible')
+                case.setdefault('userPhone', 'No disponible')
+
             _coord_id = case.get('coordinatorId') or case.get('coordinator_id')
             if _coord_id:
                 coordinator = staff_map.get(str(_coord_id))
                 if coordinator:
-                    coord_name = coordinator.get('name')
-                    if not coord_name:
-                        coord_name = f"{coordinator.get('firstName', '')} {coordinator.get('lastName', '')}".strip()
-                    case['coordinatorName'] = coord_name if coord_name else 'Coordinador Sin Nombre'
+                    case['coordinatorName'] = coordinator.get('name', 'Coordinador Sin Nombre')
 
-            # Obtener vendedora desde el mapa pre-cargado
-            seller_id = case.get('salesRepId') or case.get('sales_rep_id') or case.get('sellerId') or case.get('advisor_id') or case.get('advisorId')
-            if seller_id:
-                sales_rep = staff_map.get(str(seller_id))
+            _seller_id = case.get('salesRepId') or case.get('sales_rep_id') or case.get('sellerId') or case.get('advisorId') or case.get('advisor_id')
+            if _seller_id:
+                sales_rep = staff_map.get(str(_seller_id))
                 if sales_rep:
-                    sales_name = sales_rep.get('name')
-                    if not sales_name:
-                        sales_name = f"{sales_rep.get('firstName', '')} {sales_rep.get('lastName', '')}".strip()
-                    case['salesRepName'] = sales_name if sales_name else 'Vendedora Sin Nombre'
-                    case['advisorName'] = sales_name if sales_name else ''
-            
+                    case['salesRepName'] = sales_rep.get('name', '')
+                    case['advisorName'] = sales_rep.get('name', '')
+
             # ============ OBTENER ÚLTIMA ETAPA PAGADA DESDE MAPA ============
-            case_id_for_stages = str(case.get('caseId') or case.get('id') or case.get('_id'))
+            # Usar siempre el UUID (id), no el case_id textual como "URPE-2026-0001"
+            case_id_for_stages = str(case.get('id') or case.get('_id'))
             case['lastPaidStage'] = stages_map.get(case_id_for_stages, 0)
             case['totalStages'] = total_stages_map.get(case_id_for_stages, 11)
             
@@ -8411,12 +8356,22 @@ async def get_all_visa_cases(
         elif sortBy == "updated":
             all_cases.sort(key=lambda x: x.get('updatedAt', ''))
         
+        # ============ STATS (sobre todos los casos filtrados, no solo la página) ============
+        from collections import Counter
+        status_counts = Counter(c.get('status') for c in all_cases)
+        stats = {
+            'active': status_counts.get('en_proceso', 0),
+            'filed': status_counts.get('ready_to_file', 0) + status_counts.get('filed', 0),
+            'approved': status_counts.get('completed', 0) + status_counts.get('approved', 0),
+        }
+
         # ============ APLICAR PAGINACIÓN ============
         skip = (page - 1) * limit
         cases = all_cases[skip:skip + limit]
-        
+
         return {
             'cases': cases,
+            'stats': stats,
             'pagination': {
                 'page': page,
                 'limit': limit,
@@ -8482,7 +8437,7 @@ async def get_visa_case_detail(
         documents = select("visa_documents", filters=documents_filters, limit=100)
 
         # Obtener pagos
-        payments = select("visa_payments", filters={"case_id": case_id}, limit=10)
+        payments = select("payments", filters={"case_id": case_id}, limit=10)
 
         # Obtener reuniones
         meetings = select("visa_meetings", filters={"case_id": case_id}, order="scheduled_at", order_desc=True)
@@ -8609,10 +8564,16 @@ async def update_visa_case(
             if new_coord:
                 user_doc = select("users", filters={"id": case.get("client_id") or case.get("userId")}, single=True)
                 client_name = user_doc.get("name", "Cliente") if user_doc else "Cliente"
-                await notify_coordinator_assigned(db, case_id, new_coord.get('name', ''), new_coord.get('email', ''), client_name, performer)
+                try:
+                    await notify_coordinator_assigned(db, case_id, new_coord.get('name', ''), new_coord.get('email', ''), client_name, performer)
+                except Exception as notif_err:
+                    logger.warning(f"Coordinator notification failed (non-critical): {notif_err}")
 
         if request.status and request.status != case.get('status'):
-            await notify_case_status_changed(db, case_id, case.get('status', ''), request.status, performer)
+            try:
+                await notify_case_status_changed(db, case_id, case.get('status', ''), request.status, performer)
+            except Exception as notif_err:
+                logger.warning(f"Status change notification failed (non-critical): {notif_err}")
 
         # Obtener caso actualizado
         updated_case = select("visa_cases", filters={"id": case_id}, single=True)
@@ -8944,7 +8905,6 @@ async def delete_single_deliverable_file(
         # If no files left, reset status
         if len(updated_files) == 0:
             update_data['status'] = DeliverableStatus.PENDING
-            update_data['isDraft'] = False
             update_data['fileUrl'] = None
             update_data['fileName'] = None
         else:
@@ -9278,18 +9238,11 @@ async def upload_deliverable(
         # Actualizar el deliverable
         update_data = {
             'files': existing_files,
-            'fileName': request.fileName,  # Keep for backward compatibility
-            'fileUrl': request.fileUrl,    # Keep for backward compatibility
-            'fileSize': request.fileSize,
+            'fileName': request.fileName,
+            'fileUrl': request.fileUrl,
             'status': DeliverableStatus.DRAFT,
-            'isDraft': True,
-            'uploadedBy': staff_payload['id'],
-            'uploadedAt': datetime.now(timezone.utc).isoformat(),
             'updatedAt': datetime.now(timezone.utc).isoformat()
         }
-        
-        if request.notes:
-            update_data['notes'] = request.notes
         
         update("visa_deliverables", filters={"id": request.deliverableId}, data=update_data)
 
@@ -9301,11 +9254,11 @@ async def upload_deliverable(
 
         if stage:
             # Contar deliverables completados
-            stage_deliverables = select("visa_deliverables", filters={"stage_id": stage['id'], "case_id": request.caseId})
+            stage_deliverables = select("visa_deliverables", filters={"case_id": request.caseId, "stage_number": request.stageNumber})
             completed = sum(1 for d in stage_deliverables if d.get('file_url') or d.get('fileUrl'))
 
             update("visa_stages", filters={"id": stage['id']}, data={
-                "deliverables_completed": completed,
+                "completed_deliverables_count": completed,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             })
 
@@ -9346,13 +9299,16 @@ async def upload_deliverable(
         
         logger.info(f"Deliverable uploaded: {request.deliverableId} for case {request.caseId} (total files: {len(existing_files)})")
         
-        # Notify client about new deliverable
-        from services.case_notifications import notify_deliverable_uploaded
-        del_name = deliverable.get('name', {})
-        del_display = del_name.get('es', del_name.get('en', request.fileName)) if isinstance(del_name, dict) else str(del_name or request.fileName)
-        await notify_deliverable_uploaded(db, request.caseId, del_display, request.stageNumber, {
-            "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
-        })
+        # Notify client about new deliverable (best-effort, uses legacy MongoDB)
+        try:
+            from services.case_notifications import notify_deliverable_uploaded
+            del_name = deliverable.get('name', {})
+            del_display = del_name.get('es', del_name.get('en', request.fileName)) if isinstance(del_name, dict) else str(del_name or request.fileName)
+            await notify_deliverable_uploaded(db, request.caseId, del_display, request.stageNumber, {
+                "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
+            })
+        except Exception as notif_err:
+            logger.warning(f"Deliverable notification failed (non-critical): {notif_err}")
         
         updated_deliverable = select("visa_deliverables", filters={"id": request.deliverableId}, single=True)
         
@@ -10810,12 +10766,15 @@ async def validate_client_document(
                 }
             )
         
-        # Notify client about validated document
+        # Notify client about validated document (best-effort, uses legacy MongoDB)
         if case_id:
-            from services.case_notifications import notify_doc_validated
-            await notify_doc_validated(db, case_id, doc_name, {
-                "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
-            })
+            try:
+                from services.case_notifications import notify_doc_validated
+                await notify_doc_validated(db, case_id, doc_name, {
+                    "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
+                })
+            except Exception as notif_err:
+                logger.warning(f"Doc validation notification failed (non-critical): {notif_err}")
         
         return {
             'message': 'Document validated successfully',
@@ -10896,12 +10855,15 @@ async def reject_client_document(
                 }
             )
         
-        # Notify client about rejected document
+        # Notify client about rejected document (best-effort, uses legacy MongoDB)
         if case_id:
-            from services.case_notifications import notify_doc_rejected
-            await notify_doc_rejected(db, case_id, doc_name, request.rejectionReason, {
-                "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
-            })
+            try:
+                from services.case_notifications import notify_doc_rejected
+                await notify_doc_rejected(db, case_id, doc_name, request.rejectionReason, {
+                    "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
+                })
+            except Exception as notif_err:
+                logger.warning(f"Doc rejection notification failed (non-critical): {notif_err}")
         
         return {
             'message': 'Document rejected',

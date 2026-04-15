@@ -36,7 +36,24 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 // Helper function to extract text from multilingual objects
 const getText = (value, fallback = '') => {
   if (!value) return fallback;
-  if (typeof value === 'string') return value;
+  if (typeof value === 'string') {
+    // Detect serialized Python dicts like "{'es': '...', 'en': '...'}"
+    if (value.startsWith('{') && (value.includes("'es'") || value.includes('"es"'))) {
+      try {
+        const parsed = JSON.parse(value);
+        return parsed.es || parsed.en || fallback;
+      } catch (_) {
+        try {
+          const parsed = JSON.parse(value.replace(/'/g, '"'));
+          return parsed.es || parsed.en || fallback;
+        } catch (__) {
+          const m = value.match(/['"]es['"]\s*:\s*['"]([^'"]+)['"]/);
+          if (m) return m[1];
+        }
+      }
+    }
+    return value;
+  }
   if (typeof value === 'object') {
     return value.es || value.en || value.name || fallback;
   }
@@ -1318,9 +1335,9 @@ export const VisaCaseDetailRedesign = () => {
   // Fetch magic links
   const fetchMagicLinks = useCallback(async () => {
     try {
-      if (caseData?.user?.phone) {
+      if (caseData?.user?.id) {
         const { data } = await axios.get(
-          `${BACKEND_URL}/api/admin/users/${encodeURIComponent(caseData.user.phone)}/magic-links`,
+          `${BACKEND_URL}/api/admin/users/${caseData.user.id}/magic-links`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         setMagicLinks(data.magicLinks || []);
@@ -1342,7 +1359,7 @@ export const VisaCaseDetailRedesign = () => {
       }
       
       const { data } = await axios.post(
-        `${BACKEND_URL}/api/admin/users/${encodeURIComponent(caseData.user.phone)}/generate-magic-link`,
+        `${BACKEND_URL}/api/admin/users/${caseData.user.id}/generate-magic-link`,
         {},
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -2113,16 +2130,15 @@ export const VisaCaseDetailRedesign = () => {
                           <div className="flex items-center gap-3 min-w-0 flex-1">
                             <FileText className="h-5 w-5 text-orange-500 flex-shrink-0" />
                             <div className="min-w-0">
-                              <p className="text-sm font-medium text-gray-900 truncate">{cv.fileName}</p>
+                              <p className="text-sm font-medium text-gray-900 truncate">{cv.file_name || cv.fileName}</p>
                               <p className="text-xs text-gray-500">
-                                {new Date(cv.uploadedAt).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' })}
-                                {cv.uploadedBy?.name ? ` · ${cv.uploadedBy.name}` : ''}
+                                {cv.created_at || cv.uploadedAt ? new Date(cv.created_at || cv.uploadedAt).toLocaleDateString('es', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}
                               </p>
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
                             <Button size="sm" variant="ghost" asChild>
-                              <a href={cv.url} target="_blank" rel="noopener noreferrer" title="Ver CV">
+                              <a href={cv.file_url || cv.url} target="_blank" rel="noopener noreferrer" title="Ver CV">
                                 <ExternalLink className="h-4 w-4 text-blue-600" />
                               </a>
                             </Button>

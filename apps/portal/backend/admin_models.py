@@ -1,6 +1,6 @@
 # Admin Models and Utilities
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import bcrypt
 import jwt
 import os
@@ -178,14 +178,12 @@ class ActivityLog:
                    details: Dict = None, ip_address: str = None) -> Dict[str, Any]:
         """Create activity log entry"""
         return {
-            '_id': str(uuid.uuid4()),
-            'staffId': staff_id,
+            'staff_id': staff_id,
             'action': action,
-            'resource': resource,
-            'resourceId': resource_id,
+            'entity_type': resource,
+            'entity_id': str(resource_id) if resource_id else None,
             'details': details or {},
-            'ipAddress': ip_address,
-            'timestamp': datetime.utcnow()
+            'ip_address': ip_address,
         }
 
 
