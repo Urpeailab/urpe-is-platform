@@ -2619,7 +2619,7 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
         created_by_email = staff_info.get('email', '')
         
         # Validate required fields (reference is optional)
-        if not all([case_id, len(stage_numbers) > 0, amount, payment_date, payment_method]):
+        if not all([case_id, len(stage_numbers) > 0, amount is not None, payment_date, payment_method]):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Missing required fields: caseId, stageNumbers, amount, paymentDate, and paymentMethod are required"
@@ -2633,8 +2633,8 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
                 detail="Case not found"
             )
         
-        # Get userId from the case
-        user_id = case.get('userId')
+        # Get userId from the case (Supabase uses client_id)
+        user_id = case.get('client_id') or case.get('clientId') or case.get('userId')
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2651,21 +2651,18 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
         
         payment_record = {
             "id": payment_id,
-            "userId": user_id,  # Link payment to user
-            "caseId": case_id,
-            "stageNumbers": stage_numbers,  # Store multiple stage numbers
+            "client_id": user_id,
+            "case_id": case_id,
+            "stage_numbers": stage_numbers,
+            "stage_number": stage_numbers[0] if len(stage_numbers) == 1 else None,
             "amount": float(amount),
-            "paymentDate": payment_date,
-            "paymentMethod": payment_method,
+            "paid_at": payment_date,
+            "payment_method": payment_method,
             "reference": reference,
-            "receiptUrl": receipt_url,
+            "receipt_url": receipt_url,
             "notes": final_notes,
-            "createdBy": {
-                "id": created_by_id,
-                "name": created_by_name,
-                "email": created_by_email
-            },
-            "createdAt": datetime.now(timezone.utc).isoformat()
+            "status": "completed",
+            "registered_by": created_by_id,
         }
         
         insert("payments", payment_record)
@@ -2690,14 +2687,11 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
         base_progress = round((paid_stages / total_stages) * 100) if total_stages > 0 else 0
         
         # Always add first stage percentage (usually 9%)
-        first_stage = next((s for s in stages if s.get('stageNumber') == 1), None)
-        first_stage_percentage = first_stage.get('percentage', 0) if first_stage else 0
-        
+        first_stage = next((s for s in stages if (s.get('stageNumber') or s.get('stage_number')) == 1), None)
+        first_stage_percentage = float(first_stage.get('percentage', 0) or 0) if first_stage else 0
+
         # Final progress = base progress + first stage percentage
-        overall_progress = min(base_progress + first_stage_percentage, 100)  # Cap at 100%
-        
-        # Update case with progress
-        update("visa_cases", filters={"id": case_id}, data={"overall_progress": overall_progress})
+        overall_progress = int(min(base_progress + first_stage_percentage, 100))  # Cap at 100%
 
         # Auto-change status to 'en_proceso' if case has a payment and status is still default
         current_status = case.get("status", "proceso_venta")
@@ -2760,25 +2754,10 @@ async def register_payment_multiple(request: Request, staff_info: dict = Depends
                                f"• Registrado por: {created_by_name}"
         
         payment_note = {
-            "id": str(uuid.uuid4()),
-            "caseId": case_id,
+            "case_id": case_id,
+            "staff_id": created_by_id,
             "content": payment_note_content,
-            "type": "payment",
-            "category": "payment_registered",
-            "createdBy": {
-                "id": created_by_id,
-                "name": created_by_name,
-                "role": staff_info.get('role', 'coordinator')
-            },
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-            "metadata": {
-                "paymentId": payment_id,
-                "amount": float(amount),
-                "stageNumbers": stage_numbers,
-                "paymentMethod": payment_method,
-                "paymentDate": payment_date,
-                "reference": reference
-            }
+            "note_type": "payment",
         }
         insert("case_notes", payment_note)
         logger.info(f"📝 Payment note saved for case {case_id}")
@@ -4160,19 +4139,30 @@ async def upload_file_to_storage(
 @api_router.get("/admin/cases/{case_id}/notes")
 async def get_case_notes(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Get notes for a visa case. Deleted notes only visible to admin/super_admin."""
-    role = staff_payload.get('role', '')
-    is_admin = role in ('admin', 'super_admin')
-
-    query = {"caseId": case_id}
-    if not is_admin:
-        query["deleted"] = {"$ne": True}
-
-    # For non-admin, filter out deleted notes in Python (Supabase doesn't support $ne directly in simple filters)
-    all_notes = select("case_notes", filters={"caseId": case_id}, order="createdAt", order_desc=True, limit=500)
+    is_admin = staff_payload.get('role', '') in ('admin', 'super_admin')
+    all_notes = select("case_notes", filters={"case_id": case_id}, order="created_at", order_desc=True, limit=500)
     if not is_admin:
         all_notes = [n for n in all_notes if not n.get("deleted")]
-    notes = all_notes
-    return {"success": True, "notes": notes}
+
+    # Enrich notes with staff info for frontend (expects createdBy.name, createdBy.id)
+    staff_ids = list(set(n.get("staff_id") for n in all_notes if n.get("staff_id")))
+    staff_map = {}
+    for sid in staff_ids:
+        s = select("staff", filters={"id": sid}, columns="id,name,email,role", single=True)
+        if s:
+            staff_map[sid] = s
+
+    for note in all_notes:
+        sid = note.get("staff_id")
+        s = staff_map.get(sid)
+        note["createdBy"] = {
+            "id": sid or "",
+            "name": s.get("name", "Sistema") if s else "Sistema",
+            "email": s.get("email", "") if s else "",
+            "role": s.get("role", "") if s else "",
+        }
+
+    return {"success": True, "notes": all_notes}
 
 
 class CaseNoteCreate(BaseModel):
@@ -4185,51 +4175,40 @@ async def create_case_note(case_id: str, data: CaseNoteCreate, staff_payload: di
         raise HTTPException(status_code=400, detail="Texto de la nota requerido")
 
     note = {
-        "id": str(uuid.uuid4()),
-        "caseId": case_id,
+        "case_id": case_id,
+        "staff_id": staff_payload.get("id"),
         "content": data.text.strip(),
-        "type": "manual",
-        "category": "staff_note",
-        "createdBy": {
-            "id": staff_payload.get("id", ""),
-            "name": staff_payload.get("name", ""),
-            "email": staff_payload.get("email", ""),
-            "role": staff_payload.get("role", ""),
-        },
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-        "isAutomatic": False,
-        "deleted": False,
-        "deletedAt": None,
-        "deletedBy": None,
+        "note_type": "general",
     }
 
-    insert("case_notes", note)
-    note.pop("_id", None)
-    return {"success": True, "note": note}
+    result = insert("case_notes", note)
+    result["createdBy"] = {
+        "id": staff_payload.get("id", ""),
+        "name": staff_payload.get("name", ""),
+        "email": staff_payload.get("email", ""),
+        "role": staff_payload.get("role", ""),
+    }
+    return {"success": True, "note": result}
 
 
 @api_router.delete("/admin/cases/{case_id}/notes/{note_id}")
 async def delete_case_note(case_id: str, note_id: str, staff_payload: dict = Depends(verify_staff_token)):
     """Soft-delete a note. Only the author or admin can delete. Admins can still see deleted notes."""
-    note = select("case_notes", filters={"id": note_id, "caseId": case_id}, single=True)
+    note = select("case_notes", filters={"id": note_id, "case_id": case_id}, single=True)
     if not note:
         raise HTTPException(status_code=404, detail="Nota no encontrada")
 
     role = staff_payload.get('role', '')
     is_admin = role in ('admin', 'super_admin')
-    is_author = note.get("createdBy", {}).get("id") == staff_payload.get("id")
+    is_author = note.get("staff_id") == staff_payload.get("id")
 
     if not is_author and not is_admin:
         raise HTTPException(status_code=403, detail="Solo el autor o admin puede eliminar")
 
-
-
-    
-
     update("case_notes", {"id": note_id}, {
         "deleted": True,
-        "deletedAt": datetime.now(timezone.utc).isoformat(),
-        "deletedBy": {"id": staff_payload.get("id"), "name": staff_payload.get("name", ""), "role": role},
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+        "deleted_by": staff_payload.get("id"),
     })
 
     return {"success": True, "message": "Nota eliminada"}
@@ -5539,6 +5518,54 @@ async def import_master_case(
             status_code=500,
             detail=f"Error al importar caso maestro: {str(e)}"
         )
+
+
+@api_router.post("/admin/repair-document-names")
+async def repair_document_names(staff_payload: dict = Depends(verify_staff_token)):
+    """One-time repair: populate name/document_name for all visa_documents from master case template."""
+    if staff_payload.get('role') != 'super_admin':
+        raise HTTPException(status_code=403, detail="Solo super_admin puede ejecutar reparaciones")
+    try:
+        from master_case_data import MASTER_CASE_DATA
+        master_docs = MASTER_CASE_DATA.get('client_documents', [])
+
+        # Build lookup: stage_number -> list of doc templates (ordered)
+        from collections import defaultdict
+        master_by_stage = defaultdict(list)
+        for md in master_docs:
+            master_by_stage[md['stageNumber']].append(md)
+
+        # Get ALL documents across all cases
+        all_docs = select("visa_documents", limit=10000)
+        updated = 0
+
+        # Group by case_id + stage_number
+        case_stage_docs = defaultdict(list)
+        for doc in all_docs:
+            key = (doc.get('case_id') or doc.get('caseId'), doc.get('stage_number') or doc.get('stageNumber'))
+            case_stage_docs[key].append(doc)
+
+        for (case_id, stage_num), docs in case_stage_docs.items():
+            templates = master_by_stage.get(stage_num, [])
+            # Sort both by created_at to match positionally
+            docs.sort(key=lambda d: d.get('created_at') or d.get('createdAt') or '')
+            for i, doc in enumerate(docs):
+                doc_id = doc.get('id')
+                if not doc_id:
+                    continue
+                # Match to template by position
+                if i < len(templates):
+                    tmpl = templates[i]
+                    update("visa_documents", {"id": doc_id}, {
+                        "name": tmpl.get('name', {}),
+                        "document_name": tmpl.get('documentName', ''),
+                    })
+                    updated += 1
+
+        return {'message': f'Reparados {updated} documentos', 'total_docs': len(all_docs)}
+    except Exception as e:
+        logger.error(f"Repair document names error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @api_router.delete("/admin/users/{user_id}")
@@ -8479,8 +8506,8 @@ async def get_visa_case_detail(
                 # Add coordinatorName for frontend compatibility
                 case['coordinatorName'] = coordinator.get('name', '')
         
-        # Obtener info de vendedor/a (check both sellerId and salesRepId)
-        seller_id = case.get('seller_id') or case.get('sales_rep_id') or case.get('sellerId') or case.get('salesRepId')
+        # Obtener info de vendedor/a (column is advisor_id in Supabase)
+        seller_id = case.get('advisor_id') or case.get('advisorId') or case.get('seller_id') or case.get('sellerId') or case.get('salesRepId')
         if seller_id:
             seller = select("staff", filters={"id": seller_id}, single=True)
             if seller:
@@ -8552,7 +8579,7 @@ async def update_visa_case(
             resource_id=case_id,
             details=update_data
         )
-        insert("activity_log", log)
+        insert("activity_logs", log)
 
         # Notifications for coordinator assignment and status change
         from services.case_notifications import notify_coordinator_assigned, notify_case_status_changed
@@ -9050,7 +9077,7 @@ async def move_single_document(
                 'caseId': case_id,
                 'fromStage': old_stage,
                 'toStage': request.to_stage,
-                'documentName': document.get('documentName') or document.get('name', {}).get('es')
+                'documentName': document.get('documentName') or (document.get('name') or {}).get('es')
             }
         )
         insert("activity_logs", log)
@@ -9167,7 +9194,7 @@ async def change_document_stage(
                 'caseId': document.get('caseId'),
                 'fromStage': old_stage,
                 'toStage': request.stageNumber,
-                'documentName': document.get('documentName') or document.get('name', {}).get('es')
+                'documentName': document.get('documentName') or (document.get('name') or {}).get('es')
             }
         )
         insert("activity_logs", log)
@@ -9663,7 +9690,7 @@ async def update_stage_name_bulk(
                 'affectedCases': result_modified_count
             }
         )
-        insert("activity_log", log)
+        insert("activity_logs", log)
         
         logger.info(f"Bulk stage name update: Stage {stage_number} renamed to '{new_name['es']}' - {0} cases affected by staff {staff_payload['id']}")
         
@@ -9881,7 +9908,7 @@ async def update_stage_description_bulk(
                 'affectedCases': result_modified_count
             }
         )
-        insert("activity_log", log)
+        insert("activity_logs", log)
 
         logger.info(f"Bulk stage description update: Stage {stage_number} - {result_modified_count} cases affected")
 
@@ -10204,7 +10231,7 @@ async def move_deliverable_to_stage(
                 'affectedCount': result_modified_count
             }
         )
-        insert("activity_log", log)
+        insert("activity_logs", log)
 
         logger.info(f"Moved deliverable '{request.deliverable_name_es}' from stage {request.from_stage} to {request.to_stage} - {result_modified_count} cases")
 
@@ -10711,21 +10738,18 @@ async def validate_client_document(
 ):
     """Validate a client document"""
     try:
+        if not document_id or document_id == 'undefined':
+            raise HTTPException(status_code=400, detail="Invalid document ID")
         document = select("visa_documents", filters={"id": document_id}, single=True)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        # Actualizar documento
+        # Actualizar documento (only columns that exist in visa_documents)
         update_data = {
             'status': DocumentStatus.VALIDATED,
             'reviewedBy': staff_payload['id'],
-            'reviewedAt': datetime.now(timezone.utc).isoformat(),
-            'validatedAt': datetime.now(timezone.utc).isoformat(),
             'updatedAt': datetime.now(timezone.utc).isoformat()
         }
-        
-        if request.validationNotes:
-            update_data['validationNotes'] = request.validationNotes
         
 
         
@@ -10751,7 +10775,7 @@ async def validate_client_document(
             
             update("visa_cases", {"id": case_id}, {"updatedAt": datetime.now(timezone.utc).isoformat()})
             staff = select("staff", filters={"id": staff_payload['id']}, single=True)
-            doc_name = document.get('documentName') or document.get('name', {}).get('es', 'Documento')
+            doc_name = document.get('documentName') or (document.get('name') or {}).get('es', 'Documento')
             await log_case_audit(
                 case_id=case_id,
                 action=f"Documento '{doc_name}' validado",
@@ -10803,11 +10827,10 @@ async def reject_client_document(
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        # Actualizar documento
+        # Actualizar documento (only columns that exist in visa_documents)
         update_data = {
             'status': DocumentStatus.REJECTED,
             'reviewedBy': staff_payload['id'],
-            'reviewedAt': datetime.now(timezone.utc).isoformat(),
             'rejectionReason': request.rejectionReason,
             'updatedAt': datetime.now(timezone.utc).isoformat()
         }
@@ -10839,7 +10862,7 @@ async def reject_client_document(
             
             update("visa_cases", {"id": case_id}, {"updatedAt": datetime.now(timezone.utc).isoformat()})
             staff = select("staff", filters={"id": staff_payload['id']}, single=True)
-            doc_name = document.get('documentName') or document.get('name', {}).get('es', 'Documento')
+            doc_name = document.get('documentName') or (document.get('name') or {}).get('es', 'Documento')
             await log_case_audit(
                 case_id=case_id,
                 action=f"Documento '{doc_name}' rechazado: {request.rejectionReason}",

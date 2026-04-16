@@ -130,6 +130,7 @@ export const VisaCaseDetailRedesign = () => {
   const [magicLinks, setMagicLinks] = useState([]);
   const [generateLinkModalOpen, setGenerateLinkModalOpen] = useState(false);
   const [generatingLink, setGeneratingLink] = useState(false);
+  const [loadingLinks, setLoadingLinks] = useState(false);
   
   // Whitepaper generation state
   const [wpJob, setWpJob] = useState(null);
@@ -1336,6 +1337,7 @@ export const VisaCaseDetailRedesign = () => {
   const fetchMagicLinks = useCallback(async () => {
     try {
       if (caseData?.user?.id) {
+        setLoadingLinks(true);
         const { data } = await axios.get(
           `${BACKEND_URL}/api/admin/users/${caseData.user.id}/magic-links`,
           { headers: { Authorization: `Bearer ${token}` } }
@@ -1344,6 +1346,8 @@ export const VisaCaseDetailRedesign = () => {
       }
     } catch (error) {
       console.error('Error fetching magic links:', error);
+    } finally {
+      setLoadingLinks(false);
     }
   }, [caseData, token]);
 
@@ -1442,7 +1446,7 @@ export const VisaCaseDetailRedesign = () => {
     try {
       setIsRejecting(true);
       await axios.put(
-        `${BACKEND_URL}/api/admin/client-documents/${documentToReject._id}/reject`,
+        `${BACKEND_URL}/api/admin/client-documents/${documentToReject.id || documentToReject._id}/reject`,
         { rejectionReason },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -1503,8 +1507,8 @@ export const VisaCaseDetailRedesign = () => {
     
     const { type, item } = itemToChangeStage;
     const endpoint = type === 'deliverable' 
-      ? `${BACKEND_URL}/api/admin/deliverables/${item._id}/change-stage`
-      : `${BACKEND_URL}/api/admin/client-documents/${item._id}/change-stage`;
+      ? `${BACKEND_URL}/api/admin/deliverables/${item.id || item._id}/change-stage`
+      : `${BACKEND_URL}/api/admin/client-documents/${item.id || item._id}/change-stage`;
     
     try {
       setChangingStage(true);
@@ -1564,7 +1568,7 @@ export const VisaCaseDetailRedesign = () => {
     
     try {
       await axios.delete(
-        `${BACKEND_URL}/api/admin/deliverables/${deliverableToDelete._id}`,
+        `${BACKEND_URL}/api/admin/deliverables/${deliverableToDelete.id || deliverableToDelete._id}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       toast.success('Entregable eliminado');
@@ -1826,7 +1830,12 @@ export const VisaCaseDetailRedesign = () => {
                   </Button>
                 </div>
 
-                {magicLinks.length === 0 ? (
+                {loadingLinks ? (
+                  <div className="text-center py-8 bg-gray-50 rounded-lg">
+                    <Loader2 className="h-8 w-8 text-purple-500 mx-auto mb-3 animate-spin" />
+                    <p className="text-gray-500">Cargando links de acceso...</p>
+                  </div>
+                ) : magicLinks.length === 0 ? (
                   <div className="text-center py-8 bg-gray-50 rounded-lg">
                     <LinkIcon className="h-12 w-12 text-gray-300 mx-auto mb-3" />
                     <p className="text-gray-500 mb-2">No hay links de acceso generados</p>
@@ -2194,12 +2203,12 @@ export const VisaCaseDetailRedesign = () => {
                               <CommandGroup>
                                 {staffList.filter(s => s.role === 'coordinator' || s.role === 'admin').map((staff) => (
                                   <CommandItem
-                                    key={staff._id}
-                                    onSelect={() => handleAssignCoordinator(staff._id)}
+                                    key={staff.id}
+                                    onSelect={() => handleAssignCoordinator(staff.id)}
                                     className="text-gray-700 hover:bg-gray-100"
                                   >
                                     {staff.name}
-                                    {caseData.coordinatorId === staff._id && (
+                                    {caseData.coordinatorId === staff.id && (
                                       <Check className="ml-auto h-4 w-4 text-blue-600" />
                                     )}
                                   </CommandItem>
@@ -2235,12 +2244,12 @@ export const VisaCaseDetailRedesign = () => {
                               <CommandGroup>
                                 {staffList.filter(s => s.role === 'advisor' || s.role === 'admin').map((staff) => (
                                   <CommandItem
-                                    key={staff._id}
-                                    onSelect={() => handleAssignSeller(staff._id)}
+                                    key={staff.id}
+                                    onSelect={() => handleAssignSeller(staff.id)}
                                     className="text-gray-700 hover:bg-gray-100"
                                   >
                                     {staff.name}
-                                    {caseData.sellerId === staff._id && (
+                                    {caseData.sellerId === staff.id && (
                                       <Check className="ml-auto h-4 w-4 text-blue-600" />
                                     )}
                                   </CommandItem>
@@ -2519,7 +2528,7 @@ export const VisaCaseDetailRedesign = () => {
               
               return (
                 <Card 
-                  key={stage._id || index} 
+                  key={stage.id || index} 
                   className={`bg-white border-gray-200 shadow-sm transition-all cursor-pointer hover:shadow-md ${
                     selectedStage?.stageNumber === stage.stageNumber && !viewAllStages ? 'ring-2 ring-blue-500' : ''
                   }`}
@@ -2654,7 +2663,7 @@ export const VisaCaseDetailRedesign = () => {
                                 
                                 return (
                                   <div 
-                                    key={del._id}
+                                    key={del.id}
                                     className="border border-gray-200 rounded-lg p-4 bg-white"
                                     onClick={(e) => e.stopPropagation()}
                                   >
@@ -3250,7 +3259,7 @@ export const VisaCaseDetailRedesign = () => {
                                               <Button
                                                 size="sm"
                                                 variant="ghost"
-                                                onClick={() => setFileToDelete({ deliverableId: del._id, fileId: file.id || 'legacy', fileName: file.fileName || `Archivo ${index + 1}` })}
+                                                onClick={() => setFileToDelete({ deliverableId: del.id, fileId: file.id || 'legacy', fileName: file.fileName || `Archivo ${index + 1}` })}
                                                 className="h-8 px-2 text-red-500 hover:text-red-700 hover:bg-red-50"
                                               >
                                                 <Trash2 className="h-4 w-4" />
@@ -3273,7 +3282,7 @@ export const VisaCaseDetailRedesign = () => {
                             <p className="text-sm text-gray-500 mb-3">Documentos del Cliente ({stageDocuments.length})</p>
                             <div className="space-y-3">
                               {stageDocuments.map((doc) => {
-                                const docName = getText(doc.name, doc.documentName || 'Documento').toLowerCase();
+                                const docName = getText(doc.name || doc.documentType || doc.documentName, 'Documento').toLowerCase();
                                 const isDocHojaDeVida = docName.includes('hoja de vida') || docName.includes('curriculum') || docName.includes('resume');
                                 const cvForDoc = isDocHojaDeVida && userCvs.length > 0 ? userCvs[0] : null;
                                 
@@ -3292,7 +3301,7 @@ export const VisaCaseDetailRedesign = () => {
                                 
                                 return (
                                   <div 
-                                    key={doc._id}
+                                    key={doc.id}
                                     className="border border-gray-200 rounded-lg p-4 bg-white"
                                     onClick={(e) => e.stopPropagation()}
                                   >
@@ -3301,7 +3310,7 @@ export const VisaCaseDetailRedesign = () => {
                                       <div className="flex items-center gap-3">
                                         <docStatus.icon className="h-5 w-5 text-gray-500" />
                                         <div className="flex items-center gap-2 flex-wrap">
-                                          <span className="font-medium text-gray-900">{getText(doc.name, doc.documentName || 'Documento')}</span>
+                                          <span className="font-medium text-gray-900">{getText(doc.name || doc.documentType || doc.documentName, 'Documento')}</span>
                                           {docFiles.length > 1 && (
                                             <Badge className="bg-blue-100 text-blue-700">{docFiles.length} archivo(s)</Badge>
                                           )}
@@ -3312,11 +3321,11 @@ export const VisaCaseDetailRedesign = () => {
                                         <div className="flex items-center gap-2">
                                           <Button
                                             size="sm"
-                                            onClick={() => handleValidateDocument(doc._id)}
-                                            disabled={validatingDocId === doc._id}
+                                            onClick={() => handleValidateDocument(doc.id)}
+                                            disabled={validatingDocId === doc.id}
                                             className="bg-emerald-500 hover:bg-emerald-600 text-white"
                                           >
-                                            {validatingDocId === doc._id ? (
+                                            {validatingDocId === doc.id ? (
                                               <Loader2 className="h-4 w-4 animate-spin" />
                                             ) : (
                                               <>
@@ -3457,7 +3466,7 @@ export const VisaCaseDetailRedesign = () => {
                 ) : (
                   <div className="space-y-4">
                     {documents.map((doc) => {
-                      const allDocName = getText(doc.name, doc.documentName || 'Documento').toLowerCase();
+                      const allDocName = getText(doc.name || doc.documentType || doc.documentName, 'Documento').toLowerCase();
                       const isAllDocHojaDeVida = allDocName.includes('hoja de vida') || allDocName.includes('curriculum') || allDocName.includes('resume');
                       const cvForAllDoc = isAllDocHojaDeVida && userCvs.length > 0 ? userCvs[0] : null;
                       
@@ -3474,7 +3483,7 @@ export const VisaCaseDetailRedesign = () => {
                       
                       return (
                         <div 
-                          key={doc._id}
+                          key={doc.id}
                           className="border border-gray-200 rounded-xl p-4 bg-white hover:shadow-md transition-shadow"
                         >
                           {/* Document Header */}
@@ -3486,7 +3495,7 @@ export const VisaCaseDetailRedesign = () => {
                               <div>
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <p className="font-medium text-gray-900">
-                                    {getText(doc.name, doc.documentName || 'Documento')}
+                                    {getText(doc.name || doc.documentType || doc.documentName, 'Documento')}
                                   </p>
                                   {docFiles.length > 1 && (
                                     <Badge className="bg-blue-100 text-blue-700">
@@ -3511,11 +3520,11 @@ export const VisaCaseDetailRedesign = () => {
                                 <>
                                   <Button
                                     size="sm"
-                                    onClick={() => handleValidateDocument(doc._id)}
-                                    disabled={validatingDocId === doc._id}
+                                    onClick={() => handleValidateDocument(doc.id)}
+                                    disabled={validatingDocId === doc.id}
                                     className="bg-emerald-500 hover:bg-emerald-600 text-white"
                                   >
-                                    {validatingDocId === doc._id ? (
+                                    {validatingDocId === doc.id ? (
                                       <Loader2 className="h-4 w-4 animate-spin" />
                                     ) : (
                                       <>
@@ -3638,7 +3647,7 @@ export const VisaCaseDetailRedesign = () => {
                   <div className="space-y-4">
                     {manualPayments.map((payment) => (
                       <div 
-                        key={payment._id || payment.id}
+                        key={payment.id || payment.id}
                         className="border-2 border-emerald-200 rounded-xl p-4 bg-emerald-50/30"
                       >
                         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
@@ -3733,7 +3742,7 @@ export const VisaCaseDetailRedesign = () => {
                                   size="sm"
                                   onClick={() => {
                                     setEditPaymentData({
-                                      id: payment.id || payment._id,
+                                      id: payment.id || payment.id,
                                       amount: payment.amount || 0,
                                       paymentMethod: payment.paymentMethod || 'transfer',
                                       paymentDate: payment.paymentDate ? payment.paymentDate.split('T')[0] : '',
@@ -3757,7 +3766,7 @@ export const VisaCaseDetailRedesign = () => {
                                     setDeletePaymentModalOpen(true);
                                   }}
                                   className="text-red-600 border-red-200 hover:bg-red-50"
-                                  data-testid={`delete-payment-${payment._id || payment.id}`}
+                                  data-testid={`delete-payment-${payment.id || payment.id}`}
                                 >
                                   <Trash2 className="h-4 w-4 mr-1" />
                                   Eliminar
