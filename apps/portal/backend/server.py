@@ -2928,7 +2928,11 @@ async def delete_payment(
             )
         
         logger.info(f"✅ Payment {payment_id} deleted by {staff_info.get('email')} - Amount: ${payment_info['amount']}, User: {payment_info['userName']}")
-        
+
+        _pay_case_id = payment.get('case_id') or payment.get('caseId')
+        if _pay_case_id:
+            await log_case_audit(case_id=_pay_case_id, action=f"Pago de ${payment_info.get('amount', 0)} eliminado", action_type="payment_deleted", performed_by_id=staff_info['id'], performed_by_name=staff_info.get('name', 'Staff'), performed_by_role=staff_info.get('role', ''), details=payment_info)
+
         return {
             "success": True,
             "message": "Pago eliminado exitosamente",
@@ -4188,6 +4192,7 @@ async def create_case_note(case_id: str, data: CaseNoteCreate, staff_payload: di
         "email": staff_payload.get("email", ""),
         "role": staff_payload.get("role", ""),
     }
+    await log_case_audit(case_id=case_id, action=f"Nota agregada: \"{data.text.strip()[:80]}{'...' if len(data.text.strip()) > 80 else ''}\"", action_type="note_added", performed_by_id=staff_payload.get('id', ''), performed_by_name=staff_payload.get('name', 'Staff'), performed_by_role=staff_payload.get('role', ''))
     return {"success": True, "note": result}
 
 
@@ -4228,9 +4233,52 @@ async def get_case_activities(
     total = count("case_audit_logs", {"case_id": case_id})
     all_activities = select("case_audit_logs", filters={"case_id": case_id}, order="created_at", order_desc=True, limit=skip + limit)
     activities = all_activities[skip:skip + limit]
+
+    # Enrich with staff names (frontend expects performedBy.name)
+    staff_ids = list(set(a.get("staff_id") for a in activities if a.get("staff_id")))
+    staff_map = {}
+    for sid in staff_ids:
+        s = select("staff", filters={"id": sid}, columns="id,name,role", single=True)
+        if s:
+            staff_map[sid] = s
+
+    # Map DB fields to frontend expected format
+    type_icon_map = {
+        "deliverable_file_uploaded": ("upload", "Archivo subido"),
+        "deliverable_file_deleted": ("trash", "Archivo eliminado"),
+        "deliverable_moved": ("move", "Entregable movido"),
+        "document_moved": ("move", "Documento movido"),
+        "document_validated": ("check", "Documento validado"),
+        "document_rejected": ("x", "Documento rechazado"),
+        "payment_registered": ("dollar", "Pago registrado"),
+        "payment_deleted": ("trash", "Pago eliminado"),
+        "case_updated": ("edit", "Caso actualizado"),
+        "stage_price_updated": ("dollar", "Precio de etapa actualizado"),
+        "stage_updated": ("edit", "Etapa editada"),
+        "stage_unlocked": ("unlock", "Etapa desbloqueada"),
+        "note_added": ("message", "Nota agregada"),
+    }
+
     for a in activities:
-        if isinstance(a.get("created_at"), datetime):
-            a["created_at"] = a["created_at"].isoformat()
+        ts = a.get("created_at") or a.get("createdAt")
+        if isinstance(ts, datetime):
+            ts = ts.isoformat()
+        action_type = a.get("field_changed") or a.get("fieldChanged") or ""
+        icon, default_label = type_icon_map.get(action_type, ("activity", action_type))
+
+        sid = a.get("staff_id") or a.get("staffId")
+        staff = staff_map.get(sid)
+
+        a["label"] = a.get("action") or default_label
+        a["type"] = action_type
+        a["icon"] = icon
+        a["timestamp"] = ts
+        a["performedBy"] = {
+            "id": sid or "",
+            "name": staff.get("name", "Sistema") if staff else "(sistema)",
+            "role": staff.get("role", "") if staff else "",
+        }
+
     return {"activities": activities, "total": total, "page": page, "pages": (total + limit - 1) // limit if total > 0 else 1}
 
 
@@ -5407,117 +5455,118 @@ async def import_master_case(
     force: bool = False
 ):
     """
-    Importar el caso maestro completo: caso, etapas, entregables, documentos requeridos y documentos legales.
-    
+    Importar el caso maestro completo.
     Body: JSON con masterCase, masterStages, masterDeliverables, clientDocuments, legalDocuments
     Query param: force=true para sobrescribir existente
     """
     try:
-        # Obtener datos del body
         import_data = await request.json()
-        
+        MASTER_ID = "master_case_eb2_niw"
+
         master_case = import_data.get('masterCase')
         master_stages = import_data.get('masterStages', [])
         master_deliverables = import_data.get('masterDeliverables', [])
-        client_documents = import_data.get('clientDocuments', [])  # Documentos requeridos del master case
+        client_documents = import_data.get('clientDocuments', [])
         legal_documents = import_data.get('legalDocuments', [])
-        
+
         if not master_case:
-            raise HTTPException(
-                status_code=400,
-                detail="Se requiere masterCase en el body"
-            )
-        
-        # Verificar si ya existe
-        existing_case = select("visa_cases", filters={"case_id": "master_case_eb2_niw"}, single=True)
-        
+            raise HTTPException(status_code=400, detail="Se requiere masterCase en el body")
+
+        existing_case = select("visa_cases", filters={"case_id": MASTER_ID}, single=True)
         if existing_case and not force:
-            raise HTTPException(
-                status_code=409,
-                detail="Ya existe un caso maestro. Usa ?force=true para sobrescribir"
-            )
-        
-        results = {
-            'previousCaseDeleted': False,
-            'previousStagesDeleted': 0,
-            'previousDeliverablesDeleted': 0,
-            'previousClientDocsDeleted': 0,
-            'previousLegalDocsDeleted': 0,
-            'caseImported': False,
-            'stagesImported': 0,
-            'deliverablesImported': 0,
-            'clientDocsImported': 0,
-            'legalDocsImported': 0
+            raise HTTPException(status_code=409, detail="Ya existe un caso maestro. Usa ?force=true para sobrescribir")
+
+        results = {'stagesImported': 0, 'deliverablesImported': 0, 'clientDocsImported': 0, 'legalDocsImported': 0}
+
+        sb = get_supabase()
+
+        # Delete existing master data if force
+        if existing_case:
+            # Delete child tables first (stages cascades deliverables via FK)
+            sb.table("visa_documents").delete().eq("case_id", existing_case['id']).execute()
+            sb.table("visa_deliverables").delete().eq("case_id", existing_case['id']).execute()
+            sb.table("visa_stages").delete().eq("case_id", existing_case['id']).execute()
+            sb.table("visa_cases").delete().eq("id", existing_case['id']).execute()
+            logger.info(f"Deleted existing master case {existing_case['id']}")
+
+        # Insert master case — map to actual columns
+        case_row = {
+            "case_id": MASTER_ID,
+            "visa_type": master_case.get("visaType", "EB-2 NIW"),
+            "status": "template",
+            "is_master_case": True,
+            "current_stage": 1,
         }
-        
-        # Eliminar existente si force=true
-        if existing_case and force:
-            delete("visa_cases", {"case_id": "master_case_eb2_niw"})
-            results['previousCaseDeleted'] = True
-            
-            stages_result = delete("visa_stages", {'caseId': 'master_case_eb2_niw'})
-            results['previousStagesDeleted'] = stages_result.deleted_count
-            
-            deliverables_result = delete("visa_deliverables", {'caseId': 'master_case_eb2_niw'})
-            results['previousDeliverablesDeleted'] = deliverables_result.deleted_count
-            
-            # Eliminar documentos requeridos del master case
-            client_docs_result = delete("visa_documents", {'caseId': 'master_case_eb2_niw'})
-            results['previousClientDocsDeleted'] = client_docs_result.deleted_count
-            
-            # Eliminar documentos legales existentes
-            legal_result = delete("legal_documents", {})
-            results['previousLegalDocsDeleted'] = legal_result.deleted_count
-        
-        # Insertar caso maestro
-        insert("visa_cases", master_case)
-        results['caseImported'] = True
-        
-        # Insertar etapas
-        if master_stages:
-            for _doc in master_stages:
-                _doc.pop('_id', None)  # Remove MongoDB _id if present
-                insert("visa_stages", _doc)
-            results['stagesImported'] = len(master_stages)
+        case_result = sb.table("visa_cases").insert(case_row).execute()
+        case_uuid = case_result.data[0]['id']  # auto-generated UUID
+        logger.info(f"Master case created with UUID: {case_uuid}")
 
-        # Insertar deliverables
-        if master_deliverables:
-            for _doc in master_deliverables:
-                _doc.pop('_id', None)
-                insert("visa_deliverables", _doc)
-            results['deliverablesImported'] = len(master_deliverables)
+        # Insert stages
+        for s in master_stages:
+            stage_row = {
+                "case_id": case_uuid,
+                "stage_number": s.get("stageNumber"),
+                "name": s.get("name"),
+                "description": s.get("description"),
+                "percentage": float(s.get("percentage", 0) or 0),
+                "amount": float(s.get("amount", 0) or 0),
+                "status": s.get("status", "locked"),
+                "is_paid": s.get("isPaid", False),
+                "completed_deliverables_count": s.get("completedDeliverablesCount", 0),
+                "total_deliverables_count": s.get("totalDeliverablesCount", 0),
+            }
+            sb.table("visa_stages").insert(stage_row).execute()
+            results['stagesImported'] += 1
 
-        # Insertar documentos requeridos del cliente
-        if client_documents:
-            for _doc in client_documents:
-                _doc.pop('_id', None)
-                insert("visa_documents", _doc)
-            results['clientDocsImported'] = len(client_documents)
+        # Insert deliverables
+        for d in master_deliverables:
+            deliv_row = {
+                "case_id": case_uuid,
+                "stage_number": d.get("stageNumber"),
+                "name": d.get("name"),
+                "description": d.get("description"),
+                "status": d.get("status", "draft"),
+                "file_url": d.get("fileUrl"),
+                "file_name": d.get("fileName"),
+            }
+            sb.table("visa_deliverables").insert(deliv_row).execute()
+            results['deliverablesImported'] += 1
 
-        # Insertar documentos legales
-        if legal_documents:
-            for _doc in legal_documents:
+        # Insert client documents
+        for doc in client_documents:
+            doc_row = {
+                "case_id": case_uuid,
+                "stage_number": doc.get("stageNumber"),
+                "name": doc.get("name"),
+                "document_name": doc.get("documentName", ""),
+                "description": doc.get("description"),
+                "status": doc.get("status", "pending"),
+                "required": doc.get("required", False),
+                "requires_physical_copy": doc.get("requiresPhysicalCopy", False),
+                "type": doc.get("type"),
+                "input_type": doc.get("inputType"),
+                "text_value": doc.get("textValue"),
+            }
+            sb.table("visa_documents").insert(doc_row).execute()
+            results['clientDocsImported'] += 1
 
-            
-                insert("legal_documents", _doc)
-            results['legalDocsImported'] = len(legal_documents)
-        
-        logger.info(f"✅ Master case imported - {results['stagesImported']} stages, {results['deliverablesImported']} deliverables, {results['clientDocsImported']} client docs, {results['legalDocsImported']} legal docs")
-        
-        return {
-            'success': True,
-            'message': 'Caso maestro importado exitosamente',
-            'results': results
-        }
-        
+        # Insert legal documents
+        for ld in legal_documents:
+            ld.pop('_id', None)
+            try:
+                sb.table("legal_documents").insert(ld).execute()
+                results['legalDocsImported'] += 1
+            except Exception as le:
+                logger.warning(f"Skipped legal doc: {le}")
+
+        logger.info(f"✅ Master case imported: {results}")
+        return {'success': True, 'message': 'Caso maestro importado exitosamente', 'caseId': case_uuid, 'results': results}
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error importing master case: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al importar caso maestro: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error al importar caso maestro: {str(e)}")
 
 
 @api_router.post("/admin/repair-document-names")
@@ -5595,10 +5644,10 @@ async def delete_user(
                 detail=f"User not found with ID: {user_id}"
             )
         
-        actual_user_id = user.get('_id')  # Usar el ID real del documento
+        actual_user_id = user.get('id')
         user_name = user.get('name', 'Unknown')
         user_email = user.get('email', 'N/A')
-        
+
         deletion_summary = {
             "user": {
                 "name": user_name,
@@ -5612,41 +5661,36 @@ async def delete_user(
                 "deliverables": 0,
                 "documents": 0,
                 "payments": 0,
-                "manual_payments": 0
             }
         }
-        
-        # Buscar y eliminar todos los casos del usuario (usando el ID como string)
-        user_id_str = str(actual_user_id)
-        user_cases = select("visa_cases", filters={"userId": user_id_str})
-        
+
+        # Buscar casos del usuario (Supabase uses client_id)
+        user_cases = select("visa_cases", filters={"client_id": actual_user_id})
+
         for user_case in user_cases:
-            case_id = user_case.get('caseId') or user_case.get('id') or str(user_case.get('_id'))
-            
-            # Eliminar stages
-            stages_result = delete("visa_stages", {"caseId": case_id})
+            case_id = user_case.get('id')
+            if not case_id:
+                continue
+
+            # Las FK con ON DELETE CASCADE eliminan stages, deliverables, documents, payments automáticamente
+            # pero por si acaso hacemos delete explícito
+            stages_result = delete("visa_stages", {"case_id": case_id})
             deletion_summary["deleted"]["stages"] += stages_result.deleted_count
-            
-            # Eliminar deliverables
-            deliverables_result = delete("visa_deliverables", {"caseId": case_id})
+
+            deliverables_result = delete("visa_deliverables", {"case_id": case_id})
             deletion_summary["deleted"]["deliverables"] += deliverables_result.deleted_count
-            
-            # Eliminar documentos
-            docs_result = delete("visa_documents", {"caseId": case_id})
+
+            docs_result = delete("visa_documents", {"case_id": case_id})
             deletion_summary["deleted"]["documents"] += docs_result.deleted_count
-            
-            # Eliminar pagos (ambas colecciones)
-            payments_result = delete("payments", {"caseId": case_id})
+
+            payments_result = delete("payments", {"case_id": case_id})
             deletion_summary["deleted"]["payments"] += payments_result.deleted_count
-            
-            manual_payments_result = delete("payments", {"caseId": case_id})
-            deletion_summary["deleted"]["manual_payments"] += manual_payments_result.deleted_count
-        
+
         # Eliminar todos los casos del usuario
-        cases_result = delete("visa_cases", {"userId": user_id_str})
+        cases_result = delete("visa_cases", {"client_id": actual_user_id})
         deletion_summary["deleted"]["cases"] = cases_result.deleted_count
-        
-        # Eliminar usuario (usando el ID real)
+
+        # Eliminar usuario
         delete("clients", {"id": actual_user_id})
         
         logger.info(f"✅ User deleted by {staff_payload.get('email')}: {user_email} (ID: {user_id})")
@@ -7150,22 +7194,15 @@ async def create_user_with_case(
                     detail=f"Ya existe un usuario con el email {request.email}. Por favor, usa el usuario existente o verifica el email."
                 )
         
-        # Create user
+        # Create user (only columns that exist in clients table)
         user_id = str(uuid.uuid4())
         user = {
             "id": user_id,
             "name": request.name,
             "email": request.email or "",
             "phone": request.phone or "",
-            "userState": "U1",  # Initial user state
-            "cvUrl": request.cvUrl or None,  # CV URL
-            "createdBy": {
-                "id": staff_payload['id'],
-                "name": staff_payload.get('name', 'Staff'),
-                "email": staff_payload.get('email', '')
-            },
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-            "updatedAt": datetime.now(timezone.utc).isoformat()
+            "user_state": "U1",
+            "cv_url": request.cvUrl or None,
         }
         
         insert("clients", user)
@@ -7183,171 +7220,96 @@ async def create_user_with_case(
             logger.info(f"CV saved for user {user_id}: {request.cvUrl}")
         
         # Get master case template
-        MASTER_CASE_ID = "master_case_eb2_niw"
-        master_case = select("visa_cases", filters={"caseId": MASTER_CASE_ID, "isMasterCase": True}, single=True)
-        
+        # Find master case by flag
+        master_case = select("visa_cases", filters={"is_master_case": True}, single=True)
         if not master_case:
-            # Rollback user creation
             delete("clients", {"id": user_id})
             raise HTTPException(status_code=500, detail="Master case template not found. User creation rolled back.")
-        
-        # Create visa case for the user
-        visa_case = VisaCase(
-            userId=user_id,
-            visaType=request.visaType or master_case.get("visaType", "EB-2 NIW"),
-            coordinatorId=request.coordinatorId or staff_payload['id'],
-            salesRepId=request.salesRepId if request.salesRepId else None,
-            status=CaseStatus.ELIGIBILITY_APPROVED,
-            currentStage=1,
-            overallProgress=0,
-            eligibilityDate=datetime.now(timezone.utc),
-            notes=request.notes
-        )
-        
-        case_dict = visa_case.model_dump()
-        case_dict['_id'] = case_dict['id']
-        case_dict['templateId'] = "eb2-niw"
-        case_dict['createdBy'] = {
-            "id": staff_payload['id'],
-            "name": staff_payload.get('name', 'Staff'),
-            "email": staff_payload.get('email', '')
+        master_case_uuid = master_case.get('id')
+
+        # Create visa case for the user (only valid columns)
+        new_case_id = str(uuid.uuid4())
+        case_row = {
+            "id": new_case_id,
+            "client_id": user_id,
+            "visa_type": request.visaType or master_case.get("visa_type", "EB-2 NIW"),
+            "coordinator_id": request.coordinatorId or staff_payload['id'],
+            "advisor_id": request.salesRepId if request.salesRepId else None,
+            "status": "elegibility_approved",
+            "current_stage": 1,
+            "is_master_case": False,
         }
-        case_dict['createdAt'] = case_dict['createdAt'].isoformat()
-        case_dict['updatedAt'] = case_dict['updatedAt'].isoformat()
-        if case_dict.get('eligibilityDate'):
-            case_dict['eligibilityDate'] = case_dict['eligibilityDate'].isoformat()
-        
-        insert("visa_cases", case_dict)
-        logger.info(f"✅ Visa case created: {visa_case.id}")
-        
-        # Copy stages from master case
-        master_stages = select("visa_stages", filters={"caseId": MASTER_CASE_ID}, order="stageNumber", order_desc=False)
+        insert("visa_cases", case_row)
+        logger.info(f"✅ Visa case created: {new_case_id}")
 
-        stages = []
-        for master_stage in master_stages:
-            stage_id = str(uuid.uuid4())
-            stage = {
-                "id": stage_id,
-                "caseId": visa_case.id,
-                "stageNumber": master_stage["stageNumber"],
-                "name": master_stage["name"],
-                "description": master_stage.get("description", ""),
-                "percentage": master_stage.get("percentage", 0),
-                "amount": master_stage.get("amount", 0),
-                "status": master_stage.get("status", "locked"),
-                "isPaid": False,
-                "completedDeliverablesCount": 0,
-                "totalDeliverablesCount": master_stage.get("totalDeliverablesCount", 0),
-                "startDate": None,
-                "completionDate": None,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
+        # Copy stages from master case (using UUID)
+        master_stages = select("visa_stages", filters={"case_id": master_case_uuid}, order="stage_number", order_desc=False)
+
+        # Copy stages (only valid columns)
+        sb = get_supabase()
+        for ms in master_stages:
+            stage_row = {
+                "case_id": new_case_id,
+                "stage_number": ms.get("stage_number") or ms.get("stageNumber"),
+                "name": ms.get("name"),
+                "description": ms.get("description"),
+                "percentage": float(ms.get("percentage", 0) or 0),
+                "amount": float(ms.get("amount", 0) or 0),
+                "status": ms.get("status", "locked"),
+                "is_paid": False,
+                "completed_deliverables_count": 0,
+                "total_deliverables_count": ms.get("total_deliverables_count") or ms.get("totalDeliverablesCount", 0),
             }
-            stages.append(stage)
-        
-        if stages:
-            # insert_many: iterate and insert each
+            sb.table("visa_stages").insert(stage_row).execute()
+        logger.info(f"✅ Created {len(master_stages)} stages")
 
-            for _doc in stages:
-
-                insert("visa_stages", _doc)
-            logger.info(f"✅ Created {len(stages)} stages")
-        
-        # Copy deliverables from master case
-        master_deliverables = select("visa_deliverables", filters={"case_id": MASTER_CASE_ID})
-        
-        all_deliverables = []
-        stage_id_map = {s["stageNumber"]: s["_id"] for s in stages}
-        
-        for master_deliv in master_deliverables:
-            deliverable_id = str(uuid.uuid4())
-            new_stage_id = stage_id_map.get(master_deliv["stageNumber"])
-            
-            deliverable = {
-                "id": deliverable_id,
-                "caseId": visa_case.id,
-                "stageId": new_stage_id,
-                "stageNumber": master_deliv["stageNumber"],
-                "deliverableName": master_deliv.get("deliverableName", ""),
-                "name": master_deliv.get("name", {}),
-                "description": master_deliv.get("description", ""),
+        # Copy deliverables (using master_case_uuid)
+        master_deliverables = select("visa_deliverables", filters={"case_id": master_case_uuid})
+        for md in master_deliverables:
+            deliv_row = {
+                "case_id": new_case_id,
+                "stage_number": md.get("stage_number") or md.get("stageNumber"),
+                "name": md.get("name"),
+                "description": md.get("description"),
                 "status": "draft",
-                "fileUrl": None,
-                "fileName": None,
-                "fileSize": None,
-                "uploadedAt": None,
-                "uploadedBy": None,
-                "validatedAt": None,
-                "validatedBy": None,
-                "notes": None,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
             }
-            all_deliverables.append(deliverable)
-        
-        if all_deliverables:
-            # insert_many: iterate and insert each
+            sb.table("visa_deliverables").insert(deliv_row).execute()
+        logger.info(f"✅ Created {len(master_deliverables)} deliverables")
 
-            for _doc in all_deliverables:
-
-                insert("visa_deliverables", _doc)
-            logger.info(f"✅ Created {len(all_deliverables)} deliverables")
-        
-        # Copy required documents from master case
-        master_documents = select("visa_documents", filters={"case_id": MASTER_CASE_ID})
-        
-        all_documents = []
-        for master_doc in master_documents:
-            document_id = str(uuid.uuid4())
-            document = {
-                "id": document_id,
-                "caseId": visa_case.id,
-                "stageNumber": master_doc["stageNumber"],
-                "documentName": master_doc.get("documentName", ""),
-                "name": master_doc.get("name", {}),
-                "description": master_doc.get("description", ""),
+        # Copy documents (using master_case_uuid)
+        master_documents = select("visa_documents", filters={"case_id": master_case_uuid})
+        for mdoc in master_documents:
+            doc_row = {
+                "case_id": new_case_id,
+                "stage_number": mdoc.get("stage_number") or mdoc.get("stageNumber"),
+                "name": mdoc.get("name"),
+                "document_name": mdoc.get("document_name") or mdoc.get("documentName", ""),
+                "description": mdoc.get("description"),
                 "status": "pending",
-                "required": master_doc.get("required", False),
-                "requiresPhysicalCopy": master_doc.get("requiresPhysicalCopy", False),
-                "fileUrl": None,
-                "fileName": None,
-                "fileSize": None,
-                "uploadedAt": None,
-                "reviewedAt": None,
-                "reviewedBy": None,
-                "rejectionReason": None,
-                "notes": None,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
+                "required": mdoc.get("required", False),
+                "requires_physical_copy": mdoc.get("requires_physical_copy") or mdoc.get("requiresPhysicalCopy", False),
+                "type": mdoc.get("type"),
+                "input_type": mdoc.get("input_type") or mdoc.get("inputType"),
             }
-            all_documents.append(document)
-        
-        if all_documents:
-            # insert_many: iterate and insert each
-
-            for _doc in all_documents:
-
-                insert("visa_documents", _doc)
-            logger.info(f"✅ Created {len(all_documents)} required documents")
+            sb.table("visa_documents").insert(doc_row).execute()
+        logger.info(f"✅ Created {len(master_documents)} required documents")
         
         # Generate magic link for the new user
         magic_token = secrets.token_urlsafe(16)
-        magic_link_doc = {
-            "phone": request.phone,
-            "magicToken": magic_token,
-            "userId": user_id,
-            "userState": "U1",
-            "createdAt": datetime.now(timezone.utc)
+        magic_link_row = {
+            "client_id": user_id,
+            "token": magic_token,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=365 * 10)).isoformat(),
         }
-        
-        # Check if magic link already exists for this phone
-        existing_link = select("magic_links", filters={'phone': request.phone}, single=True)
+
+        # Check if magic link already exists for this user
+        existing_link = select("magic_links", filters={"client_id": user_id}, single=True)
         if existing_link:
-            update("magic_links", filters={"phone": request.phone}, data=magic_link_doc)
-            logger.info(f"🔄 Updated magic link for: {request.phone}")
+            update("magic_links", filters={"client_id": user_id}, data={"token": magic_token})
+            logger.info(f"🔄 Updated magic link for user: {user_id}")
         else:
-            insert("magic_links", magic_link_doc)
-            logger.info(f"✅ Created magic link for: {request.phone}")
+            insert("magic_links", magic_link_row)
+            logger.info(f"✅ Created magic link for user: {user_id}")
         
         # Get frontend URL for magic link
         frontend_url = os.getenv('FRONTEND_URL')
@@ -7375,17 +7337,15 @@ async def create_user_with_case(
                     "phone": request.phone,
                     "cvUrl": request.cvUrl or "",
                     "userState": "U1",
-                    "createdAt": user["createdAt"],
                     "magicLink": magic_link_url
                 },
                 "case": {
-                    "id": visa_case.id,
-                    "caseId": visa_case.id,  # Use id as caseId
-                    "visaType": visa_case.visaType,
-                    "stages": len(stages),
-                    "deliverables": len(all_deliverables),
-                    "documents": len(all_documents),
-                    "coordinatorId": visa_case.coordinatorId
+                    "id": new_case_id,
+                    "caseId": new_case_id,
+                    "visaType": request.visaType or "EB-2 NIW",
+                    "stages": len(master_stages),
+                    "deliverables": len(master_deliverables),
+                    "documents": len(master_documents),
                 },
                 "metadata": {
                     "source": "urpe_admin_panel",
@@ -7415,29 +7375,16 @@ async def create_user_with_case(
             logger.error(f"❌ Error sending data to N8N webhooks: {str(webhook_error)}")
         
         # 📤 Notify case webhook about new case creation (admin created)
-        await notify_case_webhook(
-            action="caso_creado",
-            client_data={
-                "id": user_id,
-                "name": request.name,
-                "email": request.email or "",
-                "phone": request.phone or ""
-            },
-            case_data={
-                "caseId": visa_case.id,
-                "visaType": visa_case.visaType,
-                "status": visa_case.status.value if hasattr(visa_case.status, 'value') else str(visa_case.status),
-                "currentStage": visa_case.currentStage
-            },
-            extra_data={
-                "source": "admin_panel_create",
-                "stagesCount": len(stages),
-                "deliverablesCount": len(all_deliverables),
-                "documentsCount": len(all_documents),
-                "createdBy": staff_payload.get('name', 'Admin')
-            }
-        )
-        
+        try:
+            await notify_case_webhook(
+                action="caso_creado",
+                client_data={"id": user_id, "name": request.name, "email": request.email or "", "phone": request.phone or ""},
+                case_data={"caseId": new_case_id, "visaType": request.visaType or "EB-2 NIW", "status": "elegibility_approved", "currentStage": 1},
+                extra_data={"source": "admin_panel_create", "createdBy": staff_payload.get('name', 'Admin')}
+            )
+        except Exception:
+            pass
+
         # Return success response including magic link
         return {
             "success": True,
@@ -7449,12 +7396,12 @@ async def create_user_with_case(
                 "phone": request.phone or ""
             },
             "case": {
-                "id": visa_case.id,
-                "caseId": visa_case.id,  # Use id as caseId
-                "visaType": visa_case.visaType,
-                "stages": len(stages),
-                "deliverables": len(all_deliverables),
-                "documents": len(all_documents)
+                "id": new_case_id,
+                "caseId": new_case_id,
+                "visaType": request.visaType or "EB-2 NIW",
+                "stages": len(master_stages),
+                "deliverables": len(master_deliverables),
+                "documents": len(master_documents)
             },
             "magicLink": magic_link_url
         }
@@ -7725,209 +7672,124 @@ async def create_visa_case(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Use master case from MongoDB instead of hardcoded templates
-        MASTER_CASE_ID = "master_case_eb2_niw"
-        master_case = select("visa_cases", filters={"caseId": MASTER_CASE_ID, "isMasterCase": True}, single=True)
-        
+        # Find master case
+        master_case = select("visa_cases", filters={"is_master_case": True}, single=True)
         if not master_case:
             raise HTTPException(status_code=500, detail="Master case template not found in database")
-        
-        visa_type = request.visaType or master_case.get("visaType", "EB-2 NIW")
-        
-        # Crear el caso de visa con estado "on_hold" por defecto
-        visa_case = VisaCase(
-            userId=request.userId,
-            visaType=visa_type,
-            coordinatorId=request.coordinatorId if request.coordinatorId else None,
-            salesRepId=request.salesRepId if request.salesRepId else None,
-            status="on_hold",  # Estado por defecto: En Espera
-            currentStage=1,
-            overallProgress=0,
-            eligibilityDate=datetime.now(timezone.utc),
-            notes=request.notes
-        )
-        
-        case_dict = visa_case.model_dump()
-        case_dict['templateId'] = request.templateId or "eb2-niw"  # Guardar template ID
-        case_dict['createdBy'] = {
-            "id": staff_payload['id'],
-            "name": staff_payload.get('name', 'Staff'),
-            "email": staff_payload.get('email', '')
+        master_case_uuid = master_case.get('id')
+
+        visa_type = request.visaType or "EB-2 NIW"
+
+        # Create visa case (only valid columns)
+        new_case_id = str(uuid.uuid4())
+        case_row = {
+            "id": new_case_id,
+            "client_id": request.userId,
+            "visa_type": visa_type,
+            "coordinator_id": request.coordinatorId if request.coordinatorId else None,
+            "advisor_id": request.salesRepId if request.salesRepId else None,
+            "status": "on_hold",
+            "current_stage": 1,
+            "is_master_case": False,
         }
-        case_dict['createdAt'] = case_dict['createdAt'].isoformat()
-        case_dict['updatedAt'] = case_dict['updatedAt'].isoformat()
-        if case_dict.get('eligibilityDate'):
-            case_dict['eligibilityDate'] = case_dict['eligibilityDate'].isoformat()
-        
-        # Insertar caso
-        insert("visa_cases", case_dict)
-        
+        sb = get_supabase()
+        sb.table("visa_cases").insert(case_row).execute()
+        logger.info(f"✅ Visa case created: {new_case_id}")
+
         # Copy stages from master case
-        master_stages = select("visa_stages", filters={"caseId": MASTER_CASE_ID}, order="stageNumber", order_desc=False)
+        master_stages = select("visa_stages", filters={"case_id": master_case_uuid}, order="stage_number", order_desc=False)
+        for ms in master_stages:
+            sb.table("visa_stages").insert({
+                "case_id": new_case_id,
+                "stage_number": ms.get("stage_number") or ms.get("stageNumber"),
+                "name": ms.get("name"),
+                "description": ms.get("description"),
+                "percentage": float(ms.get("percentage", 0) or 0),
+                "amount": float(ms.get("amount", 0) or 0),
+                "status": ms.get("status", "locked"),
+                "is_paid": False,
+                "completed_deliverables_count": 0,
+                "total_deliverables_count": ms.get("total_deliverables_count") or ms.get("totalDeliverablesCount", 0),
+            }).execute()
+        logger.info(f"✅ Created {len(master_stages)} stages")
 
-        logger.info(f"Copying {len(master_stages)} stages from master case...")
-        
-        stages = []
-        for master_stage in master_stages:
-            stage_id = str(uuid.uuid4())
-            stage = {
-                "id": stage_id,
-                "caseId": visa_case.id,
-                "stageNumber": master_stage["stageNumber"],
-                "name": master_stage["name"],
-                "description": master_stage.get("description", ""),
-                "percentage": master_stage.get("percentage", 0),
-                "amount": master_stage.get("amount", 0),
-                "status": master_stage.get("status", "locked"),
-                "isPaid": False,
-                "completedDeliverablesCount": 0,
-                "totalDeliverablesCount": master_stage.get("totalDeliverablesCount", 0),
-                "startDate": None,
-                "completionDate": None,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
-            stages.append(stage)
-        
-        if stages:
-            # insert_many: iterate and insert each
-
-            for _doc in stages:
-
-                insert("visa_stages", _doc)
-            logger.info(f"✅ Created {len(stages)} stages")
-        
-        # Copy deliverables from master case
-        master_deliverables = select("visa_deliverables", filters={"case_id": MASTER_CASE_ID})
-        
-        logger.info(f"📦 Copying {len(master_deliverables)} deliverables from master case...")
-        
-        all_deliverables = []
-        stage_id_map = {s["stageNumber"]: s["_id"] for s in stages}
-        
-        for master_deliv in master_deliverables:
-            deliverable_id = str(uuid.uuid4())
-            new_stage_id = stage_id_map.get(master_deliv["stageNumber"])
-            
-            deliverable = {
-                "id": deliverable_id,
-                "caseId": visa_case.id,
-                "stageId": new_stage_id,
-                "stageNumber": master_deliv["stageNumber"],
-                "deliverableName": master_deliv.get("deliverableName", ""),
-                "name": master_deliv.get("name", {}),
-                "description": master_deliv.get("description", ""),
+        # Copy deliverables
+        master_deliverables = select("visa_deliverables", filters={"case_id": master_case_uuid})
+        for md in master_deliverables:
+            sb.table("visa_deliverables").insert({
+                "case_id": new_case_id,
+                "stage_number": md.get("stage_number") or md.get("stageNumber"),
+                "name": md.get("name"),
+                "description": md.get("description"),
                 "status": "draft",
-                "fileUrl": None,
-                "fileName": None,
-                "fileSize": None,
-                "uploadedAt": None,
-                "uploadedBy": None,
-                "validatedAt": None,
-                "validatedBy": None,
-                "notes": None,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
-            all_deliverables.append(deliverable)
-        
-        if all_deliverables:
-            # insert_many: iterate and insert each
+            }).execute()
+        logger.info(f"✅ Created {len(master_deliverables)} deliverables")
 
-            for _doc in all_deliverables:
-
-                insert("visa_deliverables", _doc)
-            logger.info(f"✅ Created {len(all_deliverables)} deliverables")
-        
-        # Copy required documents from master case
-        master_documents = select("visa_documents", filters={"case_id": MASTER_CASE_ID})
-        
-        logger.info(f"📄 Copying {len(master_documents)} required documents from master case...")
-        
-        all_documents = []
-        for master_doc in master_documents:
-            document_id = str(uuid.uuid4())
-            document = {
-                "id": document_id,
-                "caseId": visa_case.id,
-                "stageNumber": master_doc["stageNumber"],
-                "documentName": master_doc.get("documentName", ""),
-                "name": master_doc.get("name", {}),
-                "description": master_doc.get("description", ""),
+        # Copy documents
+        master_documents = select("visa_documents", filters={"case_id": master_case_uuid})
+        for mdoc in master_documents:
+            sb.table("visa_documents").insert({
+                "case_id": new_case_id,
+                "stage_number": mdoc.get("stage_number") or mdoc.get("stageNumber"),
+                "name": mdoc.get("name"),
+                "document_name": mdoc.get("document_name") or mdoc.get("documentName", ""),
+                "description": mdoc.get("description"),
                 "status": "pending",
-                "required": master_doc.get("required", False),
-                "requiresPhysicalCopy": master_doc.get("requiresPhysicalCopy", False),
-                "fileUrl": None,
-                "fileName": None,
-                "fileSize": None,
-                "uploadedAt": None,
-                "reviewedAt": None,
-                "reviewedBy": None,
-                "rejectionReason": None,
-                "notes": None,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
-            all_documents.append(document)
-        
-        if all_documents:
-            # insert_many: iterate and insert each
+                "required": mdoc.get("required", False),
+                "requires_physical_copy": mdoc.get("requires_physical_copy") or mdoc.get("requiresPhysicalCopy", False),
+                "type": mdoc.get("type"),
+                "input_type": mdoc.get("input_type") or mdoc.get("inputType"),
+            }).execute()
+        logger.info(f"✅ Created {len(master_documents)} documents")
 
-            for _doc in all_documents:
-
-                insert("visa_documents", _doc)
-            logger.info(f"✅ Created {len(all_documents)} required documents")
-        
-        # Log de actividad
+        # Log activity
         log = ActivityLog.create_log(
             staff_id=staff_payload['id'],
             action='create',
             resource='visa_case',
-            resource_id=visa_case.id,
-            details={
-                'userId': request.userId,
-                'visaType': visa_type,
-                'templateId': request.templateId or "eb2-niw",
-                'coordinatorId': visa_case.coordinatorId
-            }
+            resource_id=new_case_id,
+            details={'userId': request.userId, 'visaType': visa_type}
         )
         insert("activity_logs", log)
-        
-        logger.info(f"✅ Visa case created from master template: {visa_case.id} for user {request.userId}")
-        logger.info(f"   - {len(stages)} stages, {len(all_deliverables)} deliverables, {len(all_documents)} documents")
-        
-        # 📤 Notify case webhook about new case creation
-        user_info = select("clients", filters={"id": request.userId}, columns="name,email,phone", single=True)
-        await notify_case_webhook(
-            action="caso_creado",
-            client_data={
-                "id": request.userId,
-                "name": user_info.get("name", "") if user_info else "",
-                "email": user_info.get("email", "") if user_info else "",
-                "phone": user_info.get("phone", "") if user_info else ""
-            },
-            case_data={
-                "caseId": visa_case.id,
-                "visaType": visa_case.visaType,
-                "status": visa_case.status.value if hasattr(visa_case.status, 'value') else str(visa_case.status),
-                "currentStage": visa_case.currentStage
-            },
-            extra_data={
-                "source": "admin_create_visa_case",
-                "stagesCount": len(stages),
-                "deliverablesCount": len(all_deliverables),
-                "documentsCount": len(all_documents)
-            }
-        )
-        
+
+        # Webhook (best-effort)
+        try:
+            user_info = select("clients", filters={"id": request.userId}, columns="name,email,phone", single=True)
+            await notify_case_webhook(
+                action="caso_creado",
+                client_data={"id": request.userId, "name": user_info.get("name", "") if user_info else "", "email": user_info.get("email", "") if user_info else "", "phone": user_info.get("phone", "") if user_info else ""},
+                case_data={"caseId": new_case_id, "visaType": visa_type, "status": "on_hold", "currentStage": 1},
+                extra_data={"source": "admin_create_visa_case"}
+            )
+        except Exception:
+            pass
+
+        # Auto-generate magic link if user doesn't have one
+        magic_link_url = None
+        existing_link = select("magic_links", filters={"client_id": request.userId}, single=True)
+        if not existing_link:
+            magic_token = secrets.token_urlsafe(16)
+            insert("magic_links", {
+                "client_id": request.userId,
+                "token": magic_token,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=365 * 10)).isoformat(),
+            })
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:8002')
+            magic_link_url = f"{frontend_url}/welcome/{magic_token}"
+            logger.info(f"✅ Auto-generated magic link for user {request.userId}")
+        else:
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:8002')
+            magic_link_url = f"{frontend_url}/welcome/{existing_link.get('token')}"
+
         return {
-            'case': case_dict,
-            'stages': stages,
-            'deliverables': all_deliverables,
-            'documents': all_documents,
-            'message': f'Visa case created successfully from master template'
+            'case': case_row,
+            'stages': len(master_stages),
+            'deliverables': len(master_deliverables),
+            'documents': len(master_documents),
+            'magicLink': magic_link_url,
+            'message': 'Visa case created successfully from master template'
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -8046,9 +7908,9 @@ async def get_all_visa_cases(
         if query.get('coordinatorId'):
             q = q.eq("coordinator_id", query['coordinatorId'])
         if query.get('salesRepId'):
-            q = q.eq("sales_rep_id", query['salesRepId'])
+            q = q.eq("advisor_id", query['salesRepId'])
         if query.get('sellerId'):
-            q = q.eq("seller_id", query['sellerId'])
+            q = q.eq("advisor_id", query['sellerId'])
 
         # Date range filters
         if dateFrom:
@@ -8065,11 +7927,11 @@ async def get_all_visa_cases(
         # Staff assigned filter (coordinator OR salesRep OR seller)
         if _filter_staff_assigned:
             q = q.or_(
-                f"coordinator_id.eq.{_filter_staff_assigned},sales_rep_id.eq.{_filter_staff_assigned},seller_id.eq.{_filter_staff_assigned}"
+                f"coordinator_id.eq.{_filter_staff_assigned},advisor_id.eq.{_filter_staff_assigned}"
             )
 
         # Search: filter by client IDs matching name/email/phone
-        if search and hasattr(locals(), '_search_user_ids'):
+        if search:
             if _search_user_ids:
                 q = q.in_("client_id", _search_user_ids)
             else:
@@ -8581,6 +8443,17 @@ async def update_visa_case(
         )
         insert("activity_logs", log)
 
+        # Audit log for case update
+        _changes = []
+        if request.coordinatorId is not None:
+            _changes.append(f"Coordinador asignado")
+        if request.salesRepId is not None:
+            _changes.append(f"Vendedor asignado")
+        if request.status:
+            _changes.append(f"Estado cambiado a '{request.status}'")
+        if _changes:
+            await log_case_audit(case_id=case_id, action=", ".join(_changes), action_type="case_updated", performed_by_id=staff_payload['id'], performed_by_name=staff_payload.get('name', 'Staff'), performed_by_role=staff_payload.get('role', ''), details=update_data)
+
         # Notifications for coordinator assignment and status change
         from services.case_notifications import notify_coordinator_assigned, notify_case_status_changed
         staff = select("staff", filters={"id": staff_payload['id']}, single=True)
@@ -8711,21 +8584,20 @@ async def delete_visa_case(
 async def get_master_case(staff_payload: dict = Depends(verify_staff_token)):
     """Get the master case template with all its stages, deliverables, and documents"""
     try:
-        # Get master case
-        master_case = select("visa_cases", filters={"case_id": MASTER_CASE_ID, "is_master_case": True}, single=True)
-
+        # Get master case by case_id text or is_master_case flag
+        master_case = select("visa_cases", filters={"is_master_case": True}, single=True)
+        if not master_case:
+            master_case = select("visa_cases", filters={"case_id": MASTER_CASE_ID}, single=True)
         if not master_case:
             raise HTTPException(status_code=404, detail="Master case not found")
 
-        # Get stages
-        stages = select("visa_stages", filters={"case_id": MASTER_CASE_ID}, order="stage_number", order_desc=False, limit=100)
-        
-        # Get deliverables
-        deliverables = select("visa_deliverables", filters={"case_id": MASTER_CASE_ID}, limit=1000)
-        
-        # Get documents
-        documents = select("visa_documents", filters={"case_id": MASTER_CASE_ID}, limit=1000)
-        
+        # Use the actual UUID to query child tables
+        case_uuid = master_case.get('id')
+
+        stages = select("visa_stages", filters={"case_id": case_uuid}, order="stage_number", order_desc=False, limit=100)
+        deliverables = select("visa_deliverables", filters={"case_id": case_uuid}, limit=1000)
+        documents = select("visa_documents", filters={"case_id": case_uuid}, limit=1000)
+
         return {
             "success": True,
             "masterCase": master_case,
@@ -8737,7 +8609,7 @@ async def get_master_case(staff_payload: dict = Depends(verify_staff_token)):
         raise
     except Exception as e:
         logger.error(f"Error fetching master case: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch master case")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch master case: {str(e)}")
 
 
 @api_router.put("/admin/master-case")
@@ -8810,6 +8682,7 @@ class DeliverableUploadRequest(BaseModel):
     fileUrl: str
     fileSize: Optional[int] = None
     notes: Optional[str] = None
+    notifyClient: Optional[bool] = True
 
 @api_router.delete("/admin/deliverables/{deliverable_id}")
 async def delete_deliverable(
@@ -8956,12 +8829,17 @@ async def delete_single_deliverable_file(
         insert("activity_logs", log)
         
         logger.info(f"Single file {file_id} deleted from deliverable {deliverable_id} by staff {staff_payload['id']}")
-        
+
+        # Audit log
+        _del_case_id = deliverable.get('case_id') or deliverable.get('caseId')
+        if _del_case_id:
+            await log_case_audit(case_id=_del_case_id, action=f"Archivo '{file_to_delete.get('fileName', '')}' eliminado del entregable", action_type="deliverable_file_deleted", performed_by_id=staff_payload['id'], performed_by_name=staff_payload.get('name', 'Staff'), performed_by_role=staff_payload.get('role', ''), details={'deliverableId': deliverable_id, 'fileName': file_to_delete.get('fileName')})
+
         return {
             'message': 'File deleted successfully',
             'remainingFiles': len(updated_files)
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -9145,7 +9023,11 @@ async def change_deliverable_stage(
         insert("activity_logs", log)
         
         logger.info(f"Deliverable {deliverable_id} stage changed from {old_stage} to {request.stageNumber}")
-        
+        _cd_case = deliverable.get('case_id') or deliverable.get('caseId')
+        if _cd_case:
+            _del_name = (deliverable.get('name') or {}).get('es') if isinstance(deliverable.get('name'), dict) else str(deliverable.get('name', ''))
+            await log_case_audit(case_id=_cd_case, action=f"Entregable '{_del_name}' movido de etapa {old_stage} a {request.stageNumber}", action_type="deliverable_moved", performed_by_id=staff_payload['id'], performed_by_name=staff_payload.get('name', 'Staff'), performed_by_role=staff_payload.get('role', ''))
+
         return {
             'message': 'Etapa del entregable actualizada exitosamente',
             'deliverableId': deliverable_id,
@@ -9200,6 +9082,10 @@ async def change_document_stage(
         insert("activity_logs", log)
         
         logger.info(f"Document {document_id} stage changed from {old_stage} to {request.stageNumber}")
+        _cd_doc_case = document.get('case_id') or document.get('caseId')
+        if _cd_doc_case:
+            _doc_name = document.get('document_name') or document.get('documentName') or (document.get('name') or {}).get('es', 'Documento')
+            await log_case_audit(case_id=_cd_doc_case, action=f"Documento '{_doc_name}' movido de etapa {old_stage} a {request.stageNumber}", action_type="document_moved", performed_by_id=staff_payload['id'], performed_by_name=staff_payload.get('name', 'Staff'), performed_by_role=staff_payload.get('role', ''))
         
         return {
             'message': 'Etapa del documento actualizada exitosamente',
@@ -9326,16 +9212,46 @@ async def upload_deliverable(
         
         logger.info(f"Deliverable uploaded: {request.deliverableId} for case {request.caseId} (total files: {len(existing_files)})")
         
-        # Notify client about new deliverable (best-effort, uses legacy MongoDB)
-        try:
-            from services.case_notifications import notify_deliverable_uploaded
-            del_name = deliverable.get('name', {})
-            del_display = del_name.get('es', del_name.get('en', request.fileName)) if isinstance(del_name, dict) else str(del_name or request.fileName)
-            await notify_deliverable_uploaded(db, request.caseId, del_display, request.stageNumber, {
-                "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
-            })
-        except Exception as notif_err:
-            logger.warning(f"Deliverable notification failed (non-critical): {notif_err}")
+        # Notify client about new deliverable via email (only if requested)
+        logger.info(f"📧 notifyClient={request.notifyClient}")
+        if request.notifyClient:
+            try:
+                from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
+                case_for_email = select("visa_cases", filters={"id": request.caseId}, single=True)
+                client_id = (case_for_email.get('client_id') or case_for_email.get('clientId')) if case_for_email else None
+                logger.info(f"📧 case found={bool(case_for_email)}, client_id={client_id}")
+                client = select("clients", filters={"id": client_id}, single=True) if client_id else None
+                logger.info(f"📧 client found={bool(client)}, email={client.get('email') if client else 'N/A'}")
+
+                if client and client.get('email'):
+                    del_name_field = deliverable.get('name')
+                    del_display = (del_name_field.get('es') or del_name_field.get('en') or request.fileName) if isinstance(del_name_field, dict) else str(del_name_field or request.fileName)
+
+                    magic_link = select("magic_links", filters={"client_id": client_id}, single=True)
+                    access_url = f"{FRONTEND_URL}/welcome/{magic_link['token']}" if magic_link and magic_link.get('token') else f"{FRONTEND_URL}/dashboard/my-case"
+
+                    subject = "Nuevo documento disponible en tu caso"
+                    body = f"""
+                    <p>Tu equipo en URPE ha subido un nuevo entregable a tu caso:</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
+                      <tr>
+                        <td style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;padding:20px;">
+                          <p style="margin:0 0 4px;font-size:13px;color:#64748B;">Entregable</p>
+                          <p style="margin:0;font-size:17px;font-weight:700;color:#0F172A;">{del_display}</p>
+                          <p style="margin:8px 0 0;font-size:13px;color:#94A3B8;">Etapa {request.stageNumber} &middot; Archivo: {request.fileName}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p>Ingresa a tu panel para revisarlo y descargarlo.</p>
+                    """
+                    html = _email_wrapper(client.get('name', 'Cliente'), "Nuevo entregable disponible", body, "Ver mi caso", access_url)
+                    logger.info(f"📧 Sending email to {client['email']}...")
+                    _send_email(client['email'], subject, html)
+                    logger.info(f"📧 Deliverable notification sent to {client['email']}")
+                else:
+                    logger.warning(f"📧 No client email found, skipping notification")
+            except Exception as notif_err:
+                logger.warning(f"📧 Deliverable notification failed: {notif_err}", exc_info=True)
         
         updated_deliverable = select("visa_deliverables", filters={"id": request.deliverableId}, single=True)
         
@@ -9747,9 +9663,10 @@ async def update_stage_price(
         if not result:
             raise HTTPException(status_code=400, detail="No se pudo actualizar el precio")
         
-        # Log the action
+        old_amount = float(stage.get('amount', 0) or 0)
         logger.info(f"Stage {stage_number} price updated to ${request.amount} for case {case_id} by {staff_payload.get('email')}")
-        
+        await log_case_audit(case_id=case_id, action=f"Precio de Etapa {stage_number} cambiado de ${old_amount} a ${request.amount}", action_type="stage_price_updated", performed_by_id=staff_payload['id'], performed_by_name=staff_payload.get('name', 'Staff'), performed_by_role=staff_payload.get('role', ''))
+
         return {
             "success": True,
             "message": f"Precio de Etapa {stage_number} actualizado a ${request.amount}",
@@ -9848,15 +9765,15 @@ async def update_stage_full(
         if not result:
             raise HTTPException(status_code=400, detail="No se pudo actualizar la etapa")
         
-        # Log the action
         logger.info(f"Stage {stage_number} updated for case {case_id} by {staff_payload.get('email')}")
-        
+        await log_case_audit(case_id=case_id, action=f"Etapa {stage_number} editada", action_type="stage_updated", performed_by_id=staff_payload['id'], performed_by_name=staff_payload.get('name', 'Staff'), performed_by_role=staff_payload.get('role', ''), details=update_data)
+
         return {
             "success": True,
             "message": f"Etapa {stage_number} actualizada exitosamente",
             "stageNumber": stage_number
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:

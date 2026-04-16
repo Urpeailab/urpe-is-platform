@@ -15,6 +15,7 @@ export const DeliverableUploadModal = ({ isOpen, onClose, deliverable, caseId, o
   const [fileUrl, setFileUrl] = useState('');
   const [notes, setNotes] = useState('');
   const [dragActive, setDragActive] = useState(false);
+  const [notifyClient, setNotifyClient] = useState(true);
   
   // Helper function to extract text from bilingual objects
   const getText = (field) => {
@@ -103,7 +104,8 @@ export const DeliverableUploadModal = ({ isOpen, onClose, deliverable, caseId, o
         fileName: fileName,
         fileUrl: finalFileUrl,
         fileSize: fileSize,
-        notes: notes
+        notes: notes,
+        notifyClient: notifyClient
       };
 
       await axios.post(
@@ -129,6 +131,7 @@ export const DeliverableUploadModal = ({ isOpen, onClose, deliverable, caseId, o
     setFile(null);
     setFileUrl('');
     setNotes('');
+    setNotifyClient(true);
   };
 
   if (!isOpen) return null;
@@ -233,6 +236,37 @@ export const DeliverableUploadModal = ({ isOpen, onClose, deliverable, caseId, o
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
               />
+            </div>
+
+            {/* Notify Client Toggle */}
+            <div className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-purple-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
+                    <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-purple-900">Notificar al cliente por correo</p>
+                  <p className="text-xs text-purple-600">Se enviara un email informando que tiene un nuevo entregable disponible</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={notifyClient}
+                onClick={() => setNotifyClient(!notifyClient)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 ${
+                  notifyClient ? 'bg-purple-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    notifyClient ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
 
             {/* Warning Box */}

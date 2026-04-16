@@ -2,9 +2,9 @@
 from fastapi import APIRouter, HTTPException, Header
 from typing import Annotated, Optional
 from datetime import datetime, timezone
-from config import db, logger
-from utils.auth_helpers import verify_staff_token_impl
-from bson import ObjectId
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin/audit", tags=["Audit Logs"])
 
@@ -20,106 +20,27 @@ async def log_case_audit(
     old_values: dict = None,
     new_values: dict = None
 ):
-    """
-    Log an audit entry for a case action.
-    
-    Args:
-        case_id: ID of the case
-        action: Human-readable description of the action
-        action_type: Type of action (create, update, delete, upload, download, status_change, etc.)
-        performed_by_id: ID of the user who performed the action
-        performed_by_name: Name of the user who performed the action
-        performed_by_role: Role of the user (admin, coordinator, client, etc.)
-        details: Additional details about the action
-        old_values: Previous values (for updates)
-        new_values: New values (for updates)
-    """
+    """Log an audit entry for a case action using Supabase."""
     try:
+        from db.supabase_client import insert
         audit_entry = {
-            "caseId": case_id,
+            "case_id": case_id,
+            "staff_id": performed_by_id,
             "action": action,
-            "actionType": action_type,
-            "performedBy": {
-                "id": performed_by_id,
-                "name": performed_by_name,
-                "role": performed_by_role
-            },
+            "field_changed": action_type,
+            "old_value": str(old_values) if old_values else None,
+            "new_value": str(new_values) if new_values else None,
             "details": details or {},
-            "oldValues": old_values,
-            "newValues": new_values,
-            "timestamp": datetime.now(timezone.utc)
         }
-        
-        await db.case_audit_logs.insert_one(audit_entry)
-        logger.info(f"📝 Audit log created for case {case_id}: {action}")
+        insert("case_audit_logs", audit_entry)
+        logger.info(f"📝 Audit log: {action}")
         return True
     except Exception as e:
         logger.error(f"Error creating audit log: {e}")
         return False
 
 
-@router.get("/case/{case_id}")
-async def get_case_audit_logs(
-    case_id: str,
-    authorization: Annotated[str, Header()],
-    page: int = 1,
-    limit: int = 50,
-    action_type: Optional[str] = None
-):
-    """Get audit logs for a specific case."""
-    try:
-        staff_payload = verify_staff_token_impl(authorization)
-        staff_id = staff_payload['id']
-        user_role = staff_payload.get('role', 'advisor')
-        
-        # Verify access to case
-        case = await db.visa_cases.find_one({'_id': case_id})
-        if not case:
-            raise HTTPException(status_code=404, detail="Caso no encontrado")
-        
-        # Check access for coordinator/advisor roles
-        if user_role in ['coordinator', 'advisor']:
-            is_coordinator = case.get('coordinatorId') == staff_id
-            is_seller = case.get('sellerId') == staff_id
-            if not is_coordinator and not is_seller:
-                raise HTTPException(status_code=403, detail="No tienes acceso a este caso")
-        
-        # Build query
-        query = {"caseId": case_id}
-        if action_type:
-            query["actionType"] = action_type
-        
-        # Count total
-        total = await db.case_audit_logs.count_documents(query)
-        
-        # Get paginated logs
-        skip = (page - 1) * limit
-        logs_cursor = db.case_audit_logs.find(query).sort("timestamp", -1).skip(skip).limit(limit)
-        logs = await logs_cursor.to_list(length=limit)
-        
-        # Convert ObjectId to string
-        for log in logs:
-            if '_id' in log:
-                log['id'] = str(log['_id'])
-                del log['_id']
-            if 'timestamp' in log and isinstance(log['timestamp'], datetime):
-                log['timestamp'] = log['timestamp'].isoformat()
-        
-        return {
-            "logs": logs,
-            "pagination": {
-                "page": page,
-                "limit": limit,
-                "total": total,
-                "pages": (total + limit - 1) // limit if total > 0 else 1
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting audit logs: {e}")
-        raise HTTPException(status_code=500, detail="Error obteniendo historial de auditoría")
+# Legacy GET endpoint removed — use /admin/cases/{case_id}/activities instead
 
 
 # Action type constants for consistency

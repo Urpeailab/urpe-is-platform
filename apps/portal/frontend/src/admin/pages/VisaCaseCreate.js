@@ -86,12 +86,7 @@ export const VisaCaseCreate = () => {
     try {
       const token = localStorage.getItem('admin_token');
       
-      // Fetch users - cargar todos (sin límite de 50)
-      const usersRes = await axios.get(`${BACKEND_URL}/api/admin/users`, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: { limit: 1000 }  // Cargar hasta 1000 usuarios
-      });
-      setUsers(usersRes.data.users || []);
+      // Users are loaded dynamically via search — no bulk fetch needed
 
       // Fetch staff (coordinators)
       const staffRes = await axios.get(`${BACKEND_URL}/api/admin/staff?limit=100`, {

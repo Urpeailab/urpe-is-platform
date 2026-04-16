@@ -26,7 +26,7 @@ import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { DeliverableUploadModal } from '../components/DeliverableUploadModal';
 import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
-import { CaseAuditLog } from '../components/CaseAuditLog';
+// CaseAuditLog removed — audit data now shown in Timeline de Actividades
 import { ActionHeader } from '../components/visa-case/ActionHeader';
 import { StatCard } from '../components/visa-case/StatCard';
 import { VisaTimeline } from '../components/visa-case/VisaTimeline';
@@ -3862,7 +3862,6 @@ export const VisaCaseDetailRedesign = () => {
                 )}
               </CardContent>
             </Card>
-            <CaseAuditLog caseId={caseId} />
           </TabsContent>
         </Tabs>
       </div>
