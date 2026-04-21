@@ -125,6 +125,9 @@ export const VisaCaseDetailRedesign = () => {
   const [documentToReject, setDocumentToReject] = useState(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [isRejecting, setIsRejecting] = useState(false);
+  const [rejectNotifyClient, setRejectNotifyClient] = useState(true);
+  const [documentToValidate, setDocumentToValidate] = useState(null);
+  const [validateNotifyClient, setValidateNotifyClient] = useState(true);
   
   // Magic links states
   const [magicLinks, setMagicLinks] = useState([]);
@@ -1391,11 +1394,11 @@ export const VisaCaseDetailRedesign = () => {
   // Fetch staff for assignment
   const fetchStaff = useCallback(async () => {
     if (!token || staffList.length > 0) return;
-    
+
     try {
       setLoadingStaff(true);
       const { data } = await axios.get(
-        `${BACKEND_URL}/api/admin/staff`,
+        `${BACKEND_URL}/api/admin/staff?limit=500`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setStaffList(data.staff || []);
@@ -1423,15 +1426,24 @@ export const VisaCaseDetailRedesign = () => {
   }, [caseData]);
 
   // Document actions
-  const handleValidateDocument = async (documentId) => {
+  const handleValidateDocument = (documentId) => {
+    const doc = documents.find(d => d.id === documentId);
+    setDocumentToValidate(doc || { id: documentId });
+    setValidateNotifyClient(true);
+  };
+
+  const handleConfirmValidate = async () => {
+    if (!documentToValidate) return;
+    const documentId = documentToValidate.id;
     try {
       setValidatingDocId(documentId);
       await axios.put(
         `${BACKEND_URL}/api/admin/client-documents/${documentId}/validate`,
-        {},
+        { notifyClient: validateNotifyClient },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       toast.success('Documento validado');
+      setDocumentToValidate(null);
       fetchCaseData();
     } catch (error) {
       toast.error('Error al validar documento');
@@ -1442,18 +1454,19 @@ export const VisaCaseDetailRedesign = () => {
 
   const handleRejectDocument = async () => {
     if (!documentToReject || !rejectionReason.trim()) return;
-    
+
     try {
       setIsRejecting(true);
       await axios.put(
         `${BACKEND_URL}/api/admin/client-documents/${documentToReject.id || documentToReject._id}/reject`,
-        { rejectionReason },
+        { rejectionReason, notifyClient: rejectNotifyClient },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       toast.success('Documento rechazado');
       setRejectModalOpen(false);
       setDocumentToReject(null);
       setRejectionReason('');
+      setRejectNotifyClient(true);
       fetchCaseData();
     } catch (error) {
       toast.error('Error al rechazar documento');
@@ -2201,13 +2214,16 @@ export const VisaCaseDetailRedesign = () => {
                             <CommandList>
                               <CommandEmpty>No encontrado</CommandEmpty>
                               <CommandGroup>
-                                {staffList.filter(s => s.role === 'coordinator' || s.role === 'admin').map((staff) => (
+                                {staffList.map((staff) => (
                                   <CommandItem
                                     key={staff.id}
                                     onSelect={() => handleAssignCoordinator(staff.id)}
                                     className="text-gray-700 hover:bg-gray-100"
                                   >
-                                    {staff.name}
+                                    <div className="flex flex-col">
+                                      <span>{staff.name}</span>
+                                      <span className="text-xs text-gray-400">{staff.role}</span>
+                                    </div>
                                     {caseData.coordinatorId === staff.id && (
                                       <Check className="ml-auto h-4 w-4 text-blue-600" />
                                     )}
@@ -2242,14 +2258,17 @@ export const VisaCaseDetailRedesign = () => {
                             <CommandList>
                               <CommandEmpty>No encontrado</CommandEmpty>
                               <CommandGroup>
-                                {staffList.filter(s => s.role === 'advisor' || s.role === 'admin').map((staff) => (
+                                {staffList.map((staff) => (
                                   <CommandItem
                                     key={staff.id}
                                     onSelect={() => handleAssignSeller(staff.id)}
                                     className="text-gray-700 hover:bg-gray-100"
                                   >
-                                    {staff.name}
-                                    {caseData.sellerId === staff.id && (
+                                    <div className="flex flex-col">
+                                      <span>{staff.name}</span>
+                                      <span className="text-xs text-gray-400">{staff.role}</span>
+                                    </div>
+                                    {(caseData.sellerId === staff.id || caseData.advisorId === staff.id) && (
                                       <Check className="ml-auto h-4 w-4 text-blue-600" />
                                     )}
                                   </CommandItem>
@@ -3953,6 +3972,73 @@ export const VisaCaseDetailRedesign = () => {
       </Dialog>
 
       {/* Reject Document Modal */}
+      {/* Modal de Confirmación para Validar Documento */}
+      <Dialog open={!!documentToValidate} onOpenChange={(open) => { if (!open) setDocumentToValidate(null); }}>
+        <DialogContent className="bg-white border-gray-200 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Validar Documento</DialogTitle>
+            <DialogDescription className="text-gray-500">
+              Confirma la validación del documento del cliente.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {documentToValidate && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+                <p className="text-sm font-semibold text-emerald-900">
+                  {getText(documentToValidate.name || documentToValidate.documentType || documentToValidate.documentName, 'Documento')}
+                </p>
+                <p className="text-xs text-emerald-600 mt-1">
+                  {documentToValidate.fileName || 'Sin archivo'}
+                </p>
+              </div>
+            )}
+            <div className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-purple-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
+                    <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-purple-900">Notificar al cliente</p>
+                  <p className="text-xs text-purple-600">Enviar email informando que su documento fue aprobado</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={validateNotifyClient}
+                onClick={() => setValidateNotifyClient(!validateNotifyClient)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  validateNotifyClient ? 'bg-purple-600' : 'bg-gray-300'
+                }`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  validateNotifyClient ? 'translate-x-6' : 'translate-x-1'
+                }`} />
+              </button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDocumentToValidate(null)} className="text-gray-500">
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleConfirmValidate}
+              disabled={validatingDocId}
+              className="bg-emerald-500 hover:bg-emerald-600 text-white"
+            >
+              {validatingDocId ? (
+                <><Loader2 className="h-4 w-4 animate-spin mr-2" />Validando...</>
+              ) : (
+                <><CheckCircle className="h-4 w-4 mr-2" />Validar Documento</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={rejectModalOpen} onOpenChange={setRejectModalOpen}>
         <DialogContent className="bg-white border-gray-200">
           <DialogHeader>
@@ -3962,14 +4048,51 @@ export const VisaCaseDetailRedesign = () => {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {documentToReject && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="text-sm font-semibold text-red-900">
+                  {getText(documentToReject.name || documentToReject.documentType || documentToReject.documentName, 'Documento')}
+                </p>
+                <p className="text-xs text-red-600 mt-1">
+                  {documentToReject.fileName || 'Sin archivo'}
+                </p>
+              </div>
+            )}
             <div>
-              <Label className="text-gray-700">Razón del rechazo</Label>
+              <Label className="text-gray-700">Razón del rechazo *</Label>
               <Textarea
                 value={rejectionReason}
                 onChange={(e) => setRejectionReason(e.target.value)}
                 placeholder="Describe por qué se rechaza el documento..."
                 className="mt-2 bg-gray-50 border-gray-200 text-gray-900"
               />
+            </div>
+            <div className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-purple-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
+                    <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-purple-900">Notificar al cliente</p>
+                  <p className="text-xs text-purple-600">Enviar email informando que debe corregir el documento</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={rejectNotifyClient}
+                onClick={() => setRejectNotifyClient(!rejectNotifyClient)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  rejectNotifyClient ? 'bg-purple-600' : 'bg-gray-300'
+                }`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  rejectNotifyClient ? 'translate-x-6' : 'translate-x-1'
+                }`} />
+              </button>
             </div>
           </div>
           <DialogFooter>
@@ -3979,6 +4102,7 @@ export const VisaCaseDetailRedesign = () => {
                 setRejectModalOpen(false);
                 setDocumentToReject(null);
                 setRejectionReason('');
+                setRejectNotifyClient(true);
               }}
               className="text-gray-500"
             >

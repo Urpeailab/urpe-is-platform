@@ -10646,6 +10646,7 @@ async def delete_document_template(
 
 class DocumentValidationRequest(BaseModel):
     validationNotes: Optional[str] = None
+    notifyClient: Optional[bool] = True
 
 @api_router.put("/admin/client-documents/{document_id}/validate")
 async def validate_client_document(
@@ -10707,13 +10708,34 @@ async def validate_client_document(
                 }
             )
         
-        # Notify client about validated document (best-effort, uses legacy MongoDB)
-        if case_id:
+        # Notify client about validated document via email (Supabase-based)
+        if case_id and request.notifyClient:
             try:
-                from services.case_notifications import notify_doc_validated
-                await notify_doc_validated(db, case_id, doc_name, {
-                    "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
-                })
+                from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
+                case_for_email = select("visa_cases", filters={"id": case_id}, single=True)
+                client_id = (case_for_email.get('client_id') or case_for_email.get('clientId')) if case_for_email else None
+                client = select("clients", filters={"id": client_id}, single=True) if client_id else None
+
+                if client and client.get('email'):
+                    magic_link = select("magic_links", filters={"client_id": client_id}, single=True)
+                    access_url = f"{FRONTEND_URL}/welcome/{magic_link['token']}" if magic_link and magic_link.get('token') else f"{FRONTEND_URL}/dashboard/my-case"
+
+                    subject = f"Documento aprobado: {doc_name}"
+                    body = f"""
+                    <p>Tu documento ha sido revisado y <strong style="color:#22C55E;">aprobado</strong>:</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
+                      <tr>
+                        <td style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:12px;padding:20px;">
+                          <p style="margin:0 0 4px;font-size:13px;color:#15803D;">Documento aprobado</p>
+                          <p style="margin:0;font-size:17px;font-weight:700;color:#0F172A;">{doc_name}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p>Ingresa a tu panel para ver el estado de todos tus documentos.</p>
+                    """
+                    html = _email_wrapper(client.get('name', 'Cliente'), "Documento aprobado", body, "Ver mi caso", access_url)
+                    _send_email(client['email'], subject, html)
+                    logger.info(f"📧 Doc validation notification sent to {client['email']}")
             except Exception as notif_err:
                 logger.warning(f"Doc validation notification failed (non-critical): {notif_err}")
         
@@ -10731,6 +10753,7 @@ async def validate_client_document(
 
 class DocumentRejectionRequest(BaseModel):
     rejectionReason: str
+    notifyClient: Optional[bool] = True
 
 @api_router.put("/admin/client-documents/{document_id}/reject")
 async def reject_client_document(
@@ -10795,13 +10818,36 @@ async def reject_client_document(
                 }
             )
         
-        # Notify client about rejected document (best-effort, uses legacy MongoDB)
-        if case_id:
+        # Notify client about rejected document via email (Supabase-based)
+        if case_id and request.notifyClient:
             try:
-                from services.case_notifications import notify_doc_rejected
-                await notify_doc_rejected(db, case_id, doc_name, request.rejectionReason, {
-                    "id": staff_payload['id'], "name": staff.get('name', 'Staff') if staff else 'Staff', "role": staff_payload.get('role', '')
-                })
+                from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
+                case_for_email = select("visa_cases", filters={"id": case_id}, single=True)
+                client_id = (case_for_email.get('client_id') or case_for_email.get('clientId')) if case_for_email else None
+                client = select("clients", filters={"id": client_id}, single=True) if client_id else None
+
+                if client and client.get('email'):
+                    magic_link = select("magic_links", filters={"client_id": client_id}, single=True)
+                    access_url = f"{FRONTEND_URL}/welcome/{magic_link['token']}" if magic_link and magic_link.get('token') else f"{FRONTEND_URL}/dashboard/my-case"
+
+                    reason_html = f'<p style="margin:8px 0 0;font-size:14px;color:#DC2626;"><strong>Motivo:</strong> {request.rejectionReason}</p>' if request.rejectionReason else ""
+                    subject = f"Documento requiere corrección: {doc_name}"
+                    body = f"""
+                    <p>Tu documento necesita ser corregido:</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
+                      <tr>
+                        <td style="background:#FEF2F2;border:1px solid #FECACA;border-radius:12px;padding:20px;">
+                          <p style="margin:0 0 4px;font-size:13px;color:#991B1B;">Documento rechazado</p>
+                          <p style="margin:0;font-size:17px;font-weight:700;color:#0F172A;">{doc_name}</p>
+                          {reason_html}
+                        </td>
+                      </tr>
+                    </table>
+                    <p>Por favor sube una nueva versión corregida desde tu panel.</p>
+                    """
+                    html = _email_wrapper(client.get('name', 'Cliente'), "Documento necesita corrección", body, "Subir corrección", access_url)
+                    _send_email(client['email'], subject, html)
+                    logger.info(f"📧 Doc rejection notification sent to {client['email']}")
             except Exception as notif_err:
                 logger.warning(f"Doc rejection notification failed (non-critical): {notif_err}")
         

@@ -57,8 +57,8 @@ def setup_webinars_router(db, verify_staff_token):
     ):
         """Get all webinars"""
         try:
-            webinars = select('webinars', limit=limit)
-            
+            webinars = select('webinars', order='created_at', order_desc=True, limit=limit)
+
             return {
                 "success": True,
                 "webinars": webinars,
@@ -66,7 +66,7 @@ def setup_webinars_router(db, verify_staff_token):
             }
         except Exception as e:
             logger.error(f"Error fetching webinars: {e}")
-            raise HTTPException(status_code=500, detail="Failed to fetch webinars")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch webinars: {str(e)}")
 
     @webinars_router.post("/admin/webinars")
     async def create_webinar(
@@ -75,10 +75,7 @@ def setup_webinars_router(db, verify_staff_token):
     ):
         """Create a new webinar"""
         try:
-            webinar_id = str(uuid4())
             webinar = {
-                "_id": webinar_id,
-                "id": webinar_id,
                 "title": request.title,
                 "description": request.description,
                 "type": request.type,
@@ -86,20 +83,19 @@ def setup_webinars_router(db, verify_staff_token):
                 "time": request.time,
                 "duration": request.duration,
                 "capacity": request.capacity,
-                "videoUrl": request.videoUrl,
-                "meetingLink": request.videoUrl,
+                "video_url": request.videoUrl,
+                "meeting_link": request.videoUrl,
                 "thumbnail": request.thumbnail,
                 "presenter": request.presenter,
                 "level": request.level,
                 "topics": request.topics,
                 "language": request.language,
-                "registeredCount": 0,
-                "createdBy": staff_payload['id'],
-                "createdAt": datetime.now(timezone.utc).isoformat(),
-                "updatedAt": datetime.now(timezone.utc).isoformat()
+                "registered_count": 0,
+                "created_by": staff_payload['id'],
             }
-            
-            insert('webinars', webinar)
+
+            result = insert('webinars', webinar)
+            webinar_id = result.get('id')
             logger.info(f"Webinar created: {webinar_id} by {staff_payload.get('name', 'admin')}")
             
             return {
@@ -124,9 +120,8 @@ def setup_webinars_router(db, verify_staff_token):
             if not webinar:
                 raise HTTPException(status_code=404, detail="Webinar not found")
             
-            # Build update data
-            update_data = {'updatedAt': datetime.now(timezone.utc).isoformat()}
-            
+            # Build update data (snake_case columns)
+            update_data = {}
             if request.title is not None:
                 update_data['title'] = request.title
             if request.description is not None:
@@ -142,8 +137,8 @@ def setup_webinars_router(db, verify_staff_token):
             if request.capacity is not None:
                 update_data['capacity'] = request.capacity
             if request.videoUrl is not None:
-                update_data['videoUrl'] = request.videoUrl
-                update_data['meetingLink'] = request.videoUrl
+                update_data['video_url'] = request.videoUrl
+                update_data['meeting_link'] = request.videoUrl
             if request.thumbnail is not None:
                 update_data['thumbnail'] = request.thumbnail
             if request.presenter is not None:
@@ -211,12 +206,12 @@ def setup_webinars_router(db, verify_staff_token):
     ):
         """Get public webinars for users (no authentication required)"""
         try:
-            query = {}
+            filters = None
             if webinar_type:
-                query['type'] = webinar_type
-            
-            webinars = select('webinars', filters=query, order='date', order_desc=True, limit=limit)
-            
+                filters = {'type': webinar_type}
+
+            webinars = select('webinars', filters=filters, order='created_at', order_desc=True, limit=limit)
+
             return {
                 "success": True,
                 "webinars": webinars,
@@ -224,7 +219,7 @@ def setup_webinars_router(db, verify_staff_token):
             }
         except Exception as e:
             logger.error(f"Error fetching public webinars: {e}")
-            raise HTTPException(status_code=500, detail="Failed to fetch webinars")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch webinars: {str(e)}")
     
     @webinars_router.get("/webinars/{webinar_id}")
     async def get_public_webinar_detail(webinar_id: str):

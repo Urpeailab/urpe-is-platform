@@ -113,127 +113,80 @@ def setup_client_endpoints(db, verify_token):
     
     @client_router.get("/my-case")
     async def get_my_case(user_payload: dict = Depends(verify_token)):
-        """Get the client's active visa case with all details"""
+        """Get the client's active visa case with all details (Supabase)"""
         try:
-            user_id = user_payload.get('id') or user_payload.get('_id')
-            
-            # Get case
-            case = await get_client_case(db, user_id)
+            from db.supabase_client import select as sb_select
+
+            user_id = user_payload.get('id')
+
+            # Get case (exclude master case)
+            cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+            case = next((c for c in cases if not c.get('is_master_case')), None)
             if not case:
                 raise HTTPException(status_code=404, detail="No active visa case found")
-            
-            case_id = case.get('id') or case.get('_id')
-            
-            # Get stages
-            stages_cursor = db.visa_stages.find({'caseId': case_id}).sort('stageNumber', 1)
-            stages = await stages_cursor.to_list(length=None)
-            
-            # Get deliverables
-            deliverables_cursor = db.visa_deliverables.find({'caseId': case_id})
-            deliverables = await deliverables_cursor.to_list(length=None)
-            
-            # Sanitize deliverables: ensure file data consistency
-            for d in deliverables:
-                files = d.get('files') or []
-                file_url = d.get('fileUrl')
-                has_files = len(files) > 0 or (file_url and file_url.strip())
-                if not has_files:
-                    d['files'] = []
-                    d['fileName'] = None
-                    d['fileUrl'] = None
-                    if d.get('status') not in ('pending',):
-                        d['status'] = 'pending'
-            
-            # Get documents from both collections for backward compatibility
-            documents_old_cursor = db.visa_client_documents.find({'caseId': case_id})
-            documents_old = await documents_old_cursor.to_list(length=None)
-            
-            documents_new_cursor = db.case_documents.find({'caseId': case_id})
-            documents_new = await documents_new_cursor.to_list(length=None)
-            
-            # Merge both lists
-            documents = documents_old + documents_new
-            
-            # Get payments from visa_payments
-            visa_payments_cursor = db.visa_payments.find({'caseId': case_id}, {'_id': 0}).sort('paidAt', -1)
-            visa_payments = await visa_payments_cursor.to_list(length=None)
-            
-            # Get manual payments registered by admin
-            manual_payments_cursor = db.manual_payments.find({'caseId': case_id}, {'_id': 0}).sort('paymentDate', -1)
-            manual_payments = await manual_payments_cursor.to_list(length=None)
-            
-            # Process manual payments to add status and source
-            for mp in manual_payments:
-                mp['status'] = 'completed'  # Manual payments are always completed
-                mp['paymentSource'] = 'manual'
-                if 'paidAt' not in mp and 'paymentDate' in mp:
-                    mp['paidAt'] = mp['paymentDate']
-                # Add concept from stageName or stageNumber
-                if 'concept' not in mp:
-                    if 'stageName' in mp and mp['stageName']:
-                        stage_name = mp.get('stageName', {})
-                        if isinstance(stage_name, dict):
-                            mp['concept'] = stage_name.get('es') or stage_name.get('en') or f"Etapa {mp.get('stageNumber', '?')}"
-                        else:
-                            mp['concept'] = str(stage_name)
-                    else:
-                        mp['concept'] = f"Etapa {mp.get('stageNumber', '?')}"
-            
-            # Process visa payments to add source
-            for vp in visa_payments:
-                vp['paymentSource'] = 'client'
-            
-            # Combine all payments
-            payments = visa_payments + manual_payments
-            payments.sort(key=lambda x: x.get('paidAt', ''), reverse=True)
-            
-            # Calculate progress based on completed stages
-            paid_stages_from_payments = [p.get('stageNumber') for p in payments if p.get('status') == 'completed']
-            unlocked_stages = [s.get('stageNumber') for s in stages if s.get('status') == 'unlocked']
-            
-            # Count completed stages (isPaid=True or status='completed')
+
+            case_id = case.get('id')
+
+            # Get stages, deliverables, documents, payments
+            stages = sb_select("visa_stages", filters={"case_id": case_id}, order="stage_number", order_desc=False)
+            deliverables = sb_select("visa_deliverables", filters={"case_id": case_id}, limit=200)
+            documents = sb_select("visa_documents", filters={"case_id": case_id}, limit=200)
+            payments = sb_select("payments", filters={"case_id": case_id}, order="created_at", order_desc=True)
+
+            # Process payments
+            for p in payments:
+                p['paymentSource'] = 'manual'
+                p['paidAt'] = p.get('paid_at') or p.get('paidAt') or p.get('created_at')
+                sn = p.get('stage_numbers') or p.get('stageNumbers')
+                if sn and isinstance(sn, list) and len(sn) > 0:
+                    p['concept'] = f"Etapa(s) {', '.join(str(s) for s in sn)}"
+                else:
+                    p['concept'] = f"Etapa {p.get('stage_number') or p.get('stageNumber', '?')}"
+
+            # Calculate progress
             completed_stages = []
+            unlocked_stages = []
             for stage in stages:
-                stage_num = stage.get('stageNumber')
-                is_paid = stage.get('isPaid', False)
-                is_completed = stage.get('status') == 'completed'
-                if is_paid or is_completed:
-                    completed_stages.append(stage_num)
-            
-            # Calculate real progress: (completed stages / total stages) * 100
+                sn = stage.get('stage_number') or stage.get('stageNumber')
+                is_paid = stage.get('is_paid') or stage.get('isPaid', False)
+                status = stage.get('status', 'locked')
+                if is_paid or status == 'completed':
+                    completed_stages.append(sn)
+                if status == 'unlocked':
+                    unlocked_stages.append(sn)
+
             total_stages = len(stages)
             completed_count = len(completed_stages)
             real_progress = round((completed_count / total_stages) * 100) if total_stages > 0 else 0
-            
-            # Calculate financial totals
-            total_invested = sum(p.get('amount', 0) for p in payments if p.get('status') == 'completed')
-            total_case_value = sum(s.get('amount', 0) for s in stages)
-            
-            # Serialize all documents
-            case_serialized = serialize_doc(case)
-            
-            # Add coordinator and sales rep names
-            if case.get('coordinatorId'):
-                coord = await db.staff.find_one({'_id': case['coordinatorId']}, {'name': 1})
+
+            total_invested = sum(float(p.get('amount', 0) or 0) for p in payments if p.get('status') == 'completed')
+            total_case_value = sum(float(s.get('amount', 0) or 0) for s in stages)
+
+            # Add staff names
+            coord_id = case.get('coordinator_id') or case.get('coordinatorId')
+            advisor_id = case.get('advisor_id') or case.get('advisorId')
+            if coord_id:
+                coord = sb_select("staff", filters={"id": coord_id}, columns="name", single=True)
                 if coord:
-                    case_serialized['coordinatorName'] = coord.get('name', '')
-            if case.get('salesRepId'):
-                sales = await db.staff.find_one({'_id': case['salesRepId']}, {'name': 1})
-                if sales:
-                    case_serialized['salesRepName'] = sales.get('name', '')
-            
+                    case['coordinatorName'] = coord.get('name', '')
+            if advisor_id:
+                advisor = sb_select("staff", filters={"id": advisor_id}, columns="name", single=True)
+                if advisor:
+                    case['salesRepName'] = advisor.get('name', '')
+                    case['advisorName'] = advisor.get('name', '')
+
             return {
                 'success': True,
-                'case': case_serialized,
-                'stages': serialize_doc(stages),
-                'deliverables': serialize_doc(deliverables),
-                'documents': serialize_doc(documents),
-                'payments': serialize_doc(payments),
+                'case': case,
+                'stages': stages,
+                'deliverables': deliverables,
+                'documents': documents,
+                'payments': payments,
                 'progress': {
-                    'paidStages': completed_stages,  # Use completed stages list
+                    'paidStages': completed_stages,
                     'completedStages': completed_stages,
                     'unlockedStages': unlocked_stages,
-                    'currentStage': case.get('currentStage', 1),
+                    'currentStage': case.get('current_stage') or case.get('currentStage', 1),
                     'overallProgress': real_progress,
                     'totalStages': total_stages,
                     'completedCount': completed_count
@@ -243,7 +196,7 @@ def setup_client_endpoints(db, verify_token):
                     'totalCaseValue': total_case_value
                 }
             }
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -403,123 +356,115 @@ def setup_client_endpoints(db, verify_token):
         file: UploadFile = File(...),
         user_payload: dict = Depends(verify_token)
     ):
-        """
-        Upload a file for a specific document requirement.
-        This endpoint uploads the file to Supabase Storage and appends to files array.
-        Supports multiple file uploads per document.
-        """
+        """Upload a file for a specific document requirement (Supabase)."""
         try:
             from storage_service import upload_file as supabase_upload
-            
-            user_id = user_payload.get('id') or user_payload.get('_id')
-            
+            from db.supabase_client import select as sb_select, update as sb_update
+
+            user_id = user_payload.get('id')
+
             # Verify user has a case
-            case = await get_client_case(db, user_id)
+            cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+            case = next((c for c in cases if not c.get('is_master_case')), None)
             if not case:
                 raise HTTPException(status_code=404, detail="No tienes un caso activo")
-            
+
             # Verify document exists and belongs to user's case
-            doc = await db.visa_client_documents.find_one({'_id': document_id})
-            if not doc:
-                # Also try by id field
-                doc = await db.visa_client_documents.find_one({'id': document_id})
-            
+            doc = sb_select("visa_documents", filters={"id": document_id}, single=True)
             if not doc:
                 raise HTTPException(status_code=404, detail="Documento no encontrado")
-            
-            if doc.get('caseId') != case.get('_id') and doc.get('caseId') != case.get('id'):
+
+            doc_case_id = doc.get('case_id') or doc.get('caseId')
+            if doc_case_id != case.get('id'):
                 raise HTTPException(status_code=403, detail="No tienes acceso a este documento")
-            
-            # Read file content
+
+            # Read and upload file
             file_content = await file.read()
-            
-            # Upload to Supabase Storage
             result = supabase_upload(
                 file_content=file_content,
                 filename=file.filename,
                 folder=f"client-documents/{user_id}"
             )
-            
             if not result.get('success'):
-                raise HTTPException(
-                    status_code=500, 
-                    detail=f"Error uploading to storage: {result.get('error', 'Unknown error')}"
-                )
-            
-            # Create file object
+                raise HTTPException(status_code=500, detail=f"Error uploading to storage: {result.get('error', 'Unknown error')}")
+
+            # Build files array
             new_file = {
                 'id': str(uuid.uuid4()),
                 'fileName': file.filename,
                 'fileUrl': result['fileUrl'],
                 'fileSize': len(file_content),
-                'filePath': result['filePath'],
-                'uploadedAt': datetime.utcnow().isoformat(),
+                'uploadedAt': datetime.now(timezone.utc).isoformat(),
                 'uploadedBy': str(user_id)
             }
-            
-            # Get existing files array or create from legacy fileUrl
-            existing_files = doc.get('files', [])
-            if not existing_files and doc.get('fileUrl'):
-                # Migrate legacy single file to array
-                existing_files = [{
-                    'id': str(uuid.uuid4()),
-                    'fileName': doc.get('fileName', 'archivo'),
-                    'fileUrl': doc.get('fileUrl'),
-                    'fileSize': doc.get('fileSize', 0),
-                    'uploadedAt': doc.get('uploadedAt'),
-                    'uploadedBy': doc.get('uploadedBy')
-                }]
-            
-            # Append new file
+            existing_files = doc.get('files') or []
+            if not existing_files and doc.get('file_url'):
+                existing_files = [{'id': str(uuid.uuid4()), 'fileName': doc.get('file_name', 'archivo'), 'fileUrl': doc.get('file_url')}]
             existing_files.append(new_file)
-            
-            # Update document record
-            update_data = {
+
+            # Update document (only valid columns)
+            sb_update("visa_documents", filters={"id": document_id}, data={
                 'status': 'uploaded',
                 'files': existing_files,
-                'fileUrl': result['fileUrl'],  # Keep for backward compatibility
-                'fileName': file.filename,
-                'fileSize': len(file_content),
-                'filePath': result['filePath'],
-                'uploadedAt': datetime.utcnow().isoformat(),
-                'uploadedBy': str(user_id)
-            }
-            
-            await db.visa_client_documents.update_one(
-                {'_id': document_id},
-                {'$set': update_data}
-            )
-            
+                'file_url': result['fileUrl'],
+                'file_name': file.filename,
+            })
+
             logger.info(f"Client document uploaded: {document_id} by user {user_id} (total files: {len(existing_files)})")
-            
-            # Case audit log for client document upload
-            case_id = doc.get('caseId')
-            if case_id:
-                user = await db.users.find_one({'_id': user_id}) or await db.users.find_one({'id': user_id})
-                user_name = user.get('name', 'Cliente') if user else 'Cliente'
-                doc_name = doc.get('documentName') or doc.get('name', {}).get('es', 'Documento')
-                await log_case_audit(
-                    case_id=case_id,
-                    action=f"Documento '{doc_name}' subido por el cliente",
-                    action_type=AuditActionTypes.DOCUMENT_UPLOADED,
-                    performed_by_id=str(user_id),
-                    performed_by_name=user_name,
-                    performed_by_role='client',
-                    details={
-                        'documentId': document_id,
-                        'fileName': file.filename,
-                        'fileSize': len(file_content),
-                        'totalFiles': len(existing_files)
-                    }
-                )
-            
-            # Notify coordinator + sales rep
-            if case_id:
-                from services.case_notifications import notify_client_uploaded_doc
-                await notify_client_uploaded_doc(db, case_id, user_name, doc_name, {
-                    "id": str(user_id), "name": user_name, "role": "client"
-                })
-            
+
+            # Audit log
+            case_id = case.get('id')
+            user_name = user_payload.get('name', 'Cliente')
+            doc_name_field = doc.get('name')
+            doc_name = (doc_name_field.get('es') if isinstance(doc_name_field, dict) else str(doc_name_field or '')) or doc.get('document_name') or 'Documento'
+            await log_case_audit(
+                case_id=case_id,
+                action=f"Documento '{doc_name}' subido por el cliente",
+                action_type=AuditActionTypes.DOCUMENT_UPLOADED,
+                performed_by_id=str(user_id),
+                performed_by_name=user_name,
+                performed_by_role='client',
+                details={'documentId': document_id, 'fileName': file.filename, 'totalFiles': len(existing_files)}
+            )
+
+            # Notify coordinator + seller via email
+            try:
+                from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
+                coord_id = case.get('coordinator_id') or case.get('coordinatorId')
+                advisor_id = case.get('advisor_id') or case.get('advisorId')
+
+                staff_to_notify = []
+                if coord_id:
+                    coord = sb_select("staff", filters={"id": coord_id}, columns="name,email", single=True)
+                    if coord and coord.get('email'):
+                        staff_to_notify.append(coord)
+                if advisor_id and advisor_id != coord_id:
+                    advisor = sb_select("staff", filters={"id": advisor_id}, columns="name,email", single=True)
+                    if advisor and advisor.get('email'):
+                        staff_to_notify.append(advisor)
+
+                if staff_to_notify:
+                    subject = f"Nuevo documento: {user_name} subió {doc_name}"
+                    body = f"""
+                    <p>El cliente <strong>{user_name}</strong> ha subido un documento a su caso:</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
+                      <tr>
+                        <td style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:12px;padding:20px;">
+                          <p style="margin:0 0 4px;font-size:13px;color:#1E40AF;">Documento subido por el cliente</p>
+                          <p style="margin:0;font-size:17px;font-weight:700;color:#0F172A;">{doc_name}</p>
+                          <p style="margin:8px 0 0;font-size:13px;color:#64748B;">Archivo: {file.filename}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p>Ingresa al panel de administración para revisar el documento y <strong>validarlo</strong> o <strong>rechazarlo</strong>.</p>
+                    """
+                    for staff_member in staff_to_notify:
+                        html = _email_wrapper(staff_member.get('name', 'Equipo'), "Documento pendiente de revisión", body, "Revisar documento", f"{FRONTEND_URL}/admin/visa-cases/{case_id}")
+                        _send_email(staff_member['email'], subject, html)
+                        logger.info(f"📧 Client upload notification sent to {staff_member['email']}")
+            except Exception as notif_err:
+                logger.warning(f"Client upload notification failed (non-critical): {notif_err}")
+
             return {
                 "message": "Documento subido exitosamente",
                 "documentId": document_id,
@@ -529,7 +474,7 @@ def setup_client_endpoints(db, verify_token):
                 "totalFiles": len(existing_files),
                 "files": existing_files
             }
-            
+
         except HTTPException:
             raise
         except Exception as e:
