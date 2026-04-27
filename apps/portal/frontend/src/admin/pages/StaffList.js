@@ -66,7 +66,7 @@ export const StaffList = () => {
       setTransferring(true);
       const token = localStorage.getItem('admin_token');
       const { data } = await axios.post(
-        `${API}/admin/staff/${transferModal._id}/transfer-cases`,
+        `${API}/admin/staff/${transferModal.id || transferModal._id}/transfer-cases`,
         { targetStaffId },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -152,7 +152,7 @@ export const StaffList = () => {
           <div className="space-y-3">
             {staff.map((member) => (
               <div
-                key={member._id}
+                key={member.id || member._id}
                 className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors border border-gray-200 gap-4"
               >
                 <div className="flex items-start sm:items-center gap-3 sm:gap-4 flex-1 min-w-0">
@@ -205,14 +205,14 @@ export const StaffList = () => {
                       onClick={() => { setTransferModal(member); setTargetStaffId(''); }}
                       className="text-blue-500 hover:text-blue-600 hover:bg-blue-50"
                       title="Transferir casos"
-                      data-testid={`transfer-btn-${member._id}`}
+                      data-testid={`transfer-btn-${member.id || member._id}`}
                     >
                       <ArrowRightLeft className="h-4 w-4" />
                     </Button>
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => navigate(`/admin/staff/${member._id}`)}
+                      onClick={() => navigate(`/admin/staff/${member.id || member._id}`)}
                       className="text-gray-600 hover:text-gray-900 hover:bg-gray-200"
                     >
                       <Edit className="h-4 w-4" />
@@ -220,7 +220,7 @@ export const StaffList = () => {
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => handleDelete(member._id, member.name)}
+                      onClick={() => handleDelete(member.id || member._id, member.name)}
                       className="text-red-500 hover:text-red-600 hover:bg-red-50"
                     >
                       <Trash2 className="h-4 w-4" />
@@ -280,7 +280,7 @@ export const StaffList = () => {
               className="w-full border-2 border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-900 focus:border-yellow-500 focus:outline-none mb-6"
             >
               <option value="">Seleccionar miembro...</option>
-              {staff.filter(s => s._id !== transferModal._id).map(s => (
+              {staff.filter(s => s._id !== transferModal.id || transferModal._id).map(s => (
                 <option key={s._id} value={s._id}>{s.name} — {getRoleTranslation(s.role)}</option>
               ))}
             </select>

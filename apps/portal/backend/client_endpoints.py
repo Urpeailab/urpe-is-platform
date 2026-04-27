@@ -208,27 +208,26 @@ def setup_client_endpoints(db, verify_token):
         stage: Optional[int] = None,
         user_payload: dict = Depends(verify_token)
     ):
-        """Get deliverables for client's case (filtered by stage if provided)"""
+        """Get deliverables for client's case (Supabase)"""
         try:
-            user_id = user_payload.get('id') or user_payload.get('_id')
-            
-            case = await get_client_case(db, user_id)
+            from db.supabase_client import select as sb_select
+            user_id = user_payload.get('id')
+
+            cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+            case = next((c for c in cases if not c.get('is_master_case')), None)
             if not case:
                 raise HTTPException(status_code=404, detail="No active visa case found")
-            
-            case_id = case.get('id') or case.get('_id')
-            
-            query = {'caseId': case_id}
+
+            filters = {"case_id": case['id']}
             if stage:
-                query['stageNumber'] = stage
-            
-            deliverables_cursor = db.visa_deliverables.find(query).sort('stageNumber', 1)
-            deliverables = await deliverables_cursor.to_list(length=None)
-            
+                filters["stage_number"] = stage
+
+            deliverables = sb_select("visa_deliverables", filters=filters, order="stage_number", order_desc=False, limit=200)
+
             # Sanitize: ensure file data consistency
             for d in deliverables:
                 files = d.get('files') or []
-                file_url = d.get('fileUrl')
+                file_url = d.get('file_url') or d.get('fileUrl')
                 has_files = len(files) > 0 or (file_url and file_url.strip())
                 if not has_files:
                     d['files'] = []
@@ -236,13 +235,13 @@ def setup_client_endpoints(db, verify_token):
                     d['fileUrl'] = None
                     if d.get('status') not in ('pending',):
                         d['status'] = 'pending'
-            
+
             return {
                 'success': True,
                 'deliverables': deliverables,
                 'count': len(deliverables)
             }
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -251,31 +250,25 @@ def setup_client_endpoints(db, verify_token):
     
     @client_router.get("/documents")
     async def get_my_documents(user_payload: dict = Depends(verify_token)):
-        """Get client's uploaded documents"""
+        """Get client's uploaded documents (Supabase)"""
         try:
-            user_id = user_payload.get('id') or user_payload.get('_id')
-            
-            case = await get_client_case(db, user_id)
+            from db.supabase_client import select as sb_select
+            user_id = user_payload.get('id')
+
+            cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+            case = next((c for c in cases if not c.get('is_master_case')), None)
             if not case:
                 raise HTTPException(status_code=404, detail="No active visa case found")
-            
-            case_id = case.get('id') or case.get('_id')
-            
-            documents_cursor = db.visa_client_documents.find({'caseId': case_id})
-            documents = await documents_cursor.to_list(length=None)
-            
-            # Group by status
-            grouped = {
-                'pending': [],
-                'uploaded': [],
-                'validated': [],
-                'rejected': []
-            }
-            
+
+            documents = sb_select("visa_documents", filters={"case_id": case['id']}, limit=200)
+
+            grouped = {'pending': [], 'uploaded': [], 'validated': [], 'rejected': []}
             for doc in documents:
                 status = doc.get('status', 'pending')
+                if status not in grouped:
+                    status = 'pending'
                 grouped[status].append(doc)
-            
+
             return {
                 'success': True,
                 'documents': documents,
@@ -288,7 +281,7 @@ def setup_client_endpoints(db, verify_token):
                     'rejected': len(grouped['rejected'])
                 }
             }
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -696,71 +689,55 @@ def setup_client_endpoints(db, verify_token):
     
     @client_router.get("/payments")
     async def get_my_payments(user_payload: dict = Depends(verify_token)):
-        """Get payment history for client's case (includes both client payments and manual payments)"""
+        """Get payment history for client's case (Supabase)"""
         try:
-            user_id = user_payload.get('id') or user_payload.get('_id')
-            
-            case = await get_client_case(db, user_id)
+            from db.supabase_client import select as sb_select
+            user_id = user_payload.get('id')
+
+            cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+            case = next((c for c in cases if not c.get('is_master_case')), None)
             if not case:
                 raise HTTPException(status_code=404, detail="No active visa case found")
-            
-            case_id = case.get('id') or case.get('_id')
-            
-            # Get client payments (visa_payments)
-            client_payments_cursor = db.visa_payments.find({'caseId': case_id}, {'_id': 0})
-            client_payments = await client_payments_cursor.to_list(length=None)
-            
-            # Get manual payments (manual_payments) registered by admin
-            manual_payments_cursor = db.manual_payments.find({'caseId': case_id}, {'_id': 0})
-            manual_payments = await manual_payments_cursor.to_list(length=None)
-            
-            # Mark the source of each payment
-            for payment in client_payments:
-                payment['paymentSource'] = 'client'
-            
-            for payment in manual_payments:
-                payment['paymentSource'] = 'manual'
-                # Manual payments registered by admin are always completed
-                payment['status'] = 'completed'
-                # Ensure manual payments have the same structure
-                if 'paidAt' not in payment and 'date' in payment:
-                    payment['paidAt'] = payment['date']
-                # Use paymentDate if paidAt is still missing
-                if 'paidAt' not in payment and 'paymentDate' in payment:
-                    payment['paidAt'] = payment['paymentDate']
-                # Add concept from stageName or stageNumber
-                if 'concept' not in payment:
-                    if 'stageName' in payment and payment['stageName']:
-                        stage_name = payment.get('stageName', {})
-                        if isinstance(stage_name, dict):
-                            payment['concept'] = stage_name.get('es') or stage_name.get('en') or f"Etapa {payment.get('stageNumber', '?')}"
-                        else:
-                            payment['concept'] = str(stage_name)
-                    else:
-                        payment['concept'] = f"Etapa {payment.get('stageNumber', '?')}"
-            
-            # Combine both payment lists
-            all_payments = client_payments + manual_payments
-            
-            # Sort by date (most recent first)
-            all_payments.sort(key=lambda x: x.get('paidAt', ''), reverse=True)
-            
-            # Calculate totals (only completed payments)
-            total_paid = sum(p.get('amount', 0) for p in all_payments if p.get('status') == 'completed')
-            total_pending = sum(p.get('amount', 0) for p in all_payments if p.get('status') == 'pending')
-            
+
+            payments = sb_select("payments", filters={"case_id": case['id']}, order="created_at", order_desc=True, limit=200)
+
+            # Stage names for concepts
+            stages = sb_select("visa_stages", filters={"case_id": case['id']}, limit=100)
+            stage_name_map = {}
+            for s in stages:
+                sn = s.get('stage_number') or s.get('stageNumber')
+                name_field = s.get('name')
+                if isinstance(name_field, dict):
+                    stage_name_map[sn] = name_field.get('es') or name_field.get('en') or f"Etapa {sn}"
+                else:
+                    stage_name_map[sn] = str(name_field) if name_field else f"Etapa {sn}"
+
+            for p in payments:
+                p['paymentSource'] = 'manual'
+                p['paidAt'] = p.get('paid_at') or p.get('paidAt') or p.get('created_at')
+                stage_nums = p.get('stage_numbers') or p.get('stageNumbers') or []
+                if stage_nums and isinstance(stage_nums, list):
+                    names = [stage_name_map.get(n, f"Etapa {n}") for n in stage_nums]
+                    p['concept'] = " + ".join(names)
+                else:
+                    sn = p.get('stage_number') or p.get('stageNumber')
+                    p['concept'] = stage_name_map.get(sn, f"Etapa {sn or '?'}")
+
+            total_paid = sum(float(p.get('amount', 0) or 0) for p in payments if p.get('status') == 'completed')
+            total_pending = sum(float(p.get('amount', 0) or 0) for p in payments if p.get('status') == 'pending')
+
             return {
                 'success': True,
-                'payments': all_payments,
+                'payments': payments,
                 'summary': {
                     'totalPaid': total_paid,
                     'totalPending': total_pending,
-                    'count': len(all_payments),
-                    'clientPayments': len(client_payments),
-                    'manualPayments': len(manual_payments)
+                    'count': len(payments),
+                    'clientPayments': 0,
+                    'manualPayments': len(payments)
                 }
             }
-            
+
         except HTTPException:
             raise
         except Exception as e:

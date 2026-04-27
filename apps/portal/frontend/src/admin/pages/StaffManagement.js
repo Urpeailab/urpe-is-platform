@@ -184,7 +184,7 @@ export const StaffManagement = () => {
       setTransferring(true);
       const token = localStorage.getItem('admin_token');
       const { data } = await axios.post(
-        `${API}/admin/staff/${transferModal._id}/transfer-cases`,
+        `${API}/admin/staff/${transferModal.id || transferModal._id}/transfer-cases`,
         { targetStaffId },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -493,9 +493,9 @@ export const StaffManagement = () => {
                     <div className="space-y-3">
                       {staff.map((member) => (
                   <div
-                    key={member._id}
+                    key={member.id || member._id}
                     className="flex flex-col p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors border border-gray-200 gap-3 cursor-pointer"
-                    onClick={() => navigate(`/admin/staff/${member._id}/detail`)}
+                    onClick={() => navigate(`/admin/staff/${member.id || member._id}/detail`)}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       {member.photo ? (
@@ -522,14 +522,14 @@ export const StaffManagement = () => {
                             onClick={() => openTransferModal(member)}
                             className="text-blue-500 hover:text-blue-600 hover:bg-blue-50 h-8 w-8 p-0"
                             title="Transferir casos"
-                            data-testid={`transfer-btn-${member._id}`}
+                            data-testid={`transfer-btn-${member.id || member._id}`}
                           >
                             <ArrowRightLeft className="h-4 w-4" />
                           </Button>
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => navigate(`/admin/staff/${member._id}`)}
+                            onClick={() => navigate(`/admin/staff/${member.id || member._id}`)}
                             className="text-gray-600 hover:text-gray-900 hover:bg-gray-200 h-8 w-8 p-0"
                           >
                             <Edit className="h-4 w-4" />
@@ -537,7 +537,7 @@ export const StaffManagement = () => {
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => handleDeleteStaff(member._id, member.name)}
+                            onClick={() => handleDeleteStaff(member.id || member._id, member.name)}
                             className="text-red-500 hover:text-red-600 hover:bg-red-50 h-8 w-8 p-0"
                           >
                             <Trash2 className="h-4 w-4" />
@@ -623,7 +623,7 @@ export const StaffManagement = () => {
               className="w-full border-2 border-gray-300 rounded-lg px-3 py-2.5 text-sm text-gray-900 focus:border-yellow-500 focus:outline-none mb-6"
             >
               <option value="">Seleccionar miembro...</option>
-              {allStaffForTransfer.filter(s => s._id !== transferModal._id).map(s => (
+              {allStaffForTransfer.filter(s => s._id !== transferModal.id || transferModal._id).map(s => (
                 <option key={s._id} value={s._id}>{s.name} — {getRoleTranslation(s.role)}</option>
               ))}
             </select>

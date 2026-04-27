@@ -6037,33 +6037,25 @@ async def update_staff(
                 detail=f"You cannot assign role: {request.role}"
             )
         
-        # Preparar actualización
-        update_data = {'updatedAt': datetime.utcnow()}
+        # Preparar actualización (only columns that exist in staff table)
+        update_data = {}
         if request.name is not None:
             update_data['name'] = request.name
         if request.email is not None:
-            # Verificar que el email no esté en uso por otro staff
             existing = select("staff", filters={"email": request.email.lower()}, single=True)
             if existing and existing.get("id") == staff_id:
-                existing = None  # same staff, not a conflict
+                existing = None
             if existing:
                 raise HTTPException(status_code=400, detail="Email already in use")
             update_data['email'] = request.email.lower()
         if request.role is not None:
             update_data['role'] = request.role
-            update_data['roleLevel'] = ROLE_LEVELS.get(request.role, 5)
         if request.phone is not None:
             update_data['phone'] = request.phone
         if request.status is not None:
-            update_data['status'] = request.status
-        if request.department is not None:
-            update_data['department'] = request.department
-        if request.linkedin is not None:
-            update_data['linkedin'] = request.linkedin
+            update_data['is_active'] = (request.status == 'active')
         if request.photo is not None:
-            update_data['photo'] = request.photo
-        if request.permissions is not None:
-            update_data['permissions'] = request.permissions
+            update_data['avatar_url'] = request.photo
         
         # Actualizar
         update("staff", {"id": staff_id}, update_data)
@@ -6090,7 +6082,7 @@ async def update_staff(
         raise
     except Exception as e:
         logger.error(f"Update staff error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update staff")
+        raise HTTPException(status_code=500, detail=f"Failed to update staff: {str(e)}")
 
 
 @api_router.delete("/admin/staff/{staff_id}")

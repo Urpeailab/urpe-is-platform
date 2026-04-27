@@ -15,14 +15,14 @@ const API = `${BACKEND_URL}/api`;
 
 export const WebinarsList = () => {
   const navigate = useNavigate();
-  const { hasPermission } = useAdminAuth();
+  const { hasPermission, admin } = useAdminAuth();
   const [webinars, setWebinars] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [showModal, setShowModal] = useState(false);
   const [ seleccionadoWebinar, setSelectedWebinar] = useState(null);
 
-  const canManage = hasPermission('canManageContent');
+  const canManage = hasPermission('canManageContent') || ['super_admin', 'admin'].includes(admin?.role);
 
   const fetchWebinars = async () => {
     try {

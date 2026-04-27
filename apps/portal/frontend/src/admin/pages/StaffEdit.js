@@ -166,7 +166,7 @@ export const StaffEdit = () => {
 
       if (response.data) {
         toast.success('Personal actualizado exitosamente');
-        navigate('/admin/staff-management');
+        navigate(`/admin/staff/${staffId}/detail`);
       }
     } catch (error) {
       console.error('Error updating staff:', error);

@@ -176,15 +176,6 @@ export const DashboardLayout = ({ children }) => {
       collapsible: true,
       items: [
         {
-          id: 'documents',
-          icon: FileText,
-          label: t('dashboard.nav.documents'),
-          path: '/dashboard/documents',
-          unlocked: canAccessPayAsYouAdvance,
-          badge: 'client',
-          requiresRegistration: true,
-        },
-        {
           id: 'payments',
           icon: CreditCard,
           label: t('dashboard.nav.payments'),
@@ -192,20 +183,6 @@ export const DashboardLayout = ({ children }) => {
           unlocked: canAccessPayAsYouAdvance,
           badge: 'client',
           requiresRegistration: true,
-        },
-        {
-          id: 'appointments',
-          icon: Calendar,
-          label: t('dashboard.nav.appointments'),
-          path: '/dashboard/appointments',
-          unlocked: true,
-        },
-        {
-          id: 'messages',
-          icon: MessageSquare,
-          label: t('dashboard.nav.messages'),
-          path: '/dashboard/messages',
-          unlocked: true,
         },
       ]
     }

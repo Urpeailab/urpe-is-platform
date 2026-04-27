@@ -64,11 +64,11 @@ export const UserDetail = () => {
       });
       setUserPayments(paymentsResponse.data.payments || paymentsResponse.data || []);
       
-      // Fetch magic links
-      const linksResponse = await axios.get(`${API}/admin/users/${userResponse.data.phone}/magic-links`, {
+      // Fetch magic links (use UUID, not phone)
+      const linksResponse = await axios.get(`${API}/admin/users/${userId}/magic-links`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setUserLinks(linksResponse.data.links || []);
+      setUserLinks(linksResponse.data.magicLinks || linksResponse.data.links || []);
       
     } catch (error) {
       console.error('Error fetching user details:', error);

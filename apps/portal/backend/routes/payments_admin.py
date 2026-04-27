@@ -177,20 +177,23 @@ async def get_all_payments(
     authorization: Annotated[str, Header()],
     page: int = 1,
     limit: int = 50,
-    caseId: str = None
+    caseId: str = None,
+    userId: str = None
 ):
-    """Get all payments from manual_payments table, with optional caseId filter (Supabase)."""
+    """Get all payments with optional caseId/userId filter (Supabase)."""
     try:
         verify_staff_token_impl(authorization)
         from db.supabase_client import get_supabase, _add_camel_aliases
         sb = get_supabase()
 
-        logger.info(f"📊 GET /admin/payments called with caseId={caseId}, page={page}, limit={limit}")
+        logger.info(f"📊 GET /admin/payments called with caseId={caseId}, userId={userId}, page={page}, limit={limit}")
 
         # Build query on payments (unified table)
         q = sb.table("payments").select("*", count="exact")
         if caseId:
             q = q.eq("case_id", caseId)
+        if userId:
+            q = q.eq("client_id", userId)
         q = q.order("created_at", desc=True).range((page - 1) * limit, (page - 1) * limit + limit - 1)
         res = q.execute()
         payments_raw = [_add_camel_aliases(p) for p in (res.data or [])]
