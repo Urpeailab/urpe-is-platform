@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -i \"\\\\$\")",
+      "Bash(grep -n '\\\\$regex\\\\|\\\\$options' /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py)",
+      "Bash(kill %1)",
+      "Bash(wait)",
+      "Bash(curl -s \"http://localhost:8002/api/clients?limit=5&page=1\" -H \"Cookie: dummy\" -o /tmp/r.json -w \"Clients list -> HTTP %{http_code}\\\\n\")",
+      "Bash(docker-compose logs *)",
+      "Bash(curl -sv -X POST http://localhost:8001/api/admin/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@urpe.com\",\"password\":\"urpe2024\"}')",
+      "Bash(git checkout *)",
+      "Read(//c/Users/felix/**)",
+      "Bash(docker info *)",
+      "Bash(curl -s -o /tmp/r.txt -w \"%{http_code}\\\\n\" \"http://localhost:8002/api/clients/ca733fc1-1163-462b-987b-9a31c0307fb0/stats\")",
+      "Read(//tmp/**)",
+      "Bash(docker cp *)",
+      "Bash(docker restart *)"
+    ],
+    "additionalDirectories": [
+      "C:\\Temp"
+    ]
+  }
+}

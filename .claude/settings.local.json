@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rsync -av '--exclude=*.bak' '--exclude=*.backup' '--exclude=*.backup_*' --exclude=uploads/ --exclude=db/ /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/Monica-redactora-disenadora-main/backend/ /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/)",
+      "Bash(docker-compose up *)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} - %{time_total}s\\\\n\" http://localhost:8002/)",
+      "Bash(curl -s http://localhost:8002/api/)",
+      "Bash(docker-compose restart *)",
+      "Bash(docker exec *)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} - %{time_total}s\\\\n\" http://localhost:8002/api/)",
+      "Bash(grep -E '\\($set|$push|$pull|$inc|$addToSet|$unset|$or|$and|$in|$ne|$exists|$regex|$gt|$lt|$gte|$lte\\)' /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py)",
+      "Bash(grep -n '\"\\\\$' /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py)",
+      "Bash(grep -E '\\(\\\\$set|\\\\$push|\\\\$pull|\\\\$inc|\\\\$unset|\\\\$or|\\\\$in|\\\\$ne|\\\\$exists|\\\\$regex|\\\\$gt|\\\\$lt|\\\\$gte|\\\\$lte|\\\\$nin\\)' /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:8002/api/)",
+      "Bash(curl -s -X POST http://localhost:8002/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@monica.com\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -o /dev/null -w \"GET / -> HTTP %{http_code}\\\\n\" http://localhost:8002/)",
+      "Bash(curl -s -o /dev/null -w \"GET /api -> HTTP %{http_code}\\\\n\" http://localhost:8002/api)",
+      "Bash(curl -s -o /dev/null -w \"GET /static/js/main.js -> HTTP %{http_code}\\\\n\" http://localhost:8002/static/js/)",
+      "Bash(curl -s -o /dev/null -w \"GET /api/ -> HTTP %{http_code}\\\\n\" http://localhost:8002/api/)",
+      "Bash(curl -s -o /dev/null -w \"GET /favicon.ico -> HTTP %{http_code}\\\\n\" http://localhost:8002/favicon.ico)",
+      "Bash(curl -s http://localhost:8002/)",
+      "Bash(curl -s -o /dev/null -w \"Portal /  -> HTTP %{http_code}\\\\n\" http://localhost:8001/)",
+      "Bash(curl -s -o /dev/null -w \"Portal /api -> HTTP %{http_code}\\\\n\" http://localhost:8001/api/)",
+      "Bash(curl -s -o /dev/null -w \"Redactora / -> HTTP %{http_code}\\\\n\" http://localhost:8002/)",
+      "Bash(curl -s -o /dev/null -w \"Redactora /api -> HTTP %{http_code}\\\\n\" http://localhost:8002/api/)",
+      "Bash(curl -s -o /dev/null -w \"Portal / -> HTTP %{http_code}\\\\n\" http://localhost:8001/)",
+      "Bash(grep -n '\"\\\\$options\"\\\\|\"\\\\$regex\"' /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py)"
+    ]
+  }
+}

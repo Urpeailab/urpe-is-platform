@@ -1,6 +1,6 @@
 from reportlab.graphics import renderPDF
 from svglib.svglib import svg2rlg
-from reportlab.platypus import Spacer, Table, KeepInFrame
+from reportlab.platypus import Spacer, Table, KeepInFrame, PageBreak
 from reportlab.lib import colors
 from io import BytesIO
 import re
@@ -34,17 +34,40 @@ class UniversalSVGProcessor:
     
     def extract_svg_blocks(self, content):
         """
-        Extrae todos los bloques SVG del contenido generado por GPT-4o.
-        Funciona con múltiples formatos.
+        Extrae bloques SVG del contenido.
+        Maneja SVG en markdown, SVG directo, y SVG separados por ---DIAGRAM_SEPARATOR---
         """
         svg_blocks = []
+        
+        # Patrón 0: Primero verificar si hay separadores de diagramas múltiples
+        if '---DIAGRAM_SEPARATOR---' in content:
+            logger.info("🔍 Detected DIAGRAM_SEPARATOR format - splitting diagrams")
+            diagram_sections = content.split('---DIAGRAM_SEPARATOR---')
+            
+            for i, section in enumerate(diagram_sections, 1):
+                section = section.strip()
+                
+                # Remover markdown si está presente
+                if section.startswith('```svg'):
+                    section = section.replace('```svg', '').replace('```', '').strip()
+                
+                # Extraer SVG de esta sección
+                svg_match = re.search(r'(<svg[^>]*>.*?</svg>)', section, re.DOTALL | re.IGNORECASE)
+                if svg_match:
+                    svg_blocks.append(svg_match.group(1))
+                    logger.info(f"  ✅ Extracted SVG from diagram section {i}")
+                else:
+                    logger.warning(f"  ⚠️ No SVG found in diagram section {i}")
+            
+            logger.info(f"Bloques SVG encontrados (via DIAGRAM_SEPARATOR): {len(svg_blocks)}")
+            return svg_blocks
         
         # Patrón 1: SVG en bloques markdown ```svg
         pattern1 = r'```svg\s*\n(.*?)\n```'
         matches = re.findall(pattern1, content, re.DOTALL | re.IGNORECASE)
         svg_blocks.extend(matches)
         
-        # Patrón 2: SVG directo sin backticks
+        # Patrón 2: SVG directo sin backticks (solo si no encontró con markdown)
         if not svg_blocks:
             pattern2 = r'(<svg[^>]*>.*?</svg>)'
             matches = re.findall(pattern2, content, re.DOTALL | re.IGNORECASE)
@@ -166,10 +189,14 @@ class UniversalSVGProcessor:
                 # Centrar Drawing
                 centered = self.center_drawing(drawing)
                 
-                # Agregar espaciado y elemento
+                # USPTO best practice: one figure per page. Break before each
+                # diagram except the first (the caller has already issued a
+                # PageBreak + PageResetFlowable for the Drawings sub-document).
+                if idx > 1:
+                    elements.append(PageBreak())
+                # Small leading spacer so the figure isn't glued to the top margin
                 elements.append(Spacer(1, 20))
                 elements.append(centered)
-                elements.append(Spacer(1, 30))
                 
                 logger.info(f"✓ Diagrama {idx} agregado exitosamente")
             else:

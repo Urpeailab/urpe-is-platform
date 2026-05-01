@@ -67,8 +67,8 @@ class CommentsManager:
     
     def __init__(self, db):
         self.db = db
-        self.comments_collection = db['document_comments'] if db is not None else None
-        self.notifications_collection = db['comment_notifications'] if db is not None else None
+        self.comments_collection = db['document_comments']
+        self.notifications_collection = db['comment_notifications']
     
     async def check_document_access(
         self,
@@ -87,7 +87,7 @@ class CommentsManager:
         """
         
         # Administradores tienen acceso total
-        if user_role == 'admin':
+        if user_role and user_role.upper() == 'ADMIN':
             return {
                 'has_access': True,
                 'access_type': 'admin',

@@ -1,0 +1,20 @@
+{
+  "econometric_study_generator_v2": {
+    "name": "High-Efficiency Econometric Study Generator (2-Call Method)",
+    "description": "Generates complete 16-section study in 1 call (English), then translates in 1 call (Spanish)",
+    
+    "generation_config": {
+      "model": "gpt-5.1",
+      "temperature": 0.3,
+      "max_tokens": 128000,
+      "purpose": "Complete study generation in single call"
+    },
+    
+    "translation_config": {
+      "model": "gpt-4o",
+      "temperature": 0.2,
+      "max_tokens": 128000,
+      "purpose": "Professional translation of complete study"
+    }
+  }
+}

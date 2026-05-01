@@ -263,6 +263,26 @@ def get_enhanced_section_prompt(section_number, section_title, invention_data):
     inventor = invention_data.get('inventor_name', 'Inventor')
     residence = invention_data.get('inventor_residence_en', 'N/A')
     
+    # ✅ NUEVO: Extraer CV del inventor si existe
+    inventor_cv = invention_data.get('inventor_cv', '') or invention_data.get('applicant_cv', '')
+    project_description = invention_data.get('project_description', '')
+    
+    # Contexto del inventor para coherencia
+    inventor_context = ""
+    if inventor_cv:
+        inventor_context = f"""
+🚨 COHERENCE REQUIREMENT - INVENTOR BACKGROUND (USE THIS INFORMATION):
+The following is the REAL background of the inventor. Any mention of the inventor's expertise 
+or background MUST be consistent with this information. DO NOT invent credentials or experience.
+
+INVENTOR CV/CREDENTIALS:
+{inventor_cv[:1500]}
+
+{f"PROJECT CONTEXT:{chr(10)}{project_description[:800]}" if project_description else ""}
+
+When mentioning inventor expertise, refer ONLY to qualifications visible in the CV above.
+"""
+    
     # SECTION 1: HEADER
     if section_number == 1:
         system_message = """USPTO Patent Drafter. Write patent header with title, inventor info, filing date in USPTO format. Use the inventor's actual information, NO placeholders."""
@@ -341,6 +361,8 @@ For patent: {title}
 Technical Field: {field}
 Description: {description}
 
+{inventor_context}
+
 Write 2-3 paragraphs covering:
 
 Paragraph 1 (¶0013):
@@ -377,6 +399,8 @@ DO NOT use marketing language. Be technical and precise."""
 For patent: {title}
 Technical Field: {field}
 Description: {description}
+
+{inventor_context}
 
 Write 4-6 paragraphs (¶0023-0031) covering:
 
@@ -471,6 +495,8 @@ Example:
 Title: {title}
 Field: {field}
 Description: {description}
+
+{inventor_context}
 
 Structure (minimum 20-25 paragraphs, ¶0070-0095):
 
@@ -1250,6 +1276,24 @@ def generate_call_1_prompt(invention_data):
     inventor = invention_data.get('inventor_name', 'Inventor')
     residence = invention_data.get('inventor_residence_en', 'N/A')
     
+    # ✅ FIX: Include CV and project description for better context
+    inventor_cv = invention_data.get('inventor_cv', '')
+    project_desc = invention_data.get('project_description', '')
+    
+    cv_context = ""
+    if inventor_cv and inventor_cv.strip():
+        cv_context = f"""
+**INVENTOR CV/RESUME (USE AS PRIMARY SOURCE for technical expertise and domain knowledge):**
+{inventor_cv[:4000]}
+"""
+    
+    project_context = ""
+    if project_desc and project_desc.strip():
+        project_context = f"""
+**PROJECT DESCRIPTION (USE AS PRIMARY SOURCE for technical architecture and implementation):**
+{project_desc[:4000]}
+"""
+    
     quality_guidance = get_quality_guidance_text()
     
     system_message = get_uspto_system_message()
@@ -1275,6 +1319,10 @@ INVENTION DETAILS (for context only - DO NOT repeat these in a header):
 - Residence: {residence}
 - Technical Field: {field}
 - Description: {description}
+{cv_context}
+{project_context}
+
+**CRITICAL INSTRUCTION:** The patent MUST be aligned with the inventor's actual technical background and expertise as described in the CV and project description above. Do NOT generate generic content that doesn't reflect the inventor's real domain.
 
 ⚠️⚠️⚠️ USPTO FORMAT RULES (CRITICAL) ⚠️⚠️⚠️
 

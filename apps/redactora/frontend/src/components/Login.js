@@ -8,7 +8,7 @@ import { Label } from './ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Loader2, ArrowLeft } from 'lucide-react';
 
-const LOGO_URL = 'https://customer-assets.emergentagent.com/job_ai-bookmaker-3/artifacts/96cp2qdv_IMG_6812.jpg';
+const LOGO_URL = process.env.REACT_APP_LOGO_URL || 'https://customer-assets.emergentagent.com/job_ai-bookmaker-3/artifacts/96cp2qdv_IMG_6812.jpg';
 
 const Login = () => {
   const [formData, setFormData] = useState({ email: '', password: '' });

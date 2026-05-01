@@ -182,7 +182,13 @@ TRANSLATION_SYSTEM_MESSAGE_ES = """You are a professional Spanish translator spe
 TRANSLATION REQUIREMENTS:
 - Translate USPTO patent content from English to Spanish
 - Maintain ALL technical terminology in English where appropriate (e.g., "machine learning", "API", "cache")
-- Preserve HTML formatting exactly: <h2>, <p>, &#182; paragraph numbers
+- PRESERVE HTML FORMATTING EXACTLY — THIS IS CRITICAL:
+  * Section headings MUST remain as: <h2><strong>TÍTULO EN MAYÚSCULAS</strong></h2>
+  * Paragraphs MUST remain wrapped in: <p>&#182;0001 texto...</p>
+  * Bold text MUST remain as: <strong>texto</strong>
+  * NEVER use **markdown** syntax — ALWAYS use <strong> HTML tags
+  * NEVER write ¶0001 — ALWAYS write &#182;0001 (HTML entity, NOT pilcrow character)
+  * Do NOT add or remove HTML tags; only translate the TEXT content between the tags
 - Keep reference numerals unchanged: (101), (102), etc.
 - Maintain legal/technical precision of original text
 
@@ -194,31 +200,45 @@ SPANISH PATENT TERMINOLOGY:
 - "method" → "método"
 - "system" → "sistema"
 
-CRITICAL:
+ABSOLUTELY CRITICAL - DO NOT ADD ANY OF THESE:
+- DO NOT add "TRADUCCIÓN DEL PATENTE" or any translation header
+- DO NOT add "ENCABEZADO" or "HEADER" labels
+- DO NOT add introductory text like "Aquí está la traducción..."
+- DO NOT add concluding text like "Esta es la traducción completa..."
+- DO NOT add any meta-commentary about the translation process
 - DO NOT add explanations or notes
 - DO NOT modify technical content
-- DO NOT change formatting
-- Translate ONLY the text content, preserve ALL HTML tags"""
+- DO NOT use **markdown** bold — use <strong>HTML tags</strong> instead
+- Translate ONLY the text content, preserve ALL HTML tags
+- Start directly with the translated content (first section should be CAMPO DE LA INVENCIÓN)"""
 
 # User prompt for Spanish translation
 TRANSLATION_USER_PROMPT_ES = """Translate the following USPTO patent application from English to Spanish.
 
-**IMPORTANT INSTRUCTIONS:**
-1. Maintain ALL HTML formatting exactly as provided
-2. Keep paragraph numbers (&#182;0001, &#182;0002) unchanged
+**CRITICAL INSTRUCTIONS - READ CAREFULLY:**
+1. Maintain ALL HTML formatting exactly as provided — DO NOT convert HTML to markdown
+2. Keep paragraph numbers as HTML entities: &#182;0001, &#182;0002 (NOT ¶0001 with the pilcrow character)
 3. Preserve reference numerals: (101), (102), (103) → no changes
 4. Keep technical terms in English when standard practice: API, cache, workflow, token, etc.
 5. Translate legal terms appropriately: claim → reivindicación, wherein → en donde
 6. Maintain professional, formal legal language
+7. FORBIDDEN: **markdown bold** — use <strong>HTML tags</strong> instead
+8. FORBIDDEN: ¶ pilcrow symbol — use &#182; HTML entity instead
+
+**ABSOLUTELY DO NOT ADD:**
+- NO headers like "TRADUCCIÓN DEL PATENTE" or "ENCABEZADO"
+- NO introductory phrases like "Aquí está la traducción..."
+- NO concluding phrases like "Esta es la traducción completa..."
+- NO meta-commentary about the translation
+- NO explanations of what you translated
+
+**START OUTPUT DIRECTLY WITH THE FIRST SECTION** (e.g., <h2><strong>CAMPO DE LA INVENCIÓN</strong></h2>)
 
 **ENGLISH PATENT TEXT TO TRANSLATE:**
 
 {complete_english_patent_html}
 
-**OUTPUT:**
-Provide ONLY the translated Spanish text with preserved HTML formatting. Do not add any introductory or concluding remarks.
-
-Begin translation:"""
+**OUTPUT (start directly with translated HTML content, no preamble):**"""
 
 
 def get_complete_patent_prompts(patent_data: dict) -> tuple:
@@ -244,7 +264,8 @@ def get_complete_patent_prompts(patent_data: dict) -> tuple:
     phone = patent_data.get('client_phone', patent_data.get('phone', '[Phone Number]'))
     
     # Get CV and project description (NEW - these have PRIORITY)
-    applicant_cv = patent_data.get('applicant_cv', '')
+    # ✅ FIX: PatentInProgress stores CV as 'inventor_cv', not 'applicant_cv'
+    applicant_cv = patent_data.get('inventor_cv', '') or patent_data.get('applicant_cv', '')
     project_description = patent_data.get('project_description', '')
     
     # Format CV and project for the prompt

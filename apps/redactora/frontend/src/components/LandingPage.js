@@ -1,9 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from './ui/button';
-import { Card, CardContent } from './ui/card';
-import { FileText, Book, Scale, BarChart3, Briefcase, Globe, Mail, UserCheck, Award, Sparkles, Zap } from 'lucide-react';
+import { FileText, Book, Scale, BarChart3, Briefcase, Globe, Mail, UserCheck, Award, Sparkles } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 
 const LOGO_URL = 'https://customer-assets.emergentagent.com/job_ai-bookmaker-3/artifacts/96cp2qdv_IMG_6812.jpg';
@@ -11,15 +10,6 @@ const LOGO_URL = 'https://customer-assets.emergentagent.com/job_ai-bookmaker-3/a
 const LandingPage = () => {
   const navigate = useNavigate();
   const { t, i18n } = useTranslation();
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
-
-  useEffect(() => {
-    const handleMouseMove = (e) => {
-      setMousePosition({ x: e.clientX, y: e.clientY });
-    };
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, []);
 
   const changeLanguage = (lng) => {
     i18n.changeLanguage(lng);
@@ -29,117 +19,41 @@ const LandingPage = () => {
   return (
     <div className="landing-page" style={{
       minHeight: '100vh',
-      background: '#ffffff',
-      color: '#1a1a1a',
+      background: '#FFFFFF',
+      color: '#111827',
       position: 'relative',
-      overflow: 'hidden'
     }}>
-      {/* Animated gradient background */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: `
-          radial-gradient(circle at ${mousePosition.x}px ${mousePosition.y}px, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
-          radial-gradient(circle at 20% 80%, rgba(236, 72, 153, 0.05) 0%, transparent 50%),
-          radial-gradient(circle at 80% 20%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
-          radial-gradient(circle at 40% 40%, rgba(168, 85, 247, 0.04) 0%, transparent 50%)
-        `,
-        animation: 'pulse 4s ease-in-out infinite'
-      }} />
-      
-      {/* Grid pattern overlay */}
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundImage: `
-          linear-gradient(rgba(139, 92, 246, 0.03) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(139, 92, 246, 0.03) 1px, transparent 1px)
-        `,
-        backgroundSize: '50px 50px',
-        opacity: 0.5
-      }} />
-
       <style>
         {`
-          @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.8; }
-          }
-          @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-20px); }
-          }
-          @keyframes glow {
-            0%, 100% { box-shadow: 0 0 20px rgba(139, 92, 246, 0.3), 0 0 40px rgba(236, 72, 153, 0.2); }
-            50% { box-shadow: 0 0 40px rgba(139, 92, 246, 0.5), 0 0 80px rgba(236, 72, 153, 0.3); }
-          }
           @keyframes slideIn {
-            from { opacity: 0; transform: translateY(30px); }
+            from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
           }
           .feature-card-modern {
-            animation: slideIn 0.6s ease-out forwards;
+            animation: slideIn 0.5s ease-out forwards;
             opacity: 0;
           }
-          .feature-card-modern:nth-child(1) { animation-delay: 0.1s; }
-          .feature-card-modern:nth-child(2) { animation-delay: 0.2s; }
-          .feature-card-modern:nth-child(3) { animation-delay: 0.3s; }
-          .feature-card-modern:nth-child(4) { animation-delay: 0.4s; }
-          .feature-card-modern:nth-child(5) { animation-delay: 0.5s; }
+          .feature-card-modern:nth-child(1) { animation-delay: 0.05s; }
+          .feature-card-modern:nth-child(2) { animation-delay: 0.1s; }
+          .feature-card-modern:nth-child(3) { animation-delay: 0.15s; }
+          .feature-card-modern:nth-child(4) { animation-delay: 0.2s; }
+          .feature-card-modern:nth-child(5) { animation-delay: 0.25s; }
         `}
       </style>
 
-      <header className="landing-header" style={{ 
-        position: 'relative', 
-        zIndex: 10,
-        background: 'rgba(255, 255, 255, 0.8)',
-        backdropFilter: 'blur(20px)',
-        borderBottom: '1px solid rgba(139, 92, 246, 0.15)',
-        padding: '1rem 0',
-        boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
-      }}>
-        <div className="landing-header-content" style={{ 
-          maxWidth: '1200px', 
-          margin: '0 auto', 
-          padding: '0 2rem',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
+      <header className="landing-header" style={{ position: 'relative', zIndex: 10 }}>
+        <div className="landing-header-content">
           <div className="flex items-center gap-3">
             <img 
               src={LOGO_URL} 
               alt="Monica Logo" 
-              style={{
-                width: '50px',
-                height: '50px',
-                borderRadius: '12px',
-                objectFit: 'cover',
-                boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
-              }}
+              style={{ width: '44px', height: '44px', borderRadius: '10px', objectFit: 'cover' }}
             />
-            <h1 style={{
-              fontSize: '2rem',
-              fontWeight: 'bold',
-              background: 'linear-gradient(135deg, #1a1a1a, #4a4a4a, #2a2a2a)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text'
-            }}>{t('landing.title')}</h1>
+            <h1 style={{ fontSize: '1.5rem', fontWeight: '800', color: '#111827', fontFamily: 'Manrope, sans-serif', margin: 0 }}>{t('landing.title')}</h1>
           </div>
           <div className="flex items-center gap-3">
             <Select value={i18n.language} onValueChange={changeLanguage}>
-              <SelectTrigger className="w-[140px]" style={{
-                background: 'rgba(255, 255, 255, 0.9)',
-                border: '1px solid rgba(0, 0, 0, 0.3)',
-                color: '#1a1a1a'
-              }}>
+              <SelectTrigger className="w-[140px]" style={{ borderColor: '#E5E7EB' }}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -151,26 +65,7 @@ const LandingPage = () => {
               variant="outline" 
               onClick={() => navigate('/login')} 
               data-testid="login-btn"
-              style={{
-                background: 'rgba(255, 255, 255, 0.9)',
-                border: '2px solid #8b5cf6',
-                color: '#8b5cf6',
-                transition: 'all 0.3s ease',
-                backdropFilter: 'blur(10px)',
-                fontWeight: '600'
-              }}
-              onMouseEnter={(e) => {
-                e.target.style.background = '#8b5cf6';
-                e.target.style.color = 'white';
-                e.target.style.transform = 'translateY(-2px)';
-                e.target.style.boxShadow = '0 10px 25px rgba(139, 92, 246, 0.3)';
-              }}
-              onMouseLeave={(e) => {
-                e.target.style.background = 'rgba(255, 255, 255, 0.9)';
-                e.target.style.color = '#8b5cf6';
-                e.target.style.transform = 'translateY(0)';
-                e.target.style.boxShadow = 'none';
-              }}
+              style={{ borderColor: '#E5E7EB', color: '#374151', fontWeight: '600' }}
             >
               {t('landing.login')}
             </Button>
@@ -180,32 +75,34 @@ const LandingPage = () => {
 
       <main className="landing-main" style={{ position: 'relative', zIndex: 5 }}>
         <section className="hero-section" style={{
-          padding: '6rem 2rem',
+          padding: '7rem 2rem 5rem',
           textAlign: 'center',
           maxWidth: '1200px',
           margin: '0 auto'
         }}>
           <div className="hero-content">
-            {/* Powered by badge removed */}
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: '20px', padding: '0.4rem 1rem', marginBottom: '2rem', fontSize: '0.85rem', fontWeight: '600', color: '#92400E' }}>
+              <Sparkles size={14} />
+              Powered by AI — Especializado en EB-2 NIW
+            </div>
             
             <h2 style={{
               fontSize: 'clamp(2.5rem, 5vw, 4rem)',
-              fontWeight: 'bold',
+              fontWeight: '800',
               marginBottom: '1.5rem',
-              background: 'linear-gradient(135deg, #1a1a1a, #4a4a4a, #2a2a2a)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text',
-              lineHeight: '1.2'
+              color: '#111827',
+              lineHeight: '1.15',
+              fontFamily: 'Manrope, sans-serif',
+              letterSpacing: '-0.02em'
             }}>{t('landing.subtitle')}</h2>
             
             <p style={{
-              fontSize: '1.25rem',
+              fontSize: '1.2rem',
               marginBottom: '3rem',
-              color: '#4a4a4a',
+              color: '#6B7280',
               maxWidth: '600px',
               margin: '0 auto 3rem auto',
-              lineHeight: '1.6'
+              lineHeight: '1.7'
             }}>
               {t('landing.description')}
             </p>
@@ -215,767 +112,135 @@ const LandingPage = () => {
               className="hero-button"
               onClick={() => navigate('/register')}
               data-testid="get-started-btn"
-              style={{
-                background: 'linear-gradient(135deg, #000000, #4a4a4a)',
-                border: 'none',
-                padding: '1rem 2.5rem',
-                fontSize: '1.1rem',
-                borderRadius: '50px',
-                transition: 'all 0.3s ease',
-                boxShadow: '0 10px 30px rgba(0, 0, 0, 0.3)',
-                position: 'relative',
-                overflow: 'hidden'
-              }}
-              onMouseEnter={(e) => {
-                e.target.style.transform = 'translateY(-3px) scale(1.05)';
-                e.target.style.boxShadow = '0 20px 40px rgba(139, 92, 246, 0.4)';
-              }}
-              onMouseLeave={(e) => {
-                e.target.style.transform = 'translateY(0) scale(1)';
-                e.target.style.boxShadow = '0 10px 30px rgba(139, 92, 246, 0.3)';
-              }}
             >
-              <span style={{ position: 'relative', zIndex: 2 }}>{t('landing.getStarted')}</span>
+              {t('landing.getStarted')}
             </Button>
           </div>
         </section>
 
         <section className="features-section" style={{
-          padding: '4rem 2rem',
+          padding: '3rem 2rem 5rem',
           maxWidth: '1400px',
           margin: '0 auto'
         }}>
           <h3 style={{
-            fontSize: '3rem',
-            fontWeight: 'bold',
+            fontSize: 'clamp(1.8rem, 3vw, 2.5rem)',
+            fontWeight: '800',
             textAlign: 'center',
-            marginBottom: '1rem',
-            color: '#000000'
+            marginBottom: '0.75rem',
+            color: '#111827',
+            fontFamily: 'Manrope, sans-serif',
+            letterSpacing: '-0.02em'
           }}>{t('landing.features.title')}</h3>
           <p style={{
             textAlign: 'center',
-            fontSize: '1.1rem',
+            fontSize: '1.05rem',
             marginBottom: '3rem',
-            color: '#4a4a4a',
-            fontWeight: '600'
+            color: '#6B7280',
+            fontWeight: '500'
           }}>{t('landing.features.subtitle')}</p>
           <div className="features-grid" style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-            gap: '2rem',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gap: '1.5rem',
             marginBottom: '4rem'
           }}>
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.2)';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
+            {[
+              { icon: <FileText size={28} style={{ color: '#F8BF13' }} />, bg: '#FFFBEB', title: t('landing.features.niw'), desc: t('landing.features.niw.desc') },
+              { icon: <Scale size={28} style={{ color: '#3B82F6' }} />, bg: '#EFF6FF', title: t('landing.features.patents'), desc: t('landing.features.patents.desc') },
+              { icon: <Book size={28} style={{ color: '#EC4899' }} />, bg: '#FDF2F8', title: t('landing.features.books'), desc: t('landing.features.books.desc') },
+              { icon: <FileText size={28} style={{ color: '#10B981' }} />, bg: '#ECFDF5', title: t('landing.features.whitepapers'), desc: t('landing.features.whitepapers.desc') },
+              { icon: <BarChart3 size={28} style={{ color: '#8B5CF6' }} />, bg: '#F5F3FF', title: t('landing.features.econometric'), desc: t('landing.features.econometric.desc') },
+            ].map((f, i) => (
+              <div key={i} className="feature-card-modern" style={{
+                background: '#FFFFFF',
+                border: '1px solid #E5E7EB',
+                borderRadius: '16px',
+                padding: '2rem',
+                transition: 'all 0.2s ease',
+                cursor: 'default',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.04)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-4px)';
+                e.currentTarget.style.boxShadow = '0 12px 32px rgba(0,0,0,0.1)';
+                e.currentTarget.style.borderColor = '#F8BF13';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.04)';
+                e.currentTarget.style.borderColor = '#E5E7EB';
               }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite'
-                }}>
-                  <FileText size={48} style={{ 
-                    color: '#2a2a2a',
-                    filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))'
-                  }} />
+                <div style={{ width: '60px', height: '60px', background: f.bg, borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1.25rem' }}>
+                  {f.icon}
                 </div>
+                <h4 style={{ fontSize: '1.1rem', fontWeight: '700', marginBottom: '0.75rem', color: '#111827', fontFamily: 'Manrope, sans-serif' }}>
+                  {f.title}
+                </h4>
+                <p style={{ color: '#6B7280', lineHeight: '1.6', fontSize: '0.9rem' }}>
+                  {f.desc}
+                </p>
               </div>
-              <h4 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem', color: '#1a1a1a', textAlign: 'center' }}>
-                {t('landing.features.niw')}
-              </h4>
-              <p style={{ color: '#4a4a4a', lineHeight: '1.6', textAlign: 'center' }}>
-                {t('landing.features.niw.desc')}
-              </p>
-            </div>
-
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 0.5s'
-                }}>
-                  <Scale size={48} color="#2a2a2a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
-                </div>
-              </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.features.patents')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                textAlign: 'center'
-              }}>{t('landing.features.patents.desc')}</p>
-            </div>
-
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 1s'
-                }}>
-                  <Book size={48} color="#3a3a3a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
-                </div>
-              </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.features.books')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                textAlign: 'center'
-              }}>{t('landing.features.books.desc')}</p>
-            </div>
-
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 1.5s'
-                }}>
-                  <FileText size={48} color="#4a4a4a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
-                </div>
-              </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.features.whitepapers')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                textAlign: 'center'
-              }}>{t('landing.features.whitepapers.desc')}</p>
-            </div>
-
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 2s'
-                }}>
-                  <BarChart3 size={48} color="#5a5a5a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
-                </div>
-              </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.features.econometric')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                textAlign: 'center'
-              }}>{t('landing.features.econometric.desc')}</p>
-            </div>
+            ))}
           </div>
 
           <h3 style={{
-            fontSize: '2.5rem',
-            fontWeight: 'bold',
+            fontSize: 'clamp(1.5rem, 2.5vw, 2rem)',
+            fontWeight: '800',
             textAlign: 'center',
-            marginTop: '4rem',
-            marginBottom: '3rem',
-            color: '#000000'
+            marginTop: '3rem',
+            marginBottom: '2.5rem',
+            color: '#111827',
+            fontFamily: 'Manrope, sans-serif',
           }}>{t('landing.comingsoon.title')}</h3>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-            gap: '2rem'
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gap: '1.25rem'
           }}>
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)',
-              opacity: 0.85
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-              e.currentTarget.style.opacity = '1';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-              e.currentTarget.style.opacity = '0.85';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
+            {[
+              { icon: <Briefcase size={24} style={{ color: '#047857' }} />, bg: '#ECFDF5', title: t('landing.comingsoon.casestudies'), desc: t('landing.comingsoon.casestudies.desc') },
+              { icon: <Globe size={24} style={{ color: '#EC4899' }} />, bg: '#FDF2F8', title: t('landing.comingsoon.policy'), desc: t('landing.comingsoon.policy.desc') },
+              { icon: <Mail size={24} style={{ color: '#F97316' }} />, bg: '#FFF7ED', title: t('landing.comingsoon.selfpetition'), desc: t('landing.comingsoon.selfpetition.desc') },
+              { icon: <UserCheck size={24} style={{ color: '#3B82F6' }} />, bg: '#EFF6FF', title: t('landing.comingsoon.recommendation'), desc: t('landing.comingsoon.recommendation.desc') },
+              { icon: <Award size={24} style={{ color: '#7C3AED' }} />, bg: '#F5F3FF', title: t('landing.comingsoon.expert'), desc: t('landing.comingsoon.expert.desc') },
+            ].map((f, i) => (
+              <div key={i} className="feature-card-modern" style={{
+                background: '#FFFFFF',
+                border: '1px solid #E5E7EB',
+                borderRadius: '14px',
+                padding: '1.5rem',
+                opacity: 0,
+                boxShadow: '0 1px 4px rgba(0,0,0,0.04)'
               }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 0.3s'
-                }}>
-                  <Briefcase size={48} color="#6a6a6a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                  <div style={{ width: '44px', height: '44px', background: f.bg, borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {f.icon}
+                  </div>
+                  <h4 style={{ fontSize: '0.95rem', fontWeight: '700', color: '#111827', fontFamily: 'Manrope, sans-serif', margin: 0 }}>{f.title}</h4>
                 </div>
+                <p style={{ color: '#6B7280', lineHeight: '1.5', fontSize: '0.85rem', marginBottom: '0.75rem' }}>{f.desc}</p>
+                <span style={{ display: 'inline-block', padding: '0.25rem 0.75rem', background: '#FFFBEB', color: '#92400E', borderRadius: '20px', fontSize: '0.75rem', fontWeight: '600', border: '1px solid #FDE68A' }}>
+                  {t('landing.comingsoon.title')}
+                </span>
               </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.casestudies')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                marginBottom: '1rem',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.casestudies.desc')}</p>
-              <span style={{
-                display: 'inline-block',
-                padding: '0.5rem 1rem',
-                background: 'rgba(139, 92, 246, 0.15)',
-                color: '#8b5cf6',
-                borderRadius: '50px',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                border: '1px solid rgba(139, 92, 246, 0.3)'
-              }}>
-                {t('landing.comingsoon.title')}
-              </span>
-            </div>
-
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)',
-              opacity: 0.85
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-              e.currentTarget.style.opacity = '1';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-              e.currentTarget.style.opacity = '0.85';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 0.6s'
-                }}>
-                  <Globe size={48} color="#1a1a1a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
-                </div>
-              </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.policy')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                marginBottom: '1rem',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.policy.desc')}</p>
-              <span style={{
-                display: 'inline-block',
-                padding: '0.5rem 1rem',
-                background: 'rgba(139, 92, 246, 0.15)',
-                color: '#8b5cf6',
-                borderRadius: '50px',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                border: '1px solid rgba(139, 92, 246, 0.3)'
-              }}>
-                {t('landing.comingsoon.title')}
-              </span>
-            </div>
-
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)',
-              opacity: 0.85
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-              e.currentTarget.style.opacity = '1';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-              e.currentTarget.style.opacity = '0.85';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 0.9s'
-                }}>
-                  <Mail size={48} color="#4a4a4a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
-                </div>
-              </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.selfpetition')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                marginBottom: '1rem',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.selfpetition.desc')}</p>
-              <span style={{
-                display: 'inline-block',
-                padding: '0.5rem 1rem',
-                background: 'rgba(139, 92, 246, 0.15)',
-                color: '#8b5cf6',
-                borderRadius: '50px',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                border: '1px solid rgba(139, 92, 246, 0.3)'
-              }}>
-                {t('landing.comingsoon.title')}
-              </span>
-            </div>
-
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)',
-              opacity: 0.85
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-              e.currentTarget.style.opacity = '1';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-              e.currentTarget.style.opacity = '0.85';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 1.2s'
-                }}>
-                  <UserCheck size={48} color="#3a3a3a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
-                </div>
-              </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.recommendation')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                marginBottom: '1rem',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.recommendation.desc')}</p>
-              <span style={{
-                display: 'inline-block',
-                padding: '0.5rem 1rem',
-                background: 'rgba(139, 92, 246, 0.15)',
-                color: '#8b5cf6',
-                borderRadius: '50px',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                border: '1px solid rgba(139, 92, 246, 0.3)'
-              }}>
-                {t('landing.comingsoon.title')}
-              </span>
-            </div>
-
-            <div className="feature-card-modern" style={{
-              background: 'rgba(255, 255, 255, 0.7)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(0, 0, 0, 0.15)',
-              borderRadius: '24px',
-              padding: '2.5rem',
-              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
-              cursor: 'pointer',
-              boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)',
-              opacity: 0.85
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.95)';
-              e.currentTarget.style.transform = 'translateY(-10px) scale(1.02)';
-              e.currentTarget.style.boxShadow = '0 20px 60px rgba(139, 92, 246, 0.2)';
-              e.currentTarget.style.borderColor = 'rgba(139, 92, 246, 0.5)';
-              e.currentTarget.style.opacity = '1';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.7)';
-              e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(0, 0, 0, 0.15)';
-              e.currentTarget.style.opacity = '0.85';
-            }}>
-              <div style={{ 
-                marginBottom: '1.5rem',
-                display: 'flex',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                {/* Glassmorphism icon container */}
-                <div style={{
-                  width: '90px',
-                  height: '90px',
-                  background: 'rgba(255, 255, 255, 0.15)',
-                  backdropFilter: 'blur(10px)',
-                  WebkitBackdropFilter: 'blur(10px)',
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
-                  borderRadius: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.1)',
-                  animation: 'float 3s ease-in-out infinite 1.5s'
-                }}>
-                  <Award size={48} color="#2a2a2a" style={{ filter: 'drop-shadow(0 0 10px rgba(0, 0, 0, 0.2))' }} />
-                </div>
-              </div>
-              <h4 style={{
-                fontSize: '1.5rem',
-                fontWeight: 'bold',
-                marginBottom: '1rem',
-                color: '#1a1a1a',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.expert')}</h4>
-              <p style={{
-                color: '#4a4a4a',
-                lineHeight: '1.6',
-                marginBottom: '1rem',
-                textAlign: 'center'
-              }}>{t('landing.comingsoon.expert.desc')}</p>
-              <span style={{
-                display: 'inline-block',
-                padding: '0.5rem 1rem',
-                background: 'rgba(139, 92, 246, 0.15)',
-                color: '#8b5cf6',
-                borderRadius: '50px',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                border: '1px solid rgba(139, 92, 246, 0.3)'
-              }}>
-                {t('landing.comingsoon.title')}
-              </span>
-            </div>
+            ))}
           </div>
         </section>
       </main>
 
       <footer style={{
-        position: 'relative',
-        zIndex: 10,
-        background: 'rgba(10, 10, 15, 0.9)',
-        backdropFilter: 'blur(20px)',
-        borderTop: '1px solid rgba(139, 92, 246, 0.2)',
+        background: '#F9FAFB',
+        borderTop: '1px solid #E5E7EB',
         padding: '2rem 0',
         textAlign: 'center',
-        marginTop: '4rem'
+        marginTop: '2rem'
       }}>
-        <p style={{
-          color: '#4a4a4a',
-          fontSize: '1rem'
-        }}>© 2025 Monica. All rights reserved.</p>
+        <p style={{ color: '#9CA3AF', fontSize: '0.9rem' }}>© 2025 Monica. All rights reserved.</p>
       </footer>
     </div>
   );
+
 };
 
 export default LandingPage;
