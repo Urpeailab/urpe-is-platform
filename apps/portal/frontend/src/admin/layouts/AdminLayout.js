@@ -38,7 +38,9 @@ import {
   ClipboardList,
   Eye,
   FlaskConical,
-  CreditCard
+  CreditCard,
+  GraduationCap,
+  Sparkles
 } from 'lucide-react';
 import { GlobalSearch } from '../components/GlobalSearch';
 import { NotificationsPanel } from '../components/NotificationsPanel';
@@ -98,7 +100,9 @@ export const AdminLayout = () => {
     'stage-management': Layers,
     'deliverable-management': Package,
     'uscis-forms': ClipboardList,
-    'spy': Eye
+    'spy': Eye,
+    'learning': GraduationCap,
+    'learning-admin': Sparkles
   };
 
   // Get menu items from RBAC system
@@ -215,9 +219,25 @@ export const AdminLayout = () => {
     show: true
   };
 
-  const allMenuItems = admin?.role === 'acreditador' 
-    ? menuItems 
-    : [...menuItems, paymentsMenuItem, filesMenuItem, uscisFormsMenuItem, spyMenuItem, testEligibilityMenuItem, leadsMenuItem, stageManagementMenuItem, deliverableManagementMenuItem, masterCaseMenuItem, successStoriesMenuItem, paymentAuthMenuItem, proposalMenuItem, classicCasesMenuItem];
+  const learningMenuItem = {
+    id: 'learning',
+    label: 'Aprendizaje',
+    path: '/admin/learning',
+    icon: GraduationCap,
+    show: true // todo el staff puede consumir
+  };
+
+  const learningAdminMenuItem = {
+    id: 'learning-admin',
+    label: 'Gestión de Aprendizaje',
+    path: '/admin/learning-admin',
+    icon: Sparkles,
+    show: hasPermission('manage_learning') || isAdmin()
+  };
+
+  const allMenuItems = admin?.role === 'acreditador'
+    ? menuItems
+    : [...menuItems, paymentsMenuItem, filesMenuItem, uscisFormsMenuItem, spyMenuItem, testEligibilityMenuItem, leadsMenuItem, stageManagementMenuItem, deliverableManagementMenuItem, masterCaseMenuItem, successStoriesMenuItem, paymentAuthMenuItem, proposalMenuItem, classicCasesMenuItem, learningMenuItem, learningAdminMenuItem];
   const visibleItems = allMenuItems.filter(item => item.show);
 
   return (

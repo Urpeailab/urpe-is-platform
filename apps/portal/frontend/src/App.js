@@ -32,6 +32,11 @@ import ClassicCaseDetail from './admin/pages/ClassicCaseDetail';
 import ClassicReports from './admin/pages/ClassicReports';
 import ClassicBulkEmail from './admin/pages/ClassicBulkEmail';
 import { LegalLibrary } from './admin/pages/LegalLibrary';
+import { LearningManagement } from './admin/pages/LearningManagement';
+import { LearningModuleEditor } from './admin/pages/LearningModuleEditor';
+import { LearningSessionsAudit } from './admin/pages/LearningSessionsAudit';
+import { LearningHub } from './admin/pages/LearningHub';
+import { LearningSession } from './admin/pages/LearningSession';
 import { ComparatorCases } from './admin/pages/ComparatorCases';
 import { TimelineTemplates } from './admin/pages/TimelineTemplates';
 import { TimelineManagement } from './admin/pages/TimelineManagement';
@@ -254,6 +259,14 @@ function AppContent() {
                   <Route path="classic-cases/bulk-email" element={<ClassicBulkEmail />} />
                   <Route path="classic-cases/:caseId" element={<ClassicCaseDetail />} />
           <Route path="legal-library" element={<LegalLibrary />} />
+          {/* Aprendizaje (staff) */}
+          <Route path="learning" element={<LearningHub />} />
+          <Route path="learning/session" element={<LearningSession />} />
+          {/* Aprendizaje (admin) */}
+          <Route path="learning-admin" element={<LearningManagement />} />
+          <Route path="learning-admin/new" element={<LearningModuleEditor />} />
+          <Route path="learning-admin/sessions" element={<LearningSessionsAudit />} />
+          <Route path="learning-admin/:moduleId" element={<LearningModuleEditor />} />
           <Route path="comparator" element={<ComparatorCases />} />
           <Route path="audit-logs" element={<AuditLogs />} />
           <Route path="eligibility-templates" element={<EligibilityTemplates />} />

@@ -22,7 +22,7 @@ ROLE_PERMISSIONS = {
         'view_all_metrics': True,
         'view_financial_data': True,
         'export_all_data': True,
-        
+
         # Gestión de Personal
         'view_all_staff': True,
         'create_staff': True,
@@ -30,20 +30,25 @@ ROLE_PERMISSIONS = {
         'delete_staff': True,
         'change_roles': True,
         'view_all_departments': True,
-        
+
         # Usuarios/Clientes
         'view_all_users': True,
         'edit_all_users': True,
         'delete_users': True,
         'assign_users': True,
-        
+
         # Contenido
         'manage_webinars': True,
         'manage_legal_library': True,
         'manage_comparator': True,
         'manage_timelines': True,
         'manage_eligibility': True,
-        
+
+        # Aprendizaje
+        'manage_learning': True,
+        'view_learning_sessions': True,
+        'consume_learning': True,
+
         # Sistema
         'view_audit_logs': True,
         'system_settings': True,
@@ -76,13 +81,18 @@ ROLE_PERMISSIONS = {
         'manage_comparator': True,
         'manage_timelines': True,
         'manage_eligibility': True,
-        
+
+        # Aprendizaje
+        'manage_learning': True,
+        'view_learning_sessions': True,
+        'consume_learning': True,
+
         # Sistema
         'view_audit_logs': True,
         'system_settings': True,
         'backup_restore': False
     },
-    
+
     'super_admin': {
         # Dashboard y Métricas
         'view_all_metrics': True,
@@ -109,13 +119,18 @@ ROLE_PERMISSIONS = {
         'manage_comparator': True,
         'manage_timelines': True,
         'manage_eligibility': True,
-        
+
+        # Aprendizaje
+        'manage_learning': True,
+        'view_learning_sessions': True,
+        'consume_learning': True,
+
         # Sistema
         'view_audit_logs': True,
         'system_settings': True,
         'backup_restore': False
     },
-    
+
     'admin': {
         # Dashboard y Métricas
         'view_all_metrics': True,
@@ -142,13 +157,18 @@ ROLE_PERMISSIONS = {
         'manage_comparator': True,
         'manage_timelines': True,
         'manage_eligibility': True,
-        
+
+        # Aprendizaje
+        'manage_learning': True,
+        'view_learning_sessions': True,
+        'consume_learning': True,
+
         # Sistema
         'view_audit_logs': True,
         'system_settings': False,
         'backup_restore': False
     },
-    
+
     'manager': {
         # Dashboard y Métricas
         'view_all_metrics': False,  # Solo su departamento
@@ -184,7 +204,12 @@ ROLE_PERMISSIONS = {
         'manage_timelines': False,
         'view_timelines': True,
         'manage_eligibility': False,
-        
+
+        # Aprendizaje
+        'manage_learning': True,
+        'view_learning_sessions': False,
+        'consume_learning': True,
+
         # Sistema
         'view_audit_logs': True,  # Solo su departamento
         'system_settings': False,
@@ -230,13 +255,18 @@ ROLE_PERMISSIONS = {
         'manage_timelines': False,
         'view_timelines': True,
         'manage_eligibility': False,
-        
+
+        # Aprendizaje
+        'manage_learning': False,
+        'view_learning_sessions': False,
+        'consume_learning': True,
+
         # Sistema
         'view_audit_logs': True,  # Solo su equipo
         'system_settings': False,
         'backup_restore': False
     },
-    
+
     'advisor': {
         # Dashboard y Métricas
         'view_all_metrics': False,
@@ -274,7 +304,12 @@ ROLE_PERMISSIONS = {
         'manage_timelines': False,
         'view_timelines': True,  # Solo de sus clientes
         'manage_eligibility': False,
-        
+
+        # Aprendizaje
+        'manage_learning': False,
+        'view_learning_sessions': False,
+        'consume_learning': True,
+
         # Sistema
         'view_audit_logs': False,
         'system_settings': False,
@@ -319,7 +354,12 @@ ROLE_PERMISSIONS = {
         'manage_timelines': False,
         'view_timelines': False,
         'manage_eligibility': False,
-        
+
+        # Aprendizaje
+        'manage_learning': False,
+        'view_learning_sessions': False,
+        'consume_learning': True,
+
         # Sistema
         'view_audit_logs': False,
         'system_settings': False,
@@ -471,7 +511,25 @@ def get_menu_items_for_role(user_role: str) -> list:
             'path': '/admin/eligibility-templates',
             'show': True
         })
-    
+
+    # Aprendizaje (todos los staff lo consumen)
+    if has_permission(user_role, 'consume_learning'):
+        menu.append({
+            'id': 'learning',
+            'label': 'Aprendizaje',
+            'path': '/admin/learning',
+            'show': True
+        })
+
+    # Gestión de Aprendizaje (solo roles que administran contenido)
+    if has_permission(user_role, 'manage_learning'):
+        menu.append({
+            'id': 'learning-admin',
+            'label': 'Gestión de Aprendizaje',
+            'path': '/admin/learning-admin',
+            'show': True
+        })
+
     return menu
 
 def filter_data_by_permissions(user_role: str, user_department: str, user_id: str, data: list, data_type: str) -> list:

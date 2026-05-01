@@ -17,6 +17,8 @@ import shutil
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+# Fallback: monorepo root .env (apps/portal/backend → repo root)
+load_dotenv(ROOT_DIR.parent.parent.parent / '.env', override=False)
 
 # Supabase client helpers (replaces MongoDB motor)
 from db.supabase_client import select, insert, update, delete, count, upsert, get_supabase
@@ -11445,6 +11447,9 @@ legal_library_router = setup_legal_library_router(db, verify_staff_token)
 from success_stories_endpoints import setup_success_stories_router
 success_stories_router = setup_success_stories_router(db, verify_staff_token)
 
+from learning_endpoints import setup_learning_router
+learning_router = setup_learning_router(db, verify_staff_token)
+
 # Master Case ID constant
 MASTER_CASE_ID = "master_case_eb2_niw"
 
@@ -11781,6 +11786,7 @@ app.include_router(manual_payments_router, prefix="/api")
 app.include_router(webinars_router, prefix="/api")
 app.include_router(legal_library_router, prefix="/api")
 app.include_router(success_stories_router, prefix="/api")
+app.include_router(learning_router, prefix="/api")
 app.include_router(storage_router)
 app.include_router(system_router)
 
