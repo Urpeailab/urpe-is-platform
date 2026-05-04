@@ -8,7 +8,7 @@ import {
 } from 'livekit-client';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent } from '../../components/ui/card';
-import { ArrowLeft, Mic, MicOff, Send, X, Loader2, AlertCircle, MessageSquare, ChevronLeft, Pause, Play } from 'lucide-react';
+import { ArrowLeft, Mic, MicOff, Send, X, Loader2, AlertCircle, MessageSquare, Pause, Play, BookOpen, Search } from 'lucide-react';
 import { toast } from 'sonner';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -34,7 +34,9 @@ export const LearningSession = () => {
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const roomRef = useRef(null);
-  const recognitionRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const messagesEndRef = useRef(null);
   const avatarSessionRef = useRef(null);
 
@@ -280,7 +282,10 @@ export const LearningSession = () => {
         roomRef.current?.disconnect();
       } catch {}
       try {
-        recognitionRef.current?.stop();
+        mediaRecorderRef.current?.stop();
+      } catch {}
+      try {
+        mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       } catch {}
     };
   }, []);
@@ -303,7 +308,15 @@ export const LearningSession = () => {
         { headers: headers() },
       );
       const reply = data.assistant_text || '';
-      setMessages((prev) => [...prev, { role: 'assistant', content: reply }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: reply,
+          sources: Array.isArray(data.retrieved_chunks) ? data.retrieved_chunks : [],
+          ragSkipped: !!data.rag_skipped,
+        },
+      ]);
       const room = roomRef.current;
       const avatarSessionId = avatarSessionRef.current?.session_id;
       if (room && room.state === 'connected' && reply && avatarSessionId) {
@@ -321,78 +334,138 @@ export const LearningSession = () => {
     if (videoRef.current) videoRef.current.muted = muted;
   };
 
-  const startListening = () => {
-    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) {
-      toast.error('Tu navegador no soporta reconocimiento de voz. Usa Chrome o Edge.');
+  // Graba audio con MediaRecorder y al detener lo manda a Whisper (backend)
+  // para transcribir. Más confiable que Web Speech API en español, no depende
+  // del navegador y silencia el avatar para que su voz no entre al micrófono.
+  const startListening = async () => {
+    if (!sessionId) {
+      toast.error('La sesión no está lista todavía.');
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast.error('Tu navegador no soporta grabación de audio.');
       return;
     }
 
-    // Silenciar el avatar para que el reconocedor no capte su voz como input
-    muteAvatar(true);
-
-    const rec = new Recognition();
-    rec.lang = 'es-ES';
-    rec.continuous = true;
-    rec.interimResults = true;
-
-    let finalTranscript = '';
-
-    rec.onresult = (e) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const result = e.results[i];
-        if (result.isFinal) {
-          finalTranscript += result[0].transcript + ' ';
-        } else {
-          interim += result[0].transcript;
-        }
-      }
-      const preview = (finalTranscript + interim).trim();
-      if (preview) setInput(preview);
-    };
-
-    rec.onerror = (e) => {
-      console.warn('[stt] error', e.error, e);
-      muteAvatar(false);
-      setListening(false);
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        toast.error('Permiso de micrófono denegado. Habilítalo en el candado del navegador.');
-      } else if (e.error === 'no-speech') {
-        toast.info('No detecté audio. Intenta hablar más cerca del micrófono.');
-      } else if (e.error === 'audio-capture') {
-        toast.error('No hay micrófono disponible.');
-      } else if (e.error !== 'aborted') {
-        toast.error(`Error de reconocimiento: ${e.error}`);
-      }
-    };
-
-    rec.onend = () => {
-      muteAvatar(false);
-      setListening(false);
-      const text = finalTranscript.trim();
-      if (text) {
-        setInput('');
-        sendMessage(text);
-      }
-    };
-
     try {
-      recognitionRef.current = rec;
-      rec.start();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      mediaStreamRef.current = stream;
+
+      // Elegimos el mejor mime que soporte el navegador
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+      ];
+      const mime =
+        candidates.find((m) => window.MediaRecorder?.isTypeSupported?.(m)) || '';
+
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onerror = (e) => {
+        console.error('[recorder] error', e);
+        toast.error('Error grabando el audio.');
+        cleanupRecording();
+      };
+
+      recorder.onstop = async () => {
+        const tracks = mediaStreamRef.current?.getTracks() || [];
+        tracks.forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+        muteAvatar(false);
+        setListening(false);
+
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        audioChunksRef.current = [];
+
+        if (blob.size < 1000) {
+          toast.info('No detecté audio. Probá hablar un poco más cerca del micrófono.');
+          return;
+        }
+
+        setSending(true);
+        try {
+          const ext = (recorder.mimeType || '').includes('mp4')
+            ? 'mp4'
+            : (recorder.mimeType || '').includes('ogg')
+            ? 'ogg'
+            : 'webm';
+          const form = new FormData();
+          form.append('audio', blob, `nota.${ext}`);
+
+          const { data } = await axios.post(
+            `${API}/learning/sessions/${sessionId}/transcribe`,
+            form,
+            {
+              headers: { ...headers(), 'Content-Type': 'multipart/form-data' },
+            },
+          );
+          const text = (data?.text || '').trim();
+          if (!text) {
+            toast.info('No pude transcribir nada del audio.');
+            setSending(false);
+            return;
+          }
+          setSending(false);
+          await sendMessage(text);
+        } catch (err) {
+          setSending(false);
+          const detail = err.response?.data?.detail || err.message || 'Error transcribiendo el audio';
+          toast.error(detail);
+        }
+      };
+
+      muteAvatar(true);
+      recorder.start();
       setListening(true);
     } catch (err) {
-      muteAvatar(false);
-      console.error('[stt] start failed', err);
-      toast.error('No se pudo iniciar el reconocimiento de voz.');
+      console.error('[recorder] getUserMedia failed', err);
+      cleanupRecording();
+      if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
+        toast.error('Permiso de micrófono denegado. Habilitalo en el candado del navegador.');
+      } else if (err?.name === 'NotFoundError' || err?.name === 'OverconstrainedError') {
+        toast.error('No hay micrófono disponible.');
+      } else {
+        toast.error('No se pudo iniciar la grabación.');
+      }
     }
   };
 
   const stopListening = () => {
+    const rec = mediaRecorderRef.current;
+    if (rec && rec.state !== 'inactive') {
+      try {
+        rec.stop();
+      } catch (e) {
+        console.warn('[recorder] stop failed', e);
+        cleanupRecording();
+      }
+    } else {
+      cleanupRecording();
+    }
+  };
+
+  const cleanupRecording = () => {
     try {
-      recognitionRef.current?.stop();
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
     } catch {}
-    // setListening(false) se aplicará en onend, junto con el envío del texto.
+    mediaStreamRef.current = null;
+    audioChunksRef.current = [];
+    muteAvatar(false);
+    setListening(false);
   };
 
   const endSession = async () => {
@@ -466,199 +539,114 @@ export const LearningSession = () => {
   const status = STATUS_BADGE[avatarStatus] || STATUS_BADGE.idle;
 
   return (
-    // -m-6 anula el padding del <main> del AdminLayout para que el avatar use todo el ancho
+    // -m-6 anula el padding del <main> del AdminLayout para que la vista use todo el ancho
     // h-[calc(100vh-4rem)] respeta el top bar fixed (h-16 = 4rem)
-    <div className="-m-6 h-[calc(100vh-4rem)] relative bg-black overflow-hidden text-white">
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        className="absolute inset-0 w-full h-full object-cover"
-      />
+    <div className="-m-6 h-[calc(100vh-4rem)] flex bg-gray-950 text-white overflow-hidden">
       <audio ref={audioRef} autoPlay />
 
-      {/* Status overlays sobre el video */}
-      {avatarStatus === 'connecting' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 text-white z-10">
-          <Loader2 className="h-12 w-12 animate-spin mb-3 text-purple-400" />
-          <div className="text-base font-medium">Conectando con el avatar…</div>
-          <div className="text-sm text-gray-400 mt-1">Esto puede tomar unos segundos</div>
-        </div>
-      )}
-      {avatarStatus === 'error' && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 text-white text-center p-8 z-10">
-          <AlertCircle className="h-16 w-16 mb-4 text-red-500" />
-          <div className="text-lg font-semibold">No se pudo conectar el avatar</div>
-          <div className="text-sm text-gray-400 mt-2 max-w-md">
-            Continúa la conversación por texto en el chat.
-          </div>
-        </div>
-      )}
-      {avatarStatus === 'idle' && !avatarError && !paused && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/80 text-gray-300 z-10">
-          <div className="text-sm">Avatar inactivo</div>
-        </div>
-      )}
-
-      {paused && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 text-white z-30 p-6 text-center">
-          <Pause className="h-14 w-14 text-yellow-400 mb-3" />
-          <div className="text-lg font-semibold">Avatar en pausa</div>
-          <div className="text-sm text-gray-400 mt-1 max-w-md">
-            Pausamos el avatar por inactividad para ahorrar créditos. El chat por texto sigue
-            funcionando. Reactivá el avatar cuando quieras seguir conversando con voz.
-          </div>
-          <button
-            onClick={resumeAvatar}
-            disabled={resuming}
-            className="mt-5 h-10 px-5 rounded-md bg-yellow-500 hover:bg-yellow-600 text-black font-semibold flex items-center gap-2 disabled:opacity-60"
-          >
-            {resuming ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Reactivando…
-              </>
-            ) : (
-              <>
-                <Play className="h-4 w-4" /> Reactivar avatar
-              </>
-            )}
-          </button>
-        </div>
-      )}
-
-      {idleWarning > 0 && !paused && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 bg-yellow-500/95 text-black rounded-lg px-4 py-2.5 shadow-xl flex items-center gap-2 text-sm font-medium">
-          <Pause className="h-4 w-4" />
-          <span>
-            Pausando el avatar en <strong>{idleWarning}s</strong> por inactividad. Mové el mouse o
-            escribí para mantenerlo activo.
-          </span>
-        </div>
-      )}
-
-      {/* Top overlay bar */}
-      <div className="absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/80 to-transparent px-4 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={endSession}
-            className="h-9 w-9 flex items-center justify-center rounded-md bg-black/60 hover:bg-black/80 text-white transition-colors"
-            title="Volver"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <div className="min-w-0">
-            <h1 className="text-base font-semibold truncate text-white">
-              {moduleData?.title || 'Conversación libre'}
-            </h1>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${status.cls}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
-                {status.label}
-              </span>
-              <span className="text-xs text-gray-400 truncate">
-                {moduleData?.mode === 'guided' ? 'Modo guiado' : 'Sesión libre'}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {!chatOpen && (
-            <button
-              onClick={() => setChatOpen(true)}
-              className="h-9 px-3 rounded-md bg-black/60 hover:bg-black/80 text-white text-sm flex items-center gap-1.5 transition-colors"
-              title="Mostrar chat"
-            >
-              <MessageSquare className="h-4 w-4" />
-              Chat
-            </button>
-          )}
-          <button
-            onClick={endSession}
-            disabled={ending}
-            className="h-9 px-4 rounded-md bg-red-600/90 hover:bg-red-600 text-white text-sm font-medium transition-colors flex items-center gap-1.5 disabled:opacity-50"
-          >
-            <X className="h-4 w-4" />
-            Terminar
-          </button>
-        </div>
-      </div>
-
-      {/* Error banner overlay (centrado arriba) */}
-      {avatarError && (
-        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 max-w-2xl w-[90%] bg-red-950/95 border border-red-700 rounded-lg px-4 py-3 flex items-start gap-2 backdrop-blur-sm shadow-xl">
-          <AlertCircle className="h-5 w-5 text-red-400 flex-shrink-0 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <div className="font-semibold text-red-200 text-sm">Error con el avatar</div>
-            <div className="text-xs text-red-300 mt-1 break-words">{avatarError}</div>
-            <div className="text-xs text-red-400 mt-1">
-              El chat por texto sigue funcionando.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Chat flotante (panel a la izquierda) */}
+      {/* ============ LEFT: Chat panel ============ */}
       {chatOpen && (
-        <aside className="absolute left-4 top-20 bottom-4 w-80 max-w-[90vw] z-20 flex flex-col bg-[#18181b]/40 backdrop-blur-xl rounded-lg shadow-2xl border border-white/10 overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between bg-black/20">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="h-4 w-4 text-gray-400" />
-              <span className="text-sm font-bold uppercase tracking-wide text-gray-200">
-                Chat
-              </span>
+        <aside className="w-[42%] min-w-[360px] max-w-[560px] flex flex-col bg-gradient-to-b from-gray-900 to-gray-950 border-r border-gray-800">
+          {/* Header */}
+          <div className="px-6 pt-6 pb-4 border-b border-gray-800">
+            <div className="flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                <h1 className="text-xl font-bold text-white">Tutor Virtual URPE</h1>
+                <p className="text-sm text-gray-400 mt-1 leading-snug">
+                  Tu asistente de aprendizaje está listo para responder tus consultas.
+                </p>
+                <div className="mt-3 flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${status.cls}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
+                    {status.label}
+                  </span>
+                  <span className="text-xs text-gray-400 truncate">
+                    {moduleData?.title || (moduleData?.mode === 'guided' ? 'Modo guiado' : 'Sesión libre')}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => setChatOpen(false)}
+                className="h-9 w-9 flex items-center justify-center rounded-md bg-gray-800/60 hover:bg-gray-800 text-gray-300 hover:text-yellow-500 border border-gray-700 transition-colors flex-shrink-0"
+                title="Ocultar chat"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
             </div>
-            <button
-              onClick={() => setChatOpen(false)}
-              className="h-7 w-7 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
-              title="Ocultar chat"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1.5 scroll-smooth">
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 scroll-smooth">
             {messages.length === 0 ? (
-              <p className="text-center text-gray-500 text-sm italic py-6 px-2">
+              <p className="text-center text-gray-500 text-sm italic py-12">
                 Empieza a chatear con el avatar.
               </p>
             ) : (
-              messages.map((m, i) => (
-                <div
-                  key={i}
-                  className="text-sm leading-relaxed hover:bg-white/5 rounded px-1 py-0.5 -mx-1"
-                >
-                  <span
-                    className={`font-bold ${
-                      m.role === 'user' ? 'text-yellow-400' : 'text-purple-400'
-                    }`}
+              messages.map((m, i) => {
+                const isUser = m.role === 'user';
+                return (
+                  <div
+                    key={i}
+                    className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
                   >
-                    {m.role === 'user' ? 'Tú' : 'Avatar'}
-                  </span>
-                  <span className="text-gray-500">: </span>
-                  <span className="text-gray-100 whitespace-pre-wrap break-words">
-                    {m.content}
-                  </span>
-                </div>
-              ))
+                    <div
+                      className={`max-w-[88%] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed whitespace-pre-wrap break-words ${
+                        isUser
+                          ? 'bg-gradient-to-br from-yellow-500 to-yellow-600 text-black font-medium shadow-gold'
+                          : 'bg-gray-800/70 text-gray-100 border border-gray-700/60'
+                      }`}
+                    >
+                      {m.content}
+                    </div>
+                    <span className="mt-1.5 text-[10px] font-bold uppercase tracking-wider text-yellow-500">
+                      {isUser ? 'Tú' : 'Tutor URPE'}
+                    </span>
+                    {!isUser && !m.ragSkipped && Array.isArray(m.sources) && (
+                      m.sources.length > 0 ? (
+                        <details className="mt-1 text-[11px] text-gray-400 max-w-[88%]">
+                          <summary className="cursor-pointer hover:text-yellow-500 inline-flex items-center gap-1 transition-colors">
+                            <BookOpen className="h-3 w-3" />
+                            {m.sources.length} fuente{m.sources.length > 1 ? 's' : ''} RAG
+                          </summary>
+                          <ul className="mt-1.5 space-y-1.5 pl-3 border-l-2 border-yellow-500/40">
+                            {m.sources.map((s, j) => (
+                              <li key={s.id || j} className="text-gray-300">
+                                <div className="flex items-center gap-1.5 text-yellow-500">
+                                  <span className="font-mono">
+                                    {(s.similarity != null ? (s.similarity * 100).toFixed(0) : '?')}%
+                                  </span>
+                                  <span className="truncate">{s.source || 'documento'}</span>
+                                </div>
+                                <div className="text-gray-400 text-[10px] line-clamp-3 mt-0.5">
+                                  {s.content}
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      ) : (
+                        <div className="mt-1 text-[11px] text-gray-500 italic flex items-center gap-1">
+                          <BookOpen className="h-3 w-3" />
+                          Sin coincidencias en RAG
+                        </div>
+                      )
+                    )}
+                  </div>
+                );
+              })
+            )}
+            {sending && (
+              <div className="text-[11px] text-yellow-500 italic flex items-center gap-1.5">
+                <Search className="h-3 w-3 animate-pulse" />
+                Buscando en la base de conocimiento…
+              </div>
             )}
             <div ref={messagesEndRef} />
           </div>
 
-          <div className="border-t border-white/10 p-3 space-y-2 bg-black/20">
-            <div className="flex gap-2 items-center">
-              <button
-                type="button"
-                onClick={listening ? stopListening : startListening}
-                disabled={sending}
-                title={listening ? 'Detener micrófono' : 'Hablar'}
-                className={`h-9 w-9 flex items-center justify-center rounded-md transition-colors flex-shrink-0 ${
-                  listening
-                    ? 'bg-red-600 hover:bg-red-700 text-white'
-                    : 'bg-white/10 hover:bg-white/20 text-gray-200 border border-white/20'
-                }`}
-              >
-                {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-              </button>
+          {/* Input */}
+          <div className="px-6 pt-3 pb-5 border-t border-gray-800 space-y-3">
+            <div className="bg-gray-800/60 rounded-full px-5 py-2.5 flex items-center gap-3 border border-gray-700 focus-within:border-yellow-500/60 focus-within:bg-gray-800/80 transition-colors">
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -668,31 +656,145 @@ export const LearningSession = () => {
                     sendMessage(input);
                   }
                 }}
-                placeholder={listening ? 'Escuchando…' : 'Escribe un mensaje'}
+                placeholder={listening ? 'Escuchando…' : 'Escribí tu mensaje...'}
                 disabled={sending || listening}
-                className="flex-1 min-w-0 h-9 px-3 rounded-md bg-black/30 border border-white/15 text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-400 focus:bg-black/40 disabled:opacity-50"
+                className="flex-1 min-w-0 bg-transparent text-sm text-gray-100 placeholder-gray-500 focus:outline-none disabled:opacity-50"
               />
+              <button
+                onClick={() => sendMessage(input)}
+                disabled={sending || !input.trim()}
+                title="Enviar"
+                className="h-8 w-8 flex items-center justify-center rounded-full text-gray-400 hover:text-yellow-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+              >
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={listening ? stopListening : startListening}
+                disabled={sending}
+                title={listening ? 'Detener micrófono' : 'Hablar'}
+                className={`h-10 w-10 flex items-center justify-center rounded-full transition-all shadow-lg ${
+                  listening
+                    ? 'bg-red-600 hover:bg-red-700 text-white ring-2 ring-red-500/40'
+                    : 'bg-gradient-to-br from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black ring-2 ring-yellow-500/30 hover:ring-yellow-500/60'
+                }`}
+              >
+                {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </button>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-yellow-500">
+                Sesión privada · URPE
+              </span>
+            </div>
+          </div>
+        </aside>
+      )}
+
+      {/* ============ RIGHT: Avatar video ============ */}
+      <div className="flex-1 relative bg-gray-950">
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+
+        {/* Status overlays sobre el video */}
+        {avatarStatus === 'connecting' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-950/85 text-white z-10">
+            <Loader2 className="h-12 w-12 animate-spin mb-3 text-yellow-500" />
+            <div className="text-base font-medium">Conectando con el avatar…</div>
+            <div className="text-sm text-gray-400 mt-1">Esto puede tomar unos segundos</div>
+          </div>
+        )}
+        {avatarStatus === 'error' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-950/90 text-white text-center p-8 z-10">
+            <AlertCircle className="h-16 w-16 mb-4 text-red-500" />
+            <div className="text-lg font-semibold">No se pudo conectar el avatar</div>
+            <div className="text-sm text-gray-400 mt-2 max-w-md">
+              Continúa la conversación por texto en el chat.
+            </div>
+          </div>
+        )}
+        {avatarStatus === 'idle' && !avatarError && !paused && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-950/85 text-gray-300 z-10">
+            <div className="text-sm">Avatar inactivo</div>
+          </div>
+        )}
+        {paused && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-950/90 text-white z-30 p-6 text-center">
+            <Pause className="h-14 w-14 text-yellow-500 mb-3" />
+            <div className="text-lg font-semibold">Tu tutor está en pausa</div>
+            <div className="text-sm text-gray-400 mt-1 max-w-md">
+              Pausamos al tutor tras un rato sin interacción para mantener la sesión liviana.
+              Podés seguir consultando por chat y reactivar la conversación con voz cuando
+              quieras retomarla.
             </div>
             <button
-              onClick={() => sendMessage(input)}
-              disabled={sending || !input.trim()}
-              className="w-full h-9 rounded-md bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold transition-colors disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              onClick={resumeAvatar}
+              disabled={resuming}
+              className="mt-5 h-10 px-5 rounded-md bg-gradient-to-br from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black font-semibold flex items-center gap-2 disabled:opacity-60 shadow-gold"
             >
-              {sending ? (
+              {resuming ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Enviando…
+                  <Loader2 className="h-4 w-4 animate-spin" /> Reactivando…
                 </>
               ) : (
                 <>
-                  <Send className="h-3.5 w-3.5" />
-                  Enviar
+                  <Play className="h-4 w-4" /> Reactivar avatar
                 </>
               )}
             </button>
           </div>
-        </aside>
-      )}
+        )}
+
+        {idleWarning > 0 && !paused && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 bg-yellow-500 text-black rounded-lg px-4 py-2.5 shadow-gold flex items-center gap-2 text-sm font-medium">
+            <Pause className="h-4 w-4" />
+            <span>
+              Pausando el avatar en <strong>{idleWarning}s</strong> por inactividad. Mové el mouse o
+              escribí para mantenerlo activo.
+            </span>
+          </div>
+        )}
+
+        {/* Top-right controls (Terminar + Mostrar chat cuando está oculto) */}
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+          {!chatOpen && (
+            <button
+              onClick={() => setChatOpen(true)}
+              className="h-10 px-4 rounded-md bg-gray-900/80 hover:bg-gray-900 text-white text-sm flex items-center gap-1.5 transition-colors backdrop-blur-sm border border-gray-700 hover:border-yellow-500/40"
+              title="Mostrar chat"
+            >
+              <MessageSquare className="h-4 w-4 text-yellow-500" />
+              Chat
+            </button>
+          )}
+          <button
+            onClick={endSession}
+            disabled={ending}
+            className="h-10 px-4 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium flex items-center gap-1.5 disabled:opacity-50 shadow-lg"
+          >
+            <X className="h-4 w-4" />
+            Terminar
+          </button>
+        </div>
+
+        {/* Error banner */}
+        {avatarError && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 max-w-2xl w-[90%] bg-red-950/95 border border-red-800 rounded-lg px-4 py-3 flex items-start gap-2 backdrop-blur-sm shadow-xl">
+            <AlertCircle className="h-5 w-5 text-red-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-red-200 text-sm">Error con el avatar</div>
+              <div className="text-xs text-red-300 mt-1 break-words">{avatarError}</div>
+              <div className="text-xs text-red-400 mt-1">
+                El chat por texto sigue funcionando.
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

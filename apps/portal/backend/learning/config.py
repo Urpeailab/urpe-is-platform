@@ -38,7 +38,9 @@ CHUNK_OVERLAP_TOKENS = 150
 
 # RAG
 RETRIEVAL_TOP_K = 5
-RETRIEVAL_MIN_SIMILARITY = 0.3
+# 0.15 es permisivo para text-embedding-3-small, que produce similitudes más
+# bajas que modelos más grandes. Subir si empieza a devolver chunks irrelevantes.
+RETRIEVAL_MIN_SIMILARITY = 0.15
 
 # Upload limits
 MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB

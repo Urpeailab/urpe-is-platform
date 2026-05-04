@@ -46,8 +46,11 @@ from learning.llm import (
     chat_json,
     build_module_system_prompt,
     build_rag_user_message,
+    build_conversational_system_prompt,
+    is_conversational_message,
 )
 from learning.liveavatar import create_avatar_session, get_avatar_config
+from learning.transcribe import transcribe_audio
 
 logger = logging.getLogger(__name__)
 
@@ -646,23 +649,34 @@ def setup_learning_router(db, verify_staff_token):
 
             module_id = session.get("module_id")
 
+            # Paso 1: detectar intención. Saludos, agradecimientos y preguntas sobre
+            # el avatar NO deben disparar RAG ni el corto-circuito de "sin información".
+            conversational = is_conversational_message(user_text)
+            logger.info(
+                f"[learning.intent] session={session_id} conversational={conversational} "
+                f"text={user_text[:80]!r}"
+            )
+
             chunks = []
             context = ""
             retrieval_failed = False
-            try:
-                chunks = retrieve(user_text, module_id=module_id)
-                context = format_context(chunks)
-            except Exception as e:
-                logger.exception("[learning] RAG retrieval failed (continuing without context)")
-                retrieval_failed = True
+            rag_skipped = conversational
 
-            # Cortocircuito: si estamos dentro de un módulo y no recuperamos nada,
-            # respondemos canned sin llamar al LLM. Evita que invente respuestas
-            # genéricas cuando el material no cubre la pregunta.
+            if not conversational:
+                try:
+                    chunks = retrieve(user_text, module_id=module_id)
+                    context = format_context(chunks)
+                except Exception:
+                    logger.exception("[learning] RAG retrieval failed (continuing without context)")
+                    retrieval_failed = True
+
+            # Cortocircuito: solo aplica a consultas técnicas que no encontraron nada.
+            # Para mensajes conversacionales nunca cortamos — dejamos que el LLM
+            # responda con el system prompt conversacional.
             short_circuited = False
-            if module_id and not chunks and not retrieval_failed:
+            if not conversational and not chunks and not retrieval_failed:
                 assistant_text = (
-                    "No tengo esa información en el material indexado de este módulo. "
+                    "No encontré información sobre eso en la base de conocimiento. "
                     "Te recomiendo consultarlo con tu líder."
                 )
                 short_circuited = True
@@ -679,14 +693,21 @@ def setup_learning_router(db, verify_staff_token):
                     logger.exception("[learning] select messages failed")
                     raise HTTPException(status_code=500, detail=f"DB select messages: {e}")
 
-                system_msg = next((m for m in messages_db if m.get("role") == "system"), None)
+                # Para conversacional usamos un system prompt suave (sin grounding estricto)
+                # solo en este turno; el system message persistido sigue intacto para
+                # los próximos turnos técnicos.
+                if conversational:
+                    system_content = build_conversational_system_prompt()
+                else:
+                    persisted_system = next((m for m in messages_db if m.get("role") == "system"), None)
+                    system_content = (persisted_system or {}).get("content") or build_module_system_prompt({})
+
                 recent = [m for m in messages_db if m.get("role") in ("user", "assistant")][-10:]
 
-                llm_messages = []
-                if system_msg:
-                    llm_messages.append({"role": "system", "content": system_msg["content"]})
+                llm_messages = [{"role": "system", "content": system_content}]
                 for i, m in enumerate(recent):
-                    if i == len(recent) - 1 and m.get("role") == "user":
+                    if i == len(recent) - 1 and m.get("role") == "user" and not conversational:
+                        # Solo inyectamos contexto RAG en consultas técnicas.
                         llm_messages.append(
                             {"role": "user", "content": build_rag_user_message(m["content"], context)}
                         )
@@ -727,6 +748,7 @@ def setup_learning_router(db, verify_staff_token):
             return {
                 "success": True,
                 "assistant_text": assistant_text,
+                "rag_skipped": rag_skipped,
                 "retrieved_chunks": [
                     {
                         "id": c.get("id"),
@@ -742,6 +764,44 @@ def setup_learning_router(db, verify_staff_token):
         except Exception as e:
             logger.exception("[learning] send_message unexpected error")
             raise HTTPException(status_code=500, detail=f"Unexpected: {type(e).__name__}: {e}")
+
+    @router.post("/learning/sessions/{session_id}/transcribe")
+    async def transcribe_session_audio(
+        session_id: str,
+        audio: UploadFile = File(...),
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """Recibe un blob de audio (webm/ogg/mp3/wav) grabado en el navegador
+        y devuelve el texto transcrito por Whisper. No envía el mensaje, solo
+        transcribe — el frontend decide si lo manda como mensaje o lo edita."""
+        _require_role_perm(staff_payload, "consume_learning")
+
+        session = select("learning_sessions", filters={"id": session_id}, single=True)
+        if not session:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        if session.get("staff_id") != staff_payload.get("id"):
+            raise HTTPException(status_code=403, detail="No es tu sesión")
+
+        try:
+            data = await audio.read()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"No se pudo leer el audio: {e}")
+
+        if not data:
+            raise HTTPException(status_code=400, detail="Audio vacío")
+        if len(data) > 25 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Audio supera 25 MB (límite de Whisper)")
+
+        filename = audio.filename or "audio.webm"
+        mime = audio.content_type or "audio/webm"
+
+        try:
+            text = transcribe_audio(data, filename=filename, mime=mime, language="es")
+        except Exception as e:
+            logger.exception("[learning] transcribe failed")
+            raise HTTPException(status_code=502, detail=f"Error transcribiendo: {e}")
+
+        return {"success": True, "text": text}
 
     @router.post("/learning/sessions/{session_id}/resume-avatar")
     async def resume_avatar(

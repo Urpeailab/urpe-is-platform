@@ -2,12 +2,73 @@
 
 import json
 import logging
+import re
 from typing import List, Optional
 from openai import OpenAI
 
 from .config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_MODEL_DEFAULT
 
 logger = logging.getLogger(__name__)
+
+
+# Detector heurístico de intención conversacional. Devuelve True para saludos,
+# despedidas, agradecimientos y preguntas personales sobre el avatar (quién sos,
+# cómo estás, cómo te llamás). Con esto el endpoint evita disparar RAG y permite
+# al LLM responder con calidez sin invocar la regla de grounding.
+#
+# La regex exige que TODO el mensaje sea conversacional. Si después de un saludo
+# viene una pregunta técnica ("hola, cuál es el proceso de devoluciones"), NO
+# matchea y el flujo cae en RAG normal.
+_CONVERSATIONAL_RE = re.compile(
+    r"^(?:"
+    r"hola|hi|hello|hey|"
+    r"buen[oa]s?(?:\s+(?:d[ií]as|tardes|noches))?|buen\s+d[ií]a|"
+    r"qu[eé]\s+tal|qu[eé]\s+onda|"
+    r"c[óo]mo\s+(?:est[áa]s|te\s+(?:llamas|llam[áa]s|va))|"
+    r"qui[eé]n\s+(?:sos|eres|es)|qu[eé]\s+(?:sos|eres)|"
+    r"gracias|graci[áa]s|thank\s+you|thanks|"
+    r"ad[ií]os|chao|chau|hasta\s+luego|nos\s+vemos|bye|"
+    r"s[ií]|no|ok|okay|listo|perfecto|entendido|claro|dale|genial|bien|vale|de\s+acuerdo"
+    r")"
+    r"(?:[\s,.!?¿¡]+(?:"
+    r"hola|hi|hello|hey|"
+    r"buen[oa]s?(?:\s+(?:d[ií]as|tardes|noches))?|"
+    r"qu[eé]\s+tal|"
+    r"c[óo]mo\s+(?:est[áa]s|te\s+(?:llamas|llam[áa]s|va))|"
+    r"qui[eé]n\s+(?:sos|eres|es)|qu[eé]\s+(?:sos|eres)|"
+    r"gracias|graci[áa]s|"
+    r"s[ií]|no|ok|okay|listo|perfecto|entendido|claro|dale|genial|bien|vale"
+    r"))*"
+    r"[\s,.!?¿¡]*$",
+    re.IGNORECASE,
+)
+
+
+def is_conversational_message(text: str) -> bool:
+    """True si el mensaje es saludo / smalltalk / pregunta personal sobre el avatar."""
+    if not text or not text.strip():
+        return False
+    t = text.strip()
+    if len(t) > 60:
+        return False
+    return bool(_CONVERSATIONAL_RE.match(t))
+
+
+def build_conversational_system_prompt() -> str:
+    """System prompt suave para turnos conversacionales (sin grounding estricto)."""
+    return (
+        "Eres un tutor virtual del equipo URPE. Vas a HABLAR como avatar, tu respuesta se "
+        "convierte a voz por TTS. Responde siempre en español.\n\n"
+        "Este turno es CONVERSACIONAL (saludo, agradecimiento, despedida o pregunta sobre vos). "
+        "No es una consulta técnica de la empresa.\n\n"
+        "Respondé con calidez y naturalidad en 1 a 2 frases breves. Si te preguntan quién sos, "
+        "presentate como tutor virtual de URPE y ofrecé ayuda con preguntas sobre procesos, "
+        "políticas o capacitación. Si saludan, devolvé el saludo e invitá a hacer una pregunta. "
+        "Si agradecen, respondé brevemente y ofrecé seguir ayudando.\n\n"
+        "PROHIBIDO usar markdown (nada de listas, viñetas, negritas, emojis, encabezados). "
+        "PROHIBIDO decir 'no tengo esa información' o 'consultá con tu líder' en este turno: "
+        "esa frase solo aplica a consultas técnicas, no a saludos."
+    )
 
 _client: OpenAI = None
 
