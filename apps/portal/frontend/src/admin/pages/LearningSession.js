@@ -37,6 +37,7 @@ export const LearningSession = () => {
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const recognitionRef = useRef(null);
   const messagesEndRef = useRef(null);
   const avatarSessionRef = useRef(null);
 
@@ -49,6 +50,7 @@ export const LearningSession = () => {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [listening, setListening] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState('');
   const [ending, setEnding] = useState(false);
   const [evaluation, setEvaluation] = useState(null);
   const [idleWarning, setIdleWarning] = useState(0); // segundos restantes; 0 = sin warning
@@ -82,6 +84,10 @@ export const LearningSession = () => {
   // hable un texto custom (generado por nuestro LLM con RAG).
   const speakViaAvatar = async (room, avatarSessionId, text) => {
     if (!room || !text || !avatarSessionId) return;
+    // Garantizar que el audio esté desmuteado y reproduciendo justo antes de
+    // que el avatar hable. Cubre el caso en que la grabación previa lo dejó
+    // muteado o pausado y muteAvatar(false) no llegó a ejecutarse a tiempo.
+    muteAvatar(false);
     await _publishAgentControl(room, {
       event_id: _newEventId(),
       event_type: 'avatar.speak_text',
@@ -317,6 +323,9 @@ export const LearningSession = () => {
       try {
         mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       } catch {}
+      try {
+        recognitionRef.current?.stop();
+      } catch {}
     };
   }, []);
 
@@ -360,13 +369,95 @@ export const LearningSession = () => {
   };
 
   const muteAvatar = (muted) => {
-    if (audioRef.current) audioRef.current.muted = muted;
-    if (videoRef.current) videoRef.current.muted = muted;
+    if (audioRef.current) {
+      audioRef.current.muted = muted;
+      // Al desmutear, reanudar reproducción si quedó pausado tras la grabación.
+      // Sin esto, el navegador a veces deja el <audio> en estado paused y los
+      // siguientes turnos del avatar muestran labios moviéndose sin sonido.
+      if (!muted && audioRef.current.paused) {
+        audioRef.current.play().catch((e) => console.warn('[muteAvatar] audio resume failed', e));
+      }
+    }
+    if (videoRef.current) {
+      videoRef.current.muted = muted;
+      if (!muted && videoRef.current.paused) {
+        videoRef.current.play().catch(() => {});
+      }
+    }
+  };
+
+  // Preview en vivo de la transcripción usando Web Speech API del navegador.
+  // SOLO sirve para mostrar texto mientras el usuario habla — el texto final
+  // que va al LLM viene de Whisper (más preciso). Si el navegador no soporta
+  // SpeechRecognition, simplemente no hay preview pero la grabación sigue.
+  //
+  // IMPORTANTE: hay que arrancar esto ANTES de que MediaRecorder pida el
+  // stream con getUserMedia. Si MediaRecorder toma el micrófono primero,
+  // Chrome no logra inicializar la sesión de SpeechRecognition (queda silenciosa
+  // sin disparar onresult).
+  const startLivePreview = () => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      console.info('[live-preview] navegador sin SpeechRecognition; preview deshabilitado');
+      return;
+    }
+    // Limpiar instancia previa para evitar dobles handlers
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch {}
+      recognitionRef.current = null;
+    }
+    try {
+      const rec = new Recognition();
+      rec.lang = 'es-ES';
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
+      let finalSoFar = '';
+      rec.onstart = () => console.info('[live-preview] started');
+      rec.onaudiostart = () => console.info('[live-preview] audio capture started');
+      rec.onspeechstart = () => console.info('[live-preview] speech detected');
+      rec.onresult = (e) => {
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i];
+          if (r.isFinal) finalSoFar += r[0].transcript + ' ';
+          else interim += r[0].transcript;
+        }
+        const merged = (finalSoFar + interim).trim();
+        setLiveTranscript(merged);
+      };
+      rec.onerror = (e) => {
+        // 'no-speech' y 'aborted' son normales y no críticos.
+        if (e.error !== 'no-speech' && e.error !== 'aborted') {
+          console.warn('[live-preview] recognition error:', e.error, e);
+        }
+      };
+      rec.onend = () => console.info('[live-preview] ended');
+      rec.start();
+      recognitionRef.current = rec;
+    } catch (err) {
+      console.warn('[live-preview] failed to start:', err);
+      recognitionRef.current = null;
+    }
+  };
+
+  const stopLivePreview = () => {
+    const rec = recognitionRef.current;
+    recognitionRef.current = null;
+    if (!rec) return;
+    try {
+      rec.onresult = null;
+      rec.onerror = null;
+      rec.onend = null;
+      rec.stop();
+    } catch {}
   };
 
   // Graba audio con MediaRecorder y al detener lo manda a Whisper (backend)
   // para transcribir. Más confiable que Web Speech API en español, no depende
   // del navegador y silencia el avatar para que su voz no entre al micrófono.
+  // En paralelo arranca un preview con Web Speech API solo para mostrar texto
+  // mientras el usuario habla.
   const startListening = async () => {
     if (!sessionId) {
       toast.error('La sesión no está lista todavía.');
@@ -380,6 +471,11 @@ export const LearningSession = () => {
     // Barge-in: si el avatar está hablando, lo cortamos antes de empezar a
     // grabar para que el usuario pueda hacer su nueva pregunta sin esperar.
     interruptAvatar();
+
+    // Arrancamos el preview ANTES de getUserMedia para que Chrome no bloquee
+    // la sesión de SpeechRecognition cuando MediaRecorder ya tomó el mic.
+    setLiveTranscript('');
+    startLivePreview();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -421,6 +517,8 @@ export const LearningSession = () => {
         mediaStreamRef.current = null;
         muteAvatar(false);
         setListening(false);
+        stopLivePreview();
+        setLiveTranscript('');
 
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         audioChunksRef.current = [];
@@ -500,6 +598,8 @@ export const LearningSession = () => {
     audioChunksRef.current = [];
     muteAvatar(false);
     setListening(false);
+    stopLivePreview();
+    setLiveTranscript('');
   };
 
   const endSession = async () => {
@@ -833,9 +933,27 @@ export const LearningSession = () => {
           </button>
         </div>
 
-        {/* Bottom subtitle overlay: muestra la última pregunta y respuesta cuando
-            el chat está oculto, para que se entienda la conversación sin abrirlo. */}
+        {/* Bottom overlay:
+            - Si está escuchando → muestra el transcript en vivo (best-effort
+              vía Web Speech API; el texto final lo da Whisper).
+            - Si no → muestra la última pregunta y respuesta para seguir
+              la conversación sin abrir el panel del chat. */}
         {!chatOpen && !paused && avatarStatus !== 'connecting' && avatarStatus !== 'error' && (() => {
+          if (listening) {
+            return (
+              <div className="absolute bottom-36 left-1/2 -translate-x-1/2 z-20 w-[min(720px,90%)]">
+                <div className="flex justify-end">
+                  <div className="max-w-[90%] bg-yellow-500/95 text-black rounded-2xl px-4 py-2.5 text-sm font-medium shadow-gold backdrop-blur-sm min-h-[44px] flex items-center gap-2">
+                    {liveTranscript ? (
+                      <span className="break-words">{liveTranscript}</span>
+                    ) : (
+                      <span className="italic opacity-70">Escuchando…</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          }
           const lastUser = [...messages].reverse().find((m) => m.role === 'user');
           const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
           if (!lastUser && !lastAssistant) return null;
