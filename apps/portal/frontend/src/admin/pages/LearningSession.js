@@ -44,7 +44,7 @@ export const LearningSession = () => {
   const [moduleData, setModuleData] = useState(null);
   const [avatarStatus, setAvatarStatus] = useState('idle');
   const [avatarError, setAvatarError] = useState(null);
-  const [chatOpen, setChatOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -60,29 +60,59 @@ export const LearningSession = () => {
 
   const headers = () => ({ Authorization: `Bearer ${localStorage.getItem('admin_token')}` });
 
-  // Envía el comando avatar.speak_text al topic agent-control para que el avatar
-  // hable un texto custom (generado por nuestro LLM con RAG).
-  const speakViaAvatar = async (room, avatarSessionId, text) => {
-    if (!room || !text || !avatarSessionId) return;
+  const _newEventId = () =>
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `evt_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const _publishAgentControl = async (room, payload) => {
+    if (!room) return;
     try {
-      const eventId = (typeof crypto !== 'undefined' && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : `evt_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const payload = {
-        event_id: eventId,
-        event_type: 'avatar.speak_text',
-        session_id: avatarSessionId,
-        source_event_id: null,
-        text,
-      };
       const data = new TextEncoder().encode(JSON.stringify(payload));
       await room.localParticipant.publishData(data, {
         reliable: true,
         topic: 'agent-control',
       });
     } catch (e) {
-      console.warn('[liveavatar.speak_text] failed', e);
+      console.warn('[liveavatar] publishData failed', e);
     }
+  };
+
+  // Envía el comando avatar.speak_text al topic agent-control para que el avatar
+  // hable un texto custom (generado por nuestro LLM con RAG).
+  const speakViaAvatar = async (room, avatarSessionId, text) => {
+    if (!room || !text || !avatarSessionId) return;
+    await _publishAgentControl(room, {
+      event_id: _newEventId(),
+      event_type: 'avatar.speak_text',
+      session_id: avatarSessionId,
+      source_event_id: null,
+      text,
+    });
+  };
+
+  // Barge-in: corta inmediatamente lo que el avatar esté diciendo. Lo usamos
+  // cuando el usuario presiona el mic para que pueda preguntar de nuevo sin
+  // esperar que termine la respuesta anterior. Manda dos eventos por compatibilidad
+  // entre versiones de LiveAvatar (algunas usan 'avatar.interrupt', otras 'avatar.stop').
+  const interruptAvatar = async () => {
+    const room = roomRef.current;
+    const avatarSessionId = avatarSessionRef.current?.session_id;
+    if (!room || !avatarSessionId) return;
+    const base = {
+      session_id: avatarSessionId,
+      source_event_id: null,
+    };
+    await _publishAgentControl(room, {
+      ...base,
+      event_id: _newEventId(),
+      event_type: 'avatar.interrupt',
+    });
+    await _publishAgentControl(room, {
+      ...base,
+      event_id: _newEventId(),
+      event_type: 'avatar.stop_speaking',
+    });
   };
 
   const clearIdleTimers = () => {
@@ -346,6 +376,10 @@ export const LearningSession = () => {
       toast.error('Tu navegador no soporta grabación de audio.');
       return;
     }
+
+    // Barge-in: si el avatar está hablando, lo cortamos antes de empezar a
+    // grabar para que el usuario pueda hacer su nueva pregunta sin esperar.
+    interruptAvatar();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -759,16 +793,34 @@ export const LearningSession = () => {
           </div>
         )}
 
+        {/* Top-left: status header cuando el chat está oculto (modo voz) */}
+        {!chatOpen && (
+          <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-gray-900/70 backdrop-blur-sm rounded-md px-3 py-2 border border-gray-700">
+            <span className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${status.cls}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
+              {status.label}
+            </span>
+            <span className="text-xs text-gray-300 font-medium">
+              {moduleData?.title || (moduleData?.mode === 'guided' ? 'Modo guiado' : 'Tutor Virtual URPE')}
+            </span>
+          </div>
+        )}
+
         {/* Top-right controls (Terminar + Mostrar chat cuando está oculto) */}
         <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
           {!chatOpen && (
             <button
               onClick={() => setChatOpen(true)}
               className="h-10 px-4 rounded-md bg-gray-900/80 hover:bg-gray-900 text-white text-sm flex items-center gap-1.5 transition-colors backdrop-blur-sm border border-gray-700 hover:border-yellow-500/40"
-              title="Mostrar chat"
+              title="Ver historial del chat"
             >
               <MessageSquare className="h-4 w-4 text-yellow-500" />
-              Chat
+              Historial
+              {messages.length > 0 && (
+                <span className="ml-0.5 inline-flex items-center justify-center h-5 min-w-5 px-1 rounded-full bg-yellow-500 text-black text-[10px] font-bold">
+                  {messages.length}
+                </span>
+              )}
             </button>
           )}
           <button
@@ -780,6 +832,66 @@ export const LearningSession = () => {
             Terminar
           </button>
         </div>
+
+        {/* Bottom subtitle overlay: muestra la última pregunta y respuesta cuando
+            el chat está oculto, para que se entienda la conversación sin abrirlo. */}
+        {!chatOpen && !paused && avatarStatus !== 'connecting' && avatarStatus !== 'error' && (() => {
+          const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+          const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
+          if (!lastUser && !lastAssistant) return null;
+          return (
+            <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-20 w-[min(720px,90%)] space-y-2">
+              {lastUser && (
+                <div className="flex justify-end">
+                  <div className="max-w-[85%] bg-yellow-500/95 text-black rounded-2xl px-4 py-2 text-sm font-medium shadow-gold backdrop-blur-sm">
+                    {lastUser.content}
+                  </div>
+                </div>
+              )}
+              {lastAssistant && (
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] bg-gray-900/85 text-white rounded-2xl px-4 py-2.5 text-sm leading-relaxed border border-gray-700 backdrop-blur-md shadow-xl whitespace-pre-wrap">
+                    {lastAssistant.content}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Floating mic button (acción primaria — voz con el tutor) */}
+        {!chatOpen && avatarStatus !== 'connecting' && avatarStatus !== 'error' && !paused && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2">
+            <button
+              type="button"
+              onClick={listening ? stopListening : startListening}
+              disabled={sending && !listening}
+              title={listening ? 'Detener grabación' : 'Hablar con el tutor'}
+              className={`h-20 w-20 flex items-center justify-center rounded-full shadow-2xl transition-all ${
+                listening
+                  ? 'bg-red-600 hover:bg-red-700 text-white ring-4 ring-red-500/40 animate-pulse'
+                  : sending
+                  ? 'bg-gray-800 text-yellow-500 ring-4 ring-yellow-500/30 cursor-wait'
+                  : 'bg-gradient-to-br from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black ring-4 ring-yellow-500/30 hover:ring-yellow-500/60 hover:scale-105'
+              }`}
+            >
+              {sending && !listening ? (
+                <Loader2 className="h-8 w-8 animate-spin" />
+              ) : listening ? (
+                <MicOff className="h-8 w-8" />
+              ) : (
+                <Mic className="h-8 w-8" />
+              )}
+            </button>
+            <div className="text-xs font-semibold uppercase tracking-widest text-white/90 bg-gray-900/70 backdrop-blur-sm px-3 py-1 rounded-full border border-gray-700">
+              {listening
+                ? 'Grabando — clic para enviar'
+                : sending
+                ? 'Procesando…'
+                : 'Hablá con tu tutor'}
+            </div>
+          </div>
+        )}
 
         {/* Error banner */}
         {avatarError && (
