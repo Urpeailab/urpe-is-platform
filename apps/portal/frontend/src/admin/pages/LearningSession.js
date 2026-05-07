@@ -38,8 +38,23 @@ export const LearningSession = () => {
   const mediaStreamRef = useRef(null);
   const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
+  const liveTranscriptRef = useRef('');  // texto del browser STT (para usarlo en lugar de Whisper)
   const messagesEndRef = useRef(null);
   const avatarSessionRef = useRef(null);
+  // VAD (Voice Activity Detection) refs — modo conversación natural
+  const vadStreamRef = useRef(null);
+  const vadCtxRef = useRef(null);
+  const vadAnalyserRef = useRef(null);
+  const vadBufRef = useRef(null);
+  const vadRafRef = useRef(null);
+  const vadSpeechStartRef = useRef(0);
+  const vadSilenceTimerRef = useRef(null);
+  const vadStartingRef = useRef(false);
+  const usingVadStreamRef = useRef(false);
+  const avatarStatusRef = useRef('idle');
+  const listeningRef = useRef(false);
+  const sendingRef = useRef(false);
+  const autoModeRef = useRef(true);
 
   const [sessionId, setSessionId] = useState(null);
   const [moduleData, setModuleData] = useState(null);
@@ -56,11 +71,23 @@ export const LearningSession = () => {
   const [idleWarning, setIdleWarning] = useState(0); // segundos restantes; 0 = sin warning
   const [paused, setPaused] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [autoMode, setAutoMode] = useState(true);
+  const [voiceLevel, setVoiceLevel] = useState(0);
+  const [showHeadphonesTip, setShowHeadphonesTip] = useState(
+    () => !localStorage.getItem('learning_headphones_tip_dismissed')
+  );
   const idleTimerRef = useRef(null);
   const countdownIntervalRef = useRef(null);
   const pausedRef = useRef(false);
 
   const headers = () => ({ Authorization: `Bearer ${localStorage.getItem('admin_token')}` });
+
+  // Sincronizar refs con states para que el VAD loop (RAF) lea valores frescos
+  // sin tener que re-suscribir el closure cada render.
+  useEffect(() => { avatarStatusRef.current = avatarStatus; }, [avatarStatus]);
+  useEffect(() => { listeningRef.current = listening; }, [listening]);
+  useEffect(() => { sendingRef.current = sending; }, [sending]);
+  useEffect(() => { autoModeRef.current = autoMode; }, [autoMode]);
 
   const _newEventId = () =>
     typeof crypto !== 'undefined' && crypto.randomUUID
@@ -120,6 +147,149 @@ export const LearningSession = () => {
       event_type: 'avatar.stop_speaking',
     });
   };
+
+  // ============ VAD (Voice Activity Detection) — modo conversación natural ============
+  // Detecta cuándo el usuario empieza y termina de hablar, sin botón. Cubre:
+  // - inicio de turno: energía RMS > umbral por al menos VAD_SPEECH_START_MS
+  // - fin de turno: energía < umbral por al menos VAD_SILENCE_END_MS
+  // - barge-in: si el avatar está hablando, igual detecta voz del usuario y corta
+  //   la respuesta (con umbral más alto para ignorar el eco residual)
+
+  const VAD_SPEECH_START_MS = 200;
+  const VAD_SILENCE_END_MS = 400;
+  const VAD_THRESHOLD_BASE = 0.018;       // ambiente normal
+  const VAD_THRESHOLD_DURING_TTS = 0.05;  // mientras avatar habla (eco residual)
+
+  const _computeRms = (buf) => {
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = (buf[i] - 128) / 128; // Uint8 → -1..1
+      sum += v * v;
+    }
+    return Math.sqrt(sum / buf.length);
+  };
+
+  const vadTick = () => {
+    const analyser = vadAnalyserRef.current;
+    const buf = vadBufRef.current;
+    if (!analyser || !buf) return;
+
+    analyser.getByteTimeDomainData(buf);
+    const rms = _computeRms(buf);
+    setVoiceLevel(Math.min(rms * 5, 1));
+
+    if (autoModeRef.current && !pausedRef.current) {
+      const isAvatarTTS = avatarStatusRef.current === 'speaking';
+      const threshold = isAvatarTTS ? VAD_THRESHOLD_DURING_TTS : VAD_THRESHOLD_BASE;
+      const isSpeech = rms > threshold;
+
+      if (!listeningRef.current && !sendingRef.current && !vadStartingRef.current) {
+        // En espera — buscamos onset de voz
+        if (isSpeech) {
+          if (!vadSpeechStartRef.current) vadSpeechStartRef.current = performance.now();
+          if (performance.now() - vadSpeechStartRef.current > VAD_SPEECH_START_MS) {
+            vadSpeechStartRef.current = 0;
+            vadStartingRef.current = true;
+            startListening().finally(() => { vadStartingRef.current = false; });
+          }
+        } else {
+          vadSpeechStartRef.current = 0;
+        }
+      } else if (listeningRef.current) {
+        // Grabando — buscamos silencio sostenido para terminar el turno
+        if (!isSpeech) {
+          if (!vadSilenceTimerRef.current) {
+            vadSilenceTimerRef.current = setTimeout(() => {
+              vadSilenceTimerRef.current = null;
+              if (listeningRef.current) stopListening();
+            }, VAD_SILENCE_END_MS);
+          }
+        } else if (vadSilenceTimerRef.current) {
+          clearTimeout(vadSilenceTimerRef.current);
+          vadSilenceTimerRef.current = null;
+        }
+      }
+    }
+
+    vadRafRef.current = requestAnimationFrame(vadTick);
+  };
+
+  const enableAutoMode = async () => {
+    if (vadStreamRef.current) return; // ya activo
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      vadStreamRef.current = stream;
+
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      // Si el AudioContext está suspended (autoplay policy), reanudamos
+      if (ctx.state === 'suspended') {
+        try { await ctx.resume(); } catch {}
+      }
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.4;
+      source.connect(analyser);
+      vadCtxRef.current = ctx;
+      vadAnalyserRef.current = analyser;
+      vadBufRef.current = new Uint8Array(analyser.fftSize);
+
+      console.info('[vad] auto mode enabled');
+      vadRafRef.current = requestAnimationFrame(vadTick);
+    } catch (err) {
+      console.warn('[vad] enableAutoMode failed', err);
+      setAutoMode(false);
+      vadStreamRef.current = null;
+      if (err?.name === 'NotAllowedError') {
+        toast.error('Permitime usar el micrófono para conversar con el tutor.');
+      } else {
+        toast.error('No pude activar el modo conversación. Usá el botón manual.');
+      }
+    }
+  };
+
+  const disableAutoMode = () => {
+    if (vadRafRef.current) {
+      cancelAnimationFrame(vadRafRef.current);
+      vadRafRef.current = null;
+    }
+    if (vadSilenceTimerRef.current) {
+      clearTimeout(vadSilenceTimerRef.current);
+      vadSilenceTimerRef.current = null;
+    }
+    vadSpeechStartRef.current = 0;
+    vadStartingRef.current = false;
+    setVoiceLevel(0);
+    try { vadAnalyserRef.current?.disconnect(); } catch {}
+    vadAnalyserRef.current = null;
+    vadBufRef.current = null;
+    try { vadCtxRef.current?.close(); } catch {}
+    vadCtxRef.current = null;
+    // Si una grabación está usando este stream (vad), no la cortamos acá:
+    // se cerrará en recorder.onstop. Si no hay grabación activa, liberamos ya.
+    if (!usingVadStreamRef.current) {
+      try { vadStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+      vadStreamRef.current = null;
+    }
+    console.info('[vad] auto mode disabled');
+  };
+
+  // Encender/apagar VAD según toggle de autoMode + estado de la sesión
+  useEffect(() => {
+    const ready = !!sessionId && (avatarStatus === 'ready' || avatarStatus === 'speaking');
+    if (autoMode && ready && !paused) {
+      enableAutoMode();
+    } else if (!autoMode || paused) {
+      disableAutoMode();
+    }
+  }, [autoMode, sessionId, avatarStatus, paused]);
 
   const clearIdleTimers = () => {
     if (idleTimerRef.current) {
@@ -326,6 +496,13 @@ export const LearningSession = () => {
       try {
         recognitionRef.current?.stop();
       } catch {}
+      // VAD cleanup
+      if (vadRafRef.current) cancelAnimationFrame(vadRafRef.current);
+      if (vadSilenceTimerRef.current) clearTimeout(vadSilenceTimerRef.current);
+      try { vadCtxRef.current?.close(); } catch {}
+      try { vadStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+      vadCtxRef.current = null;
+      vadStreamRef.current = null;
     };
   }, []);
 
@@ -333,36 +510,173 @@ export const LearningSession = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Manda el mensaje vía streaming SSE: cada oración que va llegando del LLM
+  // se le envía al avatar para TTS apenas se completa, en vez de esperar el
+  // mensaje entero. Reduce el delay percibido de ~3s a ~600ms.
   const sendMessage = async (text) => {
     const clean = (text || '').trim();
     if (!clean || sending || !sessionId) return;
     resetIdleTimer();
+
+    // Capturamos el historial reciente ANTES de agregar el mensaje del usuario,
+    // así el backend recibe el contexto previo y no necesita consultar la BD.
+    // Esto ahorra ~150-300ms por turno.
+    const priorHistory = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .slice(-9)
+      .map((m) => ({ role: m.role, content: m.content }));
+
     setMessages((prev) => [...prev, { role: 'user', content: clean }]);
     setInput('');
     setSending(true);
-    try {
-      const { data } = await axios.post(
-        `${API}/learning/sessions/${sessionId}/message`,
-        { text: clean },
-        { headers: headers() },
-      );
-      const reply = data.assistant_text || '';
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: reply,
-          sources: Array.isArray(data.retrieved_chunks) ? data.retrieved_chunks : [],
-          ragSkipped: !!data.rag_skipped,
-        },
-      ]);
-      const room = roomRef.current;
-      const avatarSessionId = avatarSessionRef.current?.session_id;
-      if (room && room.state === 'connected' && reply && avatarSessionId) {
-        await speakViaAvatar(room, avatarSessionId, reply);
+
+    const room = roomRef.current;
+    const avatarSessionId = avatarSessionRef.current?.session_id;
+
+    let buffer = '';            // texto pendiente de mandar al avatar
+    let fullText = '';          // todo lo que llevamos generado
+    let firstChunkSent = false; // ¿ya mandamos el primer chunk al avatar?
+    let assistantPushed = false;
+    let metaSources = [];
+    let metaRagSkipped = false;
+
+    // Manda al avatar oraciones completas (corta en . ! ? \n). Para el PRIMER
+    // chunk somos más agresivos: cortamos también en coma/punto-y-coma si el
+    // buffer ya tiene >= 25 chars, para que el avatar arranque a hablar antes.
+    // Tras el primer chunk volvemos al modo conservador (oraciones completas).
+    const flushBuffer = (force = false) => {
+      while (buffer.length > 0) {
+        // 1) Corte fuerte: punto / pregunta / exclamación / nueva línea
+        let m = buffer.match(/^([\s\S]+?[.!?\n])(\s|$)/);
+        if (m) {
+          const piece = m[1].trim();
+          buffer = buffer.slice(m[0].length);
+          if (piece && room && room.state === 'connected' && avatarSessionId) {
+            speakViaAvatar(room, avatarSessionId, piece);
+            firstChunkSent = true;
+          }
+          continue;
+        }
+        // 2) Para el primer chunk, corte suave en coma/punto-y-coma si ya
+        //    hay material razonable. Acelera el time-to-first-audio del avatar.
+        if (!firstChunkSent && buffer.length > 25) {
+          m = buffer.match(/^([\s\S]+?[,;:])(\s)/);
+          if (m) {
+            const piece = m[1].trim();
+            buffer = buffer.slice(m[0].length);
+            if (piece && room && room.state === 'connected' && avatarSessionId) {
+              speakViaAvatar(room, avatarSessionId, piece);
+              firstChunkSent = true;
+            }
+            continue;
+          }
+        }
+        // 3) Force al final del stream: mandamos lo que quede
+        if (force) {
+          const tail = buffer.trim();
+          buffer = '';
+          if (tail && room && room.state === 'connected' && avatarSessionId) {
+            speakViaAvatar(room, avatarSessionId, tail);
+            firstChunkSent = true;
+          }
+          continue;
+        }
+        // 4) Hard cut a los 180 chars sin puntuación
+        if (buffer.length > 180) {
+          const cut = buffer.slice(0, 180);
+          buffer = buffer.slice(180);
+          if (cut.trim() && room && room.state === 'connected' && avatarSessionId) {
+            speakViaAvatar(room, avatarSessionId, cut.trim());
+            firstChunkSent = true;
+          }
+          continue;
+        }
+        break;
       }
+    };
+
+    // Crea/actualiza el último mensaje del avatar con el texto acumulado
+    const upsertAssistantMessage = () => {
+      setMessages((prev) => {
+        const next = [...prev];
+        if (assistantPushed && next.length > 0 && next[next.length - 1].role === 'assistant' && next[next.length - 1]._streaming) {
+          next[next.length - 1] = {
+            ...next[next.length - 1],
+            content: fullText,
+            sources: metaSources,
+            ragSkipped: metaRagSkipped,
+          };
+        } else {
+          next.push({
+            role: 'assistant',
+            content: fullText,
+            sources: metaSources,
+            ragSkipped: metaRagSkipped,
+            _streaming: true,
+          });
+          assistantPushed = true;
+        }
+        return next;
+      });
+    };
+
+    try {
+      const resp = await fetch(`${API}/learning/sessions/${sessionId}/message_stream`, {
+        method: 'POST',
+        headers: { ...headers(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: clean, recent_messages: priorHistory }),
+      });
+      if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(errBody || `HTTP ${resp.status}`);
+      }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let leftover = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = (leftover + chunk).split('\n');
+        leftover = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const json = line.slice(6).trim();
+          if (!json) continue;
+          let evt;
+          try { evt = JSON.parse(json); } catch { continue; }
+
+          if (evt.type === 'meta') {
+            metaSources = Array.isArray(evt.retrieved_chunks) ? evt.retrieved_chunks : [];
+            metaRagSkipped = !!evt.rag_skipped;
+          } else if (evt.type === 'token') {
+            const t = evt.text || '';
+            fullText += t;
+            buffer += t;
+            upsertAssistantMessage();
+            flushBuffer(false);
+          } else if (evt.type === 'error') {
+            toast.error(evt.detail || 'Error generando respuesta');
+          } else if (evt.type === 'done') {
+            if (evt.text) fullText = evt.text;
+            flushBuffer(true);
+            upsertAssistantMessage();
+          }
+        }
+      }
+      // Marcar el mensaje como no-streaming al final
+      setMessages((prev) => {
+        const next = [...prev];
+        if (next.length > 0 && next[next.length - 1].role === 'assistant' && next[next.length - 1]._streaming) {
+          const { _streaming, ...rest } = next[next.length - 1];
+          next[next.length - 1] = rest;
+        }
+        return next;
+      });
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Error enviando mensaje');
+      console.error('[sendMessage] stream error', err);
+      toast.error(err.message || 'Error enviando mensaje');
     } finally {
       setSending(false);
     }
@@ -424,6 +738,7 @@ export const LearningSession = () => {
           else interim += r[0].transcript;
         }
         const merged = (finalSoFar + interim).trim();
+        liveTranscriptRef.current = merged;  // accesible desde recorder.onstop
         setLiveTranscript(merged);
       };
       rec.onerror = (e) => {
@@ -478,14 +793,23 @@ export const LearningSession = () => {
     startLivePreview();
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-      mediaStreamRef.current = stream;
+      // Si VAD está activo, reusamos su stream — abrir un segundo getUserMedia
+      // mientras hay uno activo es flaky en Chrome.
+      let stream;
+      if (vadStreamRef.current) {
+        stream = vadStreamRef.current;
+        usingVadStreamRef.current = true;
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        mediaStreamRef.current = stream;
+        usingVadStreamRef.current = false;
+      }
 
       // Elegimos el mejor mime que soporte el navegador
       const candidates = [
@@ -512,22 +836,51 @@ export const LearningSession = () => {
       };
 
       recorder.onstop = async () => {
-        const tracks = mediaStreamRef.current?.getTracks() || [];
-        tracks.forEach((t) => t.stop());
-        mediaStreamRef.current = null;
+        // Solo cerramos el stream si era propio (modo manual). Si estábamos
+        // reusando el stream del VAD, lo dejamos vivo para seguir escuchando.
+        if (!usingVadStreamRef.current) {
+          const tracks = mediaStreamRef.current?.getTracks() || [];
+          tracks.forEach((t) => t.stop());
+          mediaStreamRef.current = null;
+        }
+        usingVadStreamRef.current = false;
         muteAvatar(false);
         setListening(false);
+
+        // Esperamos brevemente a que SpeechRecognition emita los resultados
+        // finales pendientes (palabras del final del turno). 100ms es un
+        // balance — la mayoría de las veces el final ya llegó.
+        await new Promise((r) => setTimeout(r, 100));
+
+        // Capturamos lo que el browser STT alcanzó a transcribir ANTES de
+        // limpiar el preview, así no se pierde si el ref se reinicia.
+        const browserText = (liveTranscriptRef.current || '').trim();
+        liveTranscriptRef.current = '';
         stopLivePreview();
         setLiveTranscript('');
 
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         audioChunksRef.current = [];
 
+        // Atajo de latencia: si el browser ya transcribió algo razonable,
+        // usamos eso directamente y nos saltamos el upload + Whisper. Ahorra
+        // ~700-1500ms por turno. Whisper queda como fallback si:
+        //   - El navegador no soporta Web Speech API (Firefox, Safari)
+        //   - El usuario habló demasiado bajo y SpeechRecognition no captó nada
+        //   - El texto es muy corto (probablemente un falso positivo)
+        if (browserText && browserText.length >= 4) {
+          console.info('[transcribe] using browser STT (skipping Whisper):', browserText);
+          await sendMessage(browserText);
+          return;
+        }
+
+        // Fallback: si no hay audio grabado tampoco podemos hacer Whisper
         if (blob.size < 1000) {
           toast.info('No detecté audio. Probá hablar un poco más cerca del micrófono.');
           return;
         }
 
+        console.info('[transcribe] browser STT empty, falling back to Whisper');
         setSending(true);
         try {
           const ext = (recorder.mimeType || '').includes('mp4')
@@ -591,15 +944,19 @@ export const LearningSession = () => {
   };
 
   const cleanupRecording = () => {
-    try {
-      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-    } catch {}
-    mediaStreamRef.current = null;
+    if (!usingVadStreamRef.current) {
+      try {
+        mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      } catch {}
+      mediaStreamRef.current = null;
+    }
+    usingVadStreamRef.current = false;
     audioChunksRef.current = [];
     muteAvatar(false);
     setListening(false);
     stopLivePreview();
     setLiveTranscript('');
+    liveTranscriptRef.current = '';
   };
 
   const endSession = async () => {
@@ -906,8 +1263,24 @@ export const LearningSession = () => {
           </div>
         )}
 
-        {/* Top-right controls (Terminar + Mostrar chat cuando está oculto) */}
+        {/* Top-right controls (Auto/Manual + Historial + Terminar) */}
         <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+          {!chatOpen && (
+            <button
+              onClick={() => setAutoMode((v) => !v)}
+              className={`h-10 px-3 rounded-md text-sm flex items-center gap-1.5 transition-colors backdrop-blur-sm border ${
+                autoMode
+                  ? 'bg-yellow-500/15 hover:bg-yellow-500/25 text-yellow-400 border-yellow-500/40'
+                  : 'bg-gray-900/80 hover:bg-gray-900 text-gray-300 border-gray-700'
+              }`}
+              title={autoMode
+                ? 'Conversación automática activa — clic para pasar a manual'
+                : 'Modo manual — clic para activar conversación automática'}
+            >
+              <span className={`h-2 w-2 rounded-full ${autoMode ? 'bg-yellow-400 animate-pulse' : 'bg-gray-500'}`} />
+              {autoMode ? 'Auto' : 'Manual'}
+            </button>
+          )}
           {!chatOpen && (
             <button
               onClick={() => setChatOpen(true)}
@@ -932,6 +1305,26 @@ export const LearningSession = () => {
             Terminar
           </button>
         </div>
+
+        {/* Tip de auriculares (primera vez) */}
+        {!chatOpen && autoMode && showHeadphonesTip && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 max-w-md bg-gray-900/85 backdrop-blur-md border border-yellow-500/30 rounded-lg px-4 py-2.5 flex items-start gap-2 shadow-xl">
+            <span className="text-xl leading-none">🎧</span>
+            <div className="flex-1 text-xs text-gray-200">
+              Para una conversación más fluida, usá auriculares — así el tutor no se interrumpe a sí mismo.
+            </div>
+            <button
+              onClick={() => {
+                localStorage.setItem('learning_headphones_tip_dismissed', '1');
+                setShowHeadphonesTip(false);
+              }}
+              className="text-gray-400 hover:text-white text-lg leading-none -mt-0.5"
+              title="Ocultar"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {/* Bottom overlay:
             - Si está escuchando → muestra el transcript en vivo (best-effort
@@ -977,38 +1370,88 @@ export const LearningSession = () => {
           );
         })()}
 
-        {/* Floating mic button (acción primaria — voz con el tutor) */}
+        {/* Acción primaria de voz — modo Auto: orbe que pulsa con la voz;
+            modo Manual: botón push-to-talk clásico */}
         {!chatOpen && avatarStatus !== 'connecting' && avatarStatus !== 'error' && !paused && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2">
-            <button
-              type="button"
-              onClick={listening ? stopListening : startListening}
-              disabled={sending && !listening}
-              title={listening ? 'Detener grabación' : 'Hablar con el tutor'}
-              className={`h-20 w-20 flex items-center justify-center rounded-full shadow-2xl transition-all ${
-                listening
-                  ? 'bg-red-600 hover:bg-red-700 text-white ring-4 ring-red-500/40 animate-pulse'
+          autoMode ? (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-3 select-none">
+              {/* Orbe: el outer ring escala con el voiceLevel */}
+              <div className="relative h-24 w-24 flex items-center justify-center">
+                <div
+                  className={`absolute inset-0 rounded-full transition-all duration-100 ${
+                    listening
+                      ? 'bg-red-500/30'
+                      : avatarStatus === 'speaking'
+                      ? 'bg-yellow-500/15'
+                      : 'bg-yellow-500/20'
+                  }`}
+                  style={{
+                    transform: `scale(${1 + voiceLevel * 0.6})`,
+                    opacity: 0.4 + voiceLevel * 0.6,
+                  }}
+                />
+                <div
+                  className={`relative h-20 w-20 rounded-full flex items-center justify-center shadow-2xl transition-all ${
+                    listening
+                      ? 'bg-red-600 text-white ring-4 ring-red-500/50'
+                      : sending
+                      ? 'bg-gray-800 text-yellow-500 ring-4 ring-yellow-500/30'
+                      : avatarStatus === 'speaking'
+                      ? 'bg-gradient-to-br from-yellow-500/70 to-yellow-600/70 text-black ring-4 ring-yellow-500/30'
+                      : 'bg-gradient-to-br from-yellow-500 to-yellow-600 text-black ring-4 ring-yellow-500/30'
+                  }`}
+                >
+                  {sending && !listening ? (
+                    <Loader2 className="h-8 w-8 animate-spin" />
+                  ) : listening ? (
+                    <Mic className="h-8 w-8" />
+                  ) : (
+                    <Mic className="h-8 w-8" />
+                  )}
+                </div>
+              </div>
+              <div className="text-xs font-semibold uppercase tracking-widest text-white/90 bg-gray-900/70 backdrop-blur-sm px-3 py-1 rounded-full border border-gray-700">
+                {listening
+                  ? 'Te escucho — pausá para enviar'
                   : sending
-                  ? 'bg-gray-800 text-yellow-500 ring-4 ring-yellow-500/30 cursor-wait'
-                  : 'bg-gradient-to-br from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black ring-4 ring-yellow-500/30 hover:ring-yellow-500/60 hover:scale-105'
-              }`}
-            >
-              {sending && !listening ? (
-                <Loader2 className="h-8 w-8 animate-spin" />
-              ) : listening ? (
-                <MicOff className="h-8 w-8" />
-              ) : (
-                <Mic className="h-8 w-8" />
-              )}
-            </button>
-            <div className="text-xs font-semibold uppercase tracking-widest text-white/90 bg-gray-900/70 backdrop-blur-sm px-3 py-1 rounded-full border border-gray-700">
-              {listening
-                ? 'Grabando — clic para enviar'
-                : sending
-                ? 'Procesando…'
-                : 'Hablá con tu tutor'}
+                  ? 'Pensando…'
+                  : avatarStatus === 'speaking'
+                  ? 'Hablando — podés interrumpir'
+                  : 'Hablá cuando quieras'}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2">
+              <button
+                type="button"
+                onClick={listening ? stopListening : startListening}
+                disabled={sending && !listening}
+                title={listening ? 'Detener grabación' : 'Hablar con el tutor'}
+                className={`h-20 w-20 flex items-center justify-center rounded-full shadow-2xl transition-all ${
+                  listening
+                    ? 'bg-red-600 hover:bg-red-700 text-white ring-4 ring-red-500/40 animate-pulse'
+                    : sending
+                    ? 'bg-gray-800 text-yellow-500 ring-4 ring-yellow-500/30 cursor-wait'
+                    : 'bg-gradient-to-br from-yellow-500 to-yellow-600 hover:from-yellow-400 hover:to-yellow-500 text-black ring-4 ring-yellow-500/30 hover:ring-yellow-500/60 hover:scale-105'
+                }`}
+              >
+                {sending && !listening ? (
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                ) : listening ? (
+                  <MicOff className="h-8 w-8" />
+                ) : (
+                  <Mic className="h-8 w-8" />
+                )}
+              </button>
+              <div className="text-xs font-semibold uppercase tracking-widest text-white/90 bg-gray-900/70 backdrop-blur-sm px-3 py-1 rounded-full border border-gray-700">
+                {listening
+                  ? 'Grabando — clic para enviar'
+                  : sending
+                  ? 'Procesando…'
+                  : 'Hablá con tu tutor'}
+              </div>
+            </div>
+          )
         )}
 
         {/* Error banner */}

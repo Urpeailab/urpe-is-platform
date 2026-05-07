@@ -101,6 +101,28 @@ def chat(messages: List[dict], model: Optional[str] = None, temperature: float =
     }
 
 
+def chat_stream(messages: List[dict], model: Optional[str] = None, temperature: float = 0.4):
+    """Generator que cede deltas de texto a medida que llegan del modelo.
+    Permite que el avatar empiece a hablar la primera oración antes de que
+    el LLM termine de generar todo. Yields strings (puede ser '' al final)."""
+    client = _get_client()
+    model = model or OPENROUTER_MODEL_DEFAULT
+    stream = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        stream=True,
+    )
+    for chunk in stream:
+        try:
+            delta = chunk.choices[0].delta
+        except (AttributeError, IndexError):
+            continue
+        content = getattr(delta, "content", None)
+        if content:
+            yield content
+
+
 def chat_json(messages: List[dict], model: Optional[str] = None, temperature: float = 0.2) -> dict:
     """Force the model to reply with valid JSON (used for evaluations)."""
     client = _get_client()

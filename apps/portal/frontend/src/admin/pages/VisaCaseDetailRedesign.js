@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../../components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover';
 import { 
-  Loader2, User, Mail, Phone, Briefcase, 
+  Loader2, User, Mail, MailX, Phone, Briefcase,
   Calendar, DollarSign, Upload, Download, CheckCircle, 
   XCircle, Clock, FileText, AlertCircle, Edit, Trash2,
   ChevronsUpDown, Check, Link as LinkIcon, Copy, AlertTriangle,
@@ -118,6 +118,123 @@ export const VisaCaseDetailRedesign = () => {
   // Delete file from deliverable states
   const [deleteFileModalOpen, setDeleteFileModalOpen] = useState(false);
   const [fileToDelete, setFileToDelete] = useState(null); // { deliverableId, fileId, fileName }
+
+  // Per-file note thread (deliverables) - "add new" dialog
+  const [editingFileNote, setEditingFileNote] = useState(null); // { deliverableId, fileId, fileLabel }
+  const [fileNoteDraft, setFileNoteDraft] = useState('');
+  const [fileNoteVisibleDraft, setFileNoteVisibleDraft] = useState(false);
+  const [savingFileNote, setSavingFileNote] = useState(false);
+
+  // Per-document note thread (client documents) - "add new" dialog
+  const [editingDocNote, setEditingDocNote] = useState(null); // { documentId, documentLabel }
+  const [docNoteDraft, setDocNoteDraft] = useState('');
+  const [docNoteVisibleDraft, setDocNoteVisibleDraft] = useState(false);
+  const [savingDocNote, setSavingDocNote] = useState(false);
+
+  // ZIP download selection state for the Documentos tab.
+  // Map keyed by `${type}::${itemId}::${fileId}` → true.
+  const [zipSelection, setZipSelection] = useState({});
+  const [downloadingZip, setDownloadingZip] = useState(false);
+
+  const selectionKey = (type, itemId, fileId) => `${type}::${itemId}::${fileId || 'legacy'}`;
+
+  const toggleSelection = (type, itemId, fileId) => {
+    const key = selectionKey(type, itemId, fileId);
+    setZipSelection((prev) => {
+      const next = { ...prev };
+      if (next[key]) delete next[key];
+      else next[key] = true;
+      return next;
+    });
+  };
+
+  const setBulkSelection = (entries, value) => {
+    setZipSelection((prev) => {
+      const next = { ...prev };
+      entries.forEach(({ type, itemId, fileId }) => {
+        const key = selectionKey(type, itemId, fileId);
+        if (value) next[key] = true;
+        else delete next[key];
+      });
+      return next;
+    });
+  };
+
+  const collectAllDownloadable = () => {
+    const entries = [];
+    deliverables.forEach((del) => {
+      const files = del.files?.length > 0
+        ? del.files
+        : del.fileUrl ? [{ id: 'legacy', fileUrl: del.fileUrl, fileName: del.fileName }] : [];
+      files.forEach((f) => {
+        if (f.fileUrl) entries.push({ type: 'deliverable', itemId: del.id, fileId: f.id || 'legacy' });
+      });
+    });
+    documents.forEach((doc) => {
+      const files = doc.files?.length > 0
+        ? doc.files
+        : doc.fileUrl ? [{ id: 'legacy', fileUrl: doc.fileUrl, fileName: doc.fileName }] : [];
+      files.forEach((f) => {
+        if (f.fileUrl) entries.push({ type: 'document', itemId: doc.id, fileId: f.id || 'legacy' });
+      });
+    });
+    return entries;
+  };
+
+  const handleDownloadZip = async () => {
+    const items = Object.keys(zipSelection).map((k) => {
+      const [type, itemId, fileId] = k.split('::');
+      return { type, itemId, fileId: fileId === 'legacy' ? null : fileId };
+    });
+    if (items.length === 0) {
+      toast.error('Selecciona al menos un archivo');
+      return;
+    }
+    try {
+      setDownloadingZip(true);
+      const response = await axios.post(
+        `${BACKEND_URL}/api/admin/visa-cases/${caseId}/download-zip`,
+        { items },
+        { headers: { Authorization: `Bearer ${token}` }, responseType: 'blob' }
+      );
+      const blob = new Blob([response.data], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const disposition = response.headers['content-disposition'] || '';
+      const match = disposition.match(/filename="?([^";]+)"?/);
+      link.download = match ? match[1] : `caso_${caseId}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast.success('Descarga lista');
+    } catch (error) {
+      const msg = error.response?.data instanceof Blob
+        ? 'No se pudo construir el ZIP'
+        : (error.response?.data?.detail || 'No se pudo construir el ZIP');
+      toast.error(msg);
+    } finally {
+      setDownloadingZip(false);
+    }
+  };
+
+  // Add deliverable / add document dialogs (per case + stage)
+  const [addingDeliverable, setAddingDeliverable] = useState(null); // { stageNumber, stageLabel }
+  const [newDeliverableName, setNewDeliverableName] = useState('');
+  const [newDeliverableDescription, setNewDeliverableDescription] = useState('');
+  const [savingNewDeliverable, setSavingNewDeliverable] = useState(false);
+
+  const [addingDocument, setAddingDocument] = useState(null); // { stageNumber, stageLabel }
+  const [newDocumentName, setNewDocumentName] = useState('');
+  const [newDocumentDescription, setNewDocumentDescription] = useState('');
+  const [newDocumentRequired, setNewDocumentRequired] = useState(true);
+  const [newDocumentPhysical, setNewDocumentPhysical] = useState(false);
+  const [savingNewDocument, setSavingNewDocument] = useState(false);
+
+  // Expanded notes thread per file/document (accordion state)
+  const [expandedNoteThreads, setExpandedNoteThreads] = useState({}); // { [threadKey]: bool }
+  const toggleNoteThread = (key) => setExpandedNoteThreads((prev) => ({ ...prev, [key]: !prev[key] }));
   
   // Document validation states
   const [validatingDocId, setValidatingDocId] = useState(null);
@@ -1409,6 +1526,11 @@ export const VisaCaseDetailRedesign = () => {
     }
   }, [token, staffList.length]);
 
+  // Load staff list on mount so we can resolve uploader names from staff IDs.
+  useEffect(() => {
+    fetchStaff();
+  }, [fetchStaff]);
+
   // Computed values
   const financialSummary = useMemo(() => {
     const totalAmount = stages.reduce((sum, s) => sum + (s.amount || 0), 0);
@@ -1574,6 +1696,312 @@ export const VisaCaseDetailRedesign = () => {
   const handleOpenUploadModal = (deliverable) => {
     setSelectedDeliverable(deliverable);
     setUploadModalOpen(true);
+  };
+
+  // File note (deliverable file) handlers - thread mode
+  const handleOpenFileNoteEditor = (deliverableId, file) => {
+    setEditingFileNote({
+      deliverableId,
+      fileId: file.id || 'legacy',
+      fileLabel: file.fileName || 'Archivo',
+    });
+    setFileNoteDraft('');
+    setFileNoteVisibleDraft(false);
+  };
+
+  const handleCloseFileNoteEditor = () => {
+    setEditingFileNote(null);
+    setFileNoteDraft('');
+    setFileNoteVisibleDraft(false);
+  };
+
+  const handleSaveFileNote = async () => {
+    if (!editingFileNote) return;
+    if (!fileNoteDraft.trim()) {
+      toast.error('La nota no puede estar vacía');
+      return;
+    }
+    try {
+      setSavingFileNote(true);
+      await axios.post(
+        `${BACKEND_URL}/api/admin/deliverables/${editingFileNote.deliverableId}/files/${editingFileNote.fileId}/notes`,
+        { text: fileNoteDraft, visibleToClient: fileNoteVisibleDraft },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Nota agregada');
+      handleCloseFileNoteEditor();
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo guardar la nota');
+    } finally {
+      setSavingFileNote(false);
+    }
+  };
+
+  const handleDeleteFileNote = async (deliverableId, fileId, noteId) => {
+    if (!window.confirm('¿Eliminar esta nota?')) return;
+    try {
+      await axios.delete(
+        `${BACKEND_URL}/api/admin/deliverables/${deliverableId}/files/${fileId || 'legacy'}/notes/${noteId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Nota eliminada');
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo eliminar la nota');
+    }
+  };
+
+  const formatUploadedAt = (value) => {
+    if (!value) return null;
+    try {
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return null;
+      return format(d, "dd MMM yyyy HH:mm");
+    } catch {
+      return null;
+    }
+  };
+
+  const resolveUploaderName = (file) => {
+    if (file?.uploadedByName) return file.uploadedByName;
+    if (!file?.uploadedBy) return null;
+    const match = staffList.find((s) => (s.id || s._id) === file.uploadedBy);
+    return match?.name || null;
+  };
+
+  // Document note (client documents) handlers - thread mode
+  const handleOpenDocNoteEditor = (doc) => {
+    const label = getText(doc.name || doc.documentType || doc.documentName, 'Documento');
+    setEditingDocNote({ documentId: doc.id || doc._id, documentLabel: label });
+    setDocNoteDraft('');
+    setDocNoteVisibleDraft(false);
+  };
+
+  const handleCloseDocNoteEditor = () => {
+    setEditingDocNote(null);
+    setDocNoteDraft('');
+    setDocNoteVisibleDraft(false);
+  };
+
+  const handleSaveDocNote = async () => {
+    if (!editingDocNote) return;
+    if (!docNoteDraft.trim()) {
+      toast.error('La nota no puede estar vacía');
+      return;
+    }
+    try {
+      setSavingDocNote(true);
+      await axios.post(
+        `${BACKEND_URL}/api/admin/client-documents/${editingDocNote.documentId}/notes`,
+        { text: docNoteDraft, visibleToClient: docNoteVisibleDraft },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Nota agregada');
+      handleCloseDocNoteEditor();
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo guardar la nota');
+    } finally {
+      setSavingDocNote(false);
+    }
+  };
+
+  const handleDeleteDocNote = async (documentId, noteId) => {
+    if (!window.confirm('¿Eliminar esta nota?')) return;
+    try {
+      await axios.delete(
+        `${BACKEND_URL}/api/admin/client-documents/${documentId}/notes/${noteId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Nota eliminada');
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo eliminar la nota');
+    }
+  };
+
+  // Add deliverable / document handlers
+  const handleOpenAddDeliverable = (stage) => {
+    setAddingDeliverable({
+      stageNumber: stage.stageNumber,
+      stageLabel: getText(stage.name, `Etapa ${stage.stageNumber}`),
+    });
+    setNewDeliverableName('');
+    setNewDeliverableDescription('');
+  };
+
+  const handleCloseAddDeliverable = () => {
+    setAddingDeliverable(null);
+    setNewDeliverableName('');
+    setNewDeliverableDescription('');
+  };
+
+  const handleSaveNewDeliverable = async () => {
+    if (!addingDeliverable) return;
+    if (!newDeliverableName.trim()) {
+      toast.error('El nombre es obligatorio');
+      return;
+    }
+    try {
+      setSavingNewDeliverable(true);
+      await axios.post(
+        `${BACKEND_URL}/api/admin/visa-cases/${caseId}/deliverables`,
+        {
+          stageNumber: addingDeliverable.stageNumber,
+          nameEs: newDeliverableName.trim(),
+          descriptionEs: newDeliverableDescription.trim() || null,
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Entregable agregado');
+      handleCloseAddDeliverable();
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo crear el entregable');
+    } finally {
+      setSavingNewDeliverable(false);
+    }
+  };
+
+  const handleOpenAddDocument = (stage) => {
+    setAddingDocument({
+      stageNumber: stage.stageNumber,
+      stageLabel: getText(stage.name, `Etapa ${stage.stageNumber}`),
+    });
+    setNewDocumentName('');
+    setNewDocumentDescription('');
+    setNewDocumentRequired(true);
+    setNewDocumentPhysical(false);
+  };
+
+  const handleCloseAddDocument = () => {
+    setAddingDocument(null);
+    setNewDocumentName('');
+    setNewDocumentDescription('');
+    setNewDocumentRequired(true);
+    setNewDocumentPhysical(false);
+  };
+
+  const handleSaveNewDocument = async () => {
+    if (!addingDocument) return;
+    if (!newDocumentName.trim()) {
+      toast.error('El nombre es obligatorio');
+      return;
+    }
+    try {
+      setSavingNewDocument(true);
+      await axios.post(
+        `${BACKEND_URL}/api/admin/visa-cases/${caseId}/documents`,
+        {
+          stageNumber: addingDocument.stageNumber,
+          nameEs: newDocumentName.trim(),
+          descriptionEs: newDocumentDescription.trim() || null,
+          isRequired: newDocumentRequired,
+          requiresPhysicalCopy: newDocumentPhysical,
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Documento agregado');
+      handleCloseAddDocument();
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo crear el documento');
+    } finally {
+      setSavingNewDocument(false);
+    }
+  };
+
+  const resolveDocUploaderName = (doc) => {
+    if (doc?.uploadedByName) return doc.uploadedByName;
+    return caseData?.user?.name || caseData?.client?.name || null;
+  };
+
+  const renderNotesThread = ({ threadKey, notes, onAdd, onDelete }) => {
+    const safeNotes = Array.isArray(notes) ? notes : [];
+    const expanded = !!expandedNoteThreads[threadKey];
+    const visibleSlice = expanded ? safeNotes : safeNotes.slice(-1);
+    return (
+      <div className="mt-3 border-t border-gray-100 pt-3">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2">
+            <p className="text-[11px] uppercase tracking-wide text-gray-400 font-medium">
+              Notas {safeNotes.length > 0 && <span className="text-gray-500">({safeNotes.length})</span>}
+            </p>
+            {safeNotes.length > 1 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => toggleNoteThread(threadKey)}
+                className="h-6 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+              >
+                {expanded ? 'Ocultar historial' : `Ver historial (${safeNotes.length})`}
+              </Button>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onAdd}
+            className="h-7 px-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 gap-1"
+            title="Agregar nota"
+          >
+            <MessageSquare className="h-4 w-4" />
+            <span className="text-xs">Agregar</span>
+          </Button>
+        </div>
+        {safeNotes.length === 0 ? (
+          <p className="text-xs text-gray-400 italic">Sin notas</p>
+        ) : (
+          <div className="space-y-2">
+            {visibleSlice.map((n) => (
+              <div key={n.id} className="p-2 bg-white rounded border border-gray-200">
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+                    {n.createdByName && (
+                      <span className="flex items-center gap-1">
+                        <User className="h-3 w-3" />
+                        {n.createdByName}
+                      </span>
+                    )}
+                    {formatUploadedAt(n.createdAt) && (
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {formatUploadedAt(n.createdAt)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Badge className={n.visibleToClient ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-200 text-slate-600 hover:bg-slate-200'}>
+                      {n.visibleToClient ? (
+                        <span className="flex items-center gap-1"><Eye className="h-3 w-3" />Visible al cliente</span>
+                      ) : (
+                        <span className="flex items-center gap-1"><Lock className="h-3 w-3" />Solo equipo</span>
+                      )}
+                    </Badge>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => onDelete(n.id)}
+                      className="h-6 px-1 text-red-500 hover:text-red-700 hover:bg-red-50"
+                      title="Eliminar nota"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-700 whitespace-pre-wrap">{n.text}</p>
+              </div>
+            ))}
+            {!expanded && safeNotes.length > 1 && (
+              <p className="text-[11px] text-gray-400 text-center">
+                Mostrando la última nota · {safeNotes.length - 1} anterior{safeNotes.length - 1 === 1 ? '' : 'es'}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const handleDeleteDeliverable = async () => {
@@ -2607,9 +3035,25 @@ export const VisaCaseDetailRedesign = () => {
                     {(!viewAllStages || stageDeliverables.length > 0 || stageDocuments.length > 0) && (
                       <>
                         {/* Stage Deliverables */}
-                        {stageDeliverables.length > 0 && (
+                        {(stageDeliverables.length > 0 || !viewAllStages) && (
                           <div className="mt-4 pt-4 border-t border-gray-200">
-                            <p className="text-sm text-gray-500 mb-3">Entregables ({stageDeliverables.length})</p>
+                            <div className="flex items-center justify-between mb-3">
+                              <p className="text-sm text-gray-500">Entregables ({stageDeliverables.length})</p>
+                              {!viewAllStages && isAdmin && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={(e) => { e.stopPropagation(); handleOpenAddDeliverable(stage); }}
+                                  className="h-8 px-3 text-blue-600 border-blue-200 hover:bg-blue-50"
+                                >
+                                  <Upload className="h-3.5 w-3.5 mr-1" />
+                                  Agregar entregable
+                                </Button>
+                              )}
+                            </div>
+                            {stageDeliverables.length === 0 && !viewAllStages && (
+                              <p className="text-xs text-gray-400 italic mb-3">Sin entregables en esta etapa</p>
+                            )}
                             <div className="space-y-3">
                               {stageDeliverables.map((del) => {
                                 // Get files array with backward compatibility
@@ -3254,38 +3698,74 @@ export const VisaCaseDetailRedesign = () => {
                                     {!isAIReport && delFiles.length > 0 && (
                                       <div className="space-y-2 mt-3 border-t border-gray-100 pt-3">
                                         <p className="text-xs text-gray-500 font-medium">Archivos subidos:</p>
-                                        {delFiles.map((file, index) => (
-                                          <div 
+                                        {delFiles.map((file, index) => {
+                                          const uploadedAtRaw = file.uploadedAt || file.uploaded_at || del.uploadedAt || del.uploaded_at || del.updatedAt || del.updated_at || del.createdAt || del.created_at;
+                                          const uploadedAtLabel = formatUploadedAt(uploadedAtRaw);
+                                          const uploaderName = resolveUploaderName(file);
+                                          const fileId = file.id || 'legacy';
+                                          return (
+                                          <div
                                             key={file.id || index}
-                                            className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200"
+                                            className="bg-gray-50 rounded-lg px-3 py-2 border border-gray-200"
                                           >
-                                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                                              <FileText className="h-4 w-4 text-gray-500 flex-shrink-0" />
-                                              <span className="text-sm text-gray-700 truncate">
-                                                {file.fileName || `Archivo ${index + 1}`}
-                                              </span>
+                                            <div className="flex items-center justify-between gap-2">
+                                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                <FileText className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                                                <span className="text-sm text-gray-700 truncate">
+                                                  {file.fileName || `Archivo ${index + 1}`}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center gap-1">
+                                                <Button
+                                                  size="sm"
+                                                  variant="ghost"
+                                                  onClick={() => window.open(file.fileUrl, '_blank')}
+                                                  className="h-8 px-3 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                                >
+                                                  <Download className="h-4 w-4 mr-1" />
+                                                  Ver
+                                                </Button>
+                                                <Button
+                                                  size="sm"
+                                                  variant="ghost"
+                                                  onClick={() => setFileToDelete({ deliverableId: del.id, fileId, fileName: file.fileName || `Archivo ${index + 1}` })}
+                                                  className="h-8 px-2 text-red-500 hover:text-red-700 hover:bg-red-50"
+                                                >
+                                                  <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                              </div>
                                             </div>
-                                            <div className="flex items-center gap-1">
-                                              <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                onClick={() => window.open(file.fileUrl, '_blank')}
-                                                className="h-8 px-3 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                              >
-                                                <Download className="h-4 w-4 mr-1" />
-                                                Ver
-                                              </Button>
-                                              <Button
-                                                size="sm"
-                                                variant="ghost"
-                                                onClick={() => setFileToDelete({ deliverableId: del.id, fileId: file.id || 'legacy', fileName: file.fileName || `Archivo ${index + 1}` })}
-                                                className="h-8 px-2 text-red-500 hover:text-red-700 hover:bg-red-50"
-                                              >
-                                                <Trash2 className="h-4 w-4" />
-                                              </Button>
-                                            </div>
+                                            {(uploadedAtLabel || uploaderName || file.clientNotified === false) && (
+                                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">
+                                                {uploadedAtLabel && (
+                                                  <span className="flex items-center gap-1">
+                                                    <Clock className="h-3 w-3" />
+                                                    {uploadedAtLabel}
+                                                  </span>
+                                                )}
+                                                {uploaderName && (
+                                                  <span className="flex items-center gap-1">
+                                                    <User className="h-3 w-3" />
+                                                    {uploaderName}
+                                                  </span>
+                                                )}
+                                                {file.clientNotified === false && (
+                                                  <span className="flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                                                    <MailX className="h-3 w-3" />
+                                                    No se notificó al cliente
+                                                  </span>
+                                                )}
+                                              </div>
+                                            )}
+                                            {renderNotesThread({
+                                              threadKey: `del-${del.id}-file-${fileId}`,
+                                              notes: file.noteEntries,
+                                              onAdd: () => handleOpenFileNoteEditor(del.id, file),
+                                              onDelete: (noteId) => handleDeleteFileNote(del.id, fileId, noteId),
+                                            })}
                                           </div>
-                                        ))}
+                                          );
+                                        })}
                                       </div>
                                     )}
                                   </div>
@@ -3296,9 +3776,25 @@ export const VisaCaseDetailRedesign = () => {
                         )}
 
                         {/* Stage Documents */}
-                        {stageDocuments.length > 0 && (
+                        {(stageDocuments.length > 0 || !viewAllStages) && (
                           <div className="mt-4 pt-4 border-t border-gray-200">
-                            <p className="text-sm text-gray-500 mb-3">Documentos del Cliente ({stageDocuments.length})</p>
+                            <div className="flex items-center justify-between mb-3">
+                              <p className="text-sm text-gray-500">Documentos del Cliente ({stageDocuments.length})</p>
+                              {!viewAllStages && isAdmin && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={(e) => { e.stopPropagation(); handleOpenAddDocument(stage); }}
+                                  className="h-8 px-3 text-blue-600 border-blue-200 hover:bg-blue-50"
+                                >
+                                  <Upload className="h-3.5 w-3.5 mr-1" />
+                                  Agregar documento
+                                </Button>
+                              )}
+                            </div>
+                            {stageDocuments.length === 0 && !viewAllStages && (
+                              <p className="text-xs text-gray-400 italic mb-3">Sin documentos en esta etapa</p>
+                            )}
                             <div className="space-y-3">
                               {stageDocuments.map((doc) => {
                                 const docName = getText(doc.name || doc.documentType || doc.documentName, 'Documento').toLowerCase();
@@ -3398,31 +3894,62 @@ export const VisaCaseDetailRedesign = () => {
                                     {/* Files list */}
                                     {docFiles.length > 0 && (
                                       <div className="space-y-2 mt-3">
-                                        {docFiles.map((file, index) => (
-                                          <div 
+                                        {docFiles.map((file, index) => {
+                                          const docUploadedAtRaw = file.uploadedAt || file.uploaded_at || doc.uploadedAt || doc.uploaded_at || doc.updatedAt || doc.updated_at || doc.createdAt || doc.created_at;
+                                          const docUploadedAtLabel = formatUploadedAt(docUploadedAtRaw);
+                                          const docUploaderName = file.uploadedByName || resolveDocUploaderName(doc);
+                                          return (
+                                          <div
                                             key={file.id || index}
-                                            className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200"
+                                            className="bg-gray-50 rounded-lg px-3 py-2 border border-gray-200"
                                           >
-                                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                                              <FileText className="h-4 w-4 text-gray-500 flex-shrink-0" />
-                                              <span className="text-sm text-gray-700 truncate">
-                                                {file.fileName || `Archivo ${index + 1}`}
-                                              </span>
+                                            <div className="flex items-center justify-between gap-2">
+                                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                <FileText className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                                                <span className="text-sm text-gray-700 truncate">
+                                                  {file.fileName || `Archivo ${index + 1}`}
+                                                </span>
+                                              </div>
+                                              <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => window.open(file.fileUrl, '_blank')}
+                                                className="h-8 px-3 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                                              >
+                                                <Download className="h-4 w-4 mr-1" />
+                                                Ver
+                                              </Button>
                                             </div>
-                                            <Button
-                                              size="sm"
-                                              variant="ghost"
-                                              onClick={() => window.open(file.fileUrl, '_blank')}
-                                              className="h-8 px-3 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                            >
-                                              <Download className="h-4 w-4 mr-1" />
-                                              Ver
-                                            </Button>
+                                            {(docUploadedAtLabel || docUploaderName) && (
+                                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500">
+                                                {docUploadedAtLabel && (
+                                                  <span className="flex items-center gap-1">
+                                                    <Clock className="h-3 w-3" />
+                                                    {docUploadedAtLabel}
+                                                  </span>
+                                                )}
+                                                {docUploaderName && (
+                                                  <span className="flex items-center gap-1">
+                                                    <User className="h-3 w-3" />
+                                                    {docUploaderName}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            )}
                                           </div>
-                                        ))}
+                                          );
+                                        })}
                                       </div>
                                     )}
-                                    
+
+                                    {/* Document notes thread (staff) */}
+                                    {renderNotesThread({
+                                      threadKey: `stage-doc-${doc.id || doc._id}`,
+                                      notes: doc.notes,
+                                      onAdd: () => handleOpenDocNoteEditor(doc),
+                                      onDelete: (noteId) => handleDeleteDocNote(doc.id || doc._id, noteId),
+                                    })}
+
                                     {/* Text value if document is text type */}
                                     {doc.type === 'text' && doc.textValue && (
                                       <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
@@ -3472,142 +3999,180 @@ export const VisaCaseDetailRedesign = () => {
           </TabsContent>
 
           {/* DOCUMENTS TAB */}
-          <TabsContent value="documents" className="space-y-4">
+          <TabsContent value="documents" className="space-y-3">
             <Card className="bg-white border-gray-200 shadow-sm">
-              <CardContent className="p-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Todos los Documentos del Cliente</h3>
-                
-                {documents.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <FileText className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                    <p>No hay documentos aún</p>
-                  </div>
+              <CardContent className="p-4">
+                {stages.length === 0 || (deliverables.length === 0 && documents.length === 0) ? (
+                  <div className="text-center py-6 text-gray-500 text-sm">No hay documentos aún</div>
                 ) : (
-                  <div className="space-y-4">
-                    {documents.map((doc) => {
-                      const allDocName = getText(doc.name || doc.documentType || doc.documentName, 'Documento').toLowerCase();
-                      const isAllDocHojaDeVida = allDocName.includes('hoja de vida') || allDocName.includes('curriculum') || allDocName.includes('resume');
-                      const cvForAllDoc = isAllDocHojaDeVida && userCvs.length > 0 ? userCvs[0] : null;
-                      
-                      const effectiveAllStatus = (isAllDocHojaDeVida && cvForAllDoc && doc.status === 'pending') ? 'uploaded' : doc.status;
-                      const docStatus = DOCUMENT_STATUS_CONFIG[effectiveAllStatus] || DOCUMENT_STATUS_CONFIG['pending'];
-                      // Get files array with backward compatibility
-                      const docFiles = doc.files?.length > 0 
-                        ? doc.files 
-                        : doc.fileUrl 
-                          ? [{ id: 'legacy', fileName: doc.fileName || 'Archivo', fileUrl: doc.fileUrl }]
-                          : isAllDocHojaDeVida && cvForAllDoc
-                            ? [{ id: 'cv-auto', fileName: cvForAllDoc.fileName || 'Hoja de vida', fileUrl: cvForAllDoc.url }]
-                            : [];
-                      
-                      return (
-                        <div 
-                          key={doc.id}
-                          className="border border-gray-200 rounded-xl p-4 bg-white hover:shadow-md transition-shadow"
+                  <>
+                    {/* Selection toolbar */}
+                    <div className="flex items-center justify-between gap-2 mb-3 pb-2 border-b border-gray-200">
+                      <div className="text-xs text-gray-600">
+                        {Object.keys(zipSelection).length === 0
+                          ? 'Selecciona archivos para descargarlos en un ZIP'
+                          : `${Object.keys(zipSelection).length} archivo(s) seleccionado(s)`}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setBulkSelection(collectAllDownloadable(), true)}
+                          className="h-7 px-2 text-xs"
                         >
-                          {/* Document Header */}
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-                            <div className="flex items-center gap-3">
-                              <div className={`p-2 rounded-lg ${docStatus.color}`}>
-                                <docStatus.icon className="h-5 w-5" />
-                              </div>
-                              <div>
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <p className="font-medium text-gray-900">
-                                    {getText(doc.name || doc.documentType || doc.documentName, 'Documento')}
-                                  </p>
-                                  {docFiles.length > 1 && (
-                                    <Badge className="bg-blue-100 text-blue-700">
-                                      {docFiles.length} archivo(s)
-                                    </Badge>
-                                  )}
-                                </div>
-                                <p className="text-sm text-gray-500">
-                                  Etapa {doc.stageNumber} • {docStatus.label}
-                                </p>
-                                {doc.requiresPhysicalCopy && (
-                                  <p className="text-xs text-orange-600 mt-1">
-                                    📮 Requiere envío físico por correo
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                            
-                            {/* Action Buttons */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {doc.status === 'uploaded' && (
-                                <>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleValidateDocument(doc.id)}
-                                    disabled={validatingDocId === doc.id}
-                                    className="bg-emerald-500 hover:bg-emerald-600 text-white"
-                                  >
-                                    {validatingDocId === doc.id ? (
-                                      <Loader2 className="h-4 w-4 animate-spin" />
-                                    ) : (
-                                      <>
-                                        <CheckCircle className="h-4 w-4 mr-1" />
-                                        Validar
-                                      </>
-                                    )}
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => {
-                                      setDocumentToReject(doc);
-                                      setRejectModalOpen(true);
-                                    }}
-                                    className="bg-red-100 text-red-700 hover:bg-red-200"
-                                  >
-                                    <XCircle className="h-4 w-4 mr-1" />
-                                    Rechazar
-                                  </Button>
-                                </>
+                          Seleccionar todo
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setZipSelection({})}
+                          disabled={Object.keys(zipSelection).length === 0}
+                          className="h-7 px-2 text-xs"
+                        >
+                          Limpiar
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={handleDownloadZip}
+                          disabled={downloadingZip || Object.keys(zipSelection).length === 0}
+                          className="h-7 px-3 text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                        >
+                          {downloadingZip ? (
+                            <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Generando...</>
+                          ) : (
+                            <><Download className="h-3 w-3 mr-1" />Descargar ZIP ({Object.keys(zipSelection).length})</>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-5">
+                    {stages.map((stage) => {
+                      const stageDels = deliverables.filter((d) => d.stageNumber === stage.stageNumber);
+                      const stageDocs = documents.filter((d) => d.stageNumber === stage.stageNumber);
+                      if (stageDels.length === 0 && stageDocs.length === 0) return null;
+
+                      const renderItemRow = (item, kind) => {
+                        const dName = kind === 'doc'
+                          ? getText(item.name || item.documentType || item.documentName, 'Documento')
+                          : getText(item.name, 'Entregable');
+                        let files = [];
+                        let statusLabel = '';
+                        if (kind === 'del') {
+                          files = item.files?.length > 0
+                            ? item.files
+                            : item.fileUrl
+                              ? [{ id: 'legacy', fileName: item.fileName || 'Archivo', fileUrl: item.fileUrl }]
+                              : [];
+                        } else {
+                          const isHV = dName.toLowerCase().includes('hoja de vida') || dName.toLowerCase().includes('curriculum');
+                          const cvAuto = isHV && userCvs.length > 0 ? userCvs[0] : null;
+                          const effStatus = (isHV && cvAuto && item.status === 'pending') ? 'uploaded' : item.status;
+                          files = item.files?.length > 0
+                            ? item.files
+                            : item.fileUrl
+                              ? [{ id: 'legacy', fileName: item.fileName || 'Archivo', fileUrl: item.fileUrl }]
+                              : isHV && cvAuto
+                                ? [{ id: 'cv-auto', fileName: cvAuto.fileName || 'Hoja de vida', fileUrl: cvAuto.url }]
+                                : [];
+                          statusLabel = (DOCUMENT_STATUS_CONFIG[effStatus] || DOCUMENT_STATUS_CONFIG.pending).label;
+                        }
+                        const itemType = kind === 'del' ? 'deliverable' : 'document';
+                        const itemId = item.id || item._id;
+                        const downloadableFiles = files.filter((f) => !!f.fileUrl);
+                        const allFileKeys = downloadableFiles.map((f) => selectionKey(itemType, itemId, f.id || 'legacy'));
+                        const allSelected = allFileKeys.length > 0 && allFileKeys.every((k) => zipSelection[k]);
+                        const someSelected = allFileKeys.some((k) => zipSelection[k]) && !allSelected;
+                        const handleParentToggle = () => {
+                          const entries = downloadableFiles.map((f) => ({ type: itemType, itemId, fileId: f.id || 'legacy' }));
+                          setBulkSelection(entries, !allSelected);
+                        };
+                        return (
+                          <div key={`${kind}-${itemId}`} className="py-1.5">
+                            <div className="flex items-baseline gap-2">
+                              {downloadableFiles.length > 0 && (
+                                <input
+                                  type="checkbox"
+                                  checked={allSelected}
+                                  ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                                  onChange={handleParentToggle}
+                                  className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                />
                               )}
+                              <p className="text-sm text-gray-900 truncate flex-1 min-w-0">{dName}</p>
+                              <p className="text-[11px] text-gray-400 whitespace-nowrap">
+                                {kind === 'doc' && statusLabel}
+                                {files.length === 0 && (kind === 'del' ? ' · sin archivos' : '')}
+                              </p>
                             </div>
+                            {files.length > 0 && (
+                              <ul className="mt-1 ml-6 space-y-0.5">
+                                {files.map((file, idx) => {
+                                  const fileId = file.id || 'legacy';
+                                  const at = file.uploadedAt && formatUploadedAt(file.uploadedAt);
+                                  const key = selectionKey(itemType, itemId, fileId);
+                                  return (
+                                    <li key={fileId || idx} className="flex items-center gap-2 text-xs text-gray-600">
+                                      {file.fileUrl ? (
+                                        <input
+                                          type="checkbox"
+                                          checked={!!zipSelection[key]}
+                                          onChange={() => toggleSelection(itemType, itemId, fileId)}
+                                          className="h-3 w-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                      ) : (
+                                        <span className="w-3" />
+                                      )}
+                                      <FileText className="h-3 w-3 text-gray-400 flex-shrink-0" />
+                                      <span className="truncate flex-1 min-w-0">{file.fileName || `Archivo ${idx + 1}`}</span>
+                                      {at && <span className="text-[11px] text-gray-400 whitespace-nowrap">{at}</span>}
+                                      {file.fileUrl && (
+                                        <button
+                                          type="button"
+                                          onClick={() => window.open(file.fileUrl, '_blank')}
+                                          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 flex-shrink-0"
+                                          title="Descargar"
+                                        >
+                                          <Download className="h-3.5 w-3.5" />
+                                        </button>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
                           </div>
-                          
-                          {/* Files List */}
-                          {docFiles.length > 0 && (
-                            <div className="mt-3 space-y-2 border-t border-gray-100 pt-3">
-                              <p className="text-xs text-gray-500 font-medium mb-2">Archivos subidos:</p>
-                              {docFiles.map((file, index) => (
-                                <div 
-                                  key={file.id || index}
-                                  className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2 border border-gray-200"
-                                >
-                                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                                    <FileText className="h-4 w-4 text-gray-500 flex-shrink-0" />
-                                    <span className="text-sm text-gray-700 truncate">
-                                      {file.fileName || `Archivo ${index + 1}`}
-                                    </span>
-                                  </div>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => window.open(file.fileUrl, '_blank')}
-                                    className="h-8 px-3 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                                  >
-                                    <Download className="h-4 w-4 mr-1" />
-                                    Descargar
-                                  </Button>
-                                </div>
-                              ))}
+                        );
+                      };
+
+                      return (
+                        <div key={stage.id || stage.stageNumber}>
+                          <div className="flex items-baseline gap-2 mb-2 pb-1 border-b border-gray-200">
+                            <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">Etapa {stage.stageNumber}</span>
+                            <h3 className="text-sm font-semibold text-gray-900 truncate">{getText(stage.name, `Etapa ${stage.stageNumber}`)}</h3>
+                          </div>
+
+                          {stageDels.length > 0 && (
+                            <div className="mb-2">
+                              <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium mb-1">Entregables</p>
+                              <div className="divide-y divide-gray-100">
+                                {stageDels.map((d) => renderItemRow(d, 'del'))}
+                              </div>
                             </div>
                           )}
-                          
-                          {/* Text value if document is text type */}
-                          {doc.type === 'text' && doc.textValue && (
-                            <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-                              <p className="text-xs text-gray-500 mb-1 font-medium">Información enviada:</p>
-                              <p className="text-sm text-gray-900 whitespace-pre-wrap">{doc.textValue}</p>
+
+                          {stageDocs.length > 0 && (
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wide text-gray-400 font-medium mb-1">Documentos requeridos</p>
+                              <div className="divide-y divide-gray-100">
+                                {stageDocs.map((d) => renderItemRow(d, 'doc'))}
+                              </div>
                             </div>
                           )}
                         </div>
                       );
                     })}
-                  </div>
+                    </div>
+                  </>
                 )}
               </CardContent>
             </Card>
@@ -3966,6 +4531,258 @@ export const VisaCaseDetailRedesign = () => {
             >
               <Trash2 className="h-4 w-4 mr-1" />
               Eliminar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add File Note Modal */}
+      <Dialog open={!!editingFileNote} onOpenChange={(open) => { if (!open) handleCloseFileNoteEditor(); }}>
+        <DialogContent className="bg-white border-gray-200 sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Agregar nota</DialogTitle>
+            <DialogDescription>
+              {editingFileNote?.fileLabel ? `Archivo: ${editingFileNote.fileLabel}` : 'Agrega una nota al archivo.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <Textarea
+              value={fileNoteDraft}
+              onChange={(e) => setFileNoteDraft(e.target.value)}
+              placeholder="Escribe una nota sobre este archivo..."
+              rows={5}
+              className="resize-none"
+            />
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div>
+                <p className="text-sm font-semibold text-blue-900">Cliente puede ver esta nota</p>
+                <p className="text-xs text-blue-600">Si esta apagado, solo el equipo interno la vera.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={fileNoteVisibleDraft}
+                onClick={() => setFileNoteVisibleDraft(!fileNoteVisibleDraft)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                  fileNoteVisibleDraft ? 'bg-blue-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    fileNoteVisibleDraft ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={handleCloseFileNoteEditor} disabled={savingFileNote}>Cancelar</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={handleSaveFileNote}
+              disabled={savingFileNote}
+            >
+              {savingFileNote ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Guardando...</>
+              ) : (
+                'Agregar nota'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Deliverable Modal */}
+      <Dialog open={!!addingDeliverable} onOpenChange={(open) => { if (!open) handleCloseAddDeliverable(); }}>
+        <DialogContent className="bg-white border-gray-200 sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Agregar entregable</DialogTitle>
+            <DialogDescription>
+              {addingDeliverable?.stageLabel ? `Etapa: ${addingDeliverable.stageLabel}` : 'Crea un entregable para este cliente.'} Solo se agregará a este caso.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label htmlFor="new-del-name">Nombre *</Label>
+              <Input
+                id="new-del-name"
+                value={newDeliverableName}
+                onChange={(e) => setNewDeliverableName(e.target.value)}
+                placeholder="Ej: Carta de recomendación"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="new-del-desc">Descripción</Label>
+              <Textarea
+                id="new-del-desc"
+                value={newDeliverableDescription}
+                onChange={(e) => setNewDeliverableDescription(e.target.value)}
+                placeholder="Descripción opcional del entregable..."
+                rows={3}
+                className="mt-1 resize-none"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={handleCloseAddDeliverable} disabled={savingNewDeliverable}>Cancelar</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={handleSaveNewDeliverable}
+              disabled={savingNewDeliverable}
+            >
+              {savingNewDeliverable ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Guardando...</>
+              ) : (
+                'Crear entregable'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Client Document Modal */}
+      <Dialog open={!!addingDocument} onOpenChange={(open) => { if (!open) handleCloseAddDocument(); }}>
+        <DialogContent className="bg-white border-gray-200 sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Agregar documento</DialogTitle>
+            <DialogDescription>
+              {addingDocument?.stageLabel ? `Etapa: ${addingDocument.stageLabel}` : 'Solicita un documento al cliente.'} Solo se agregará a este caso.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <Label htmlFor="new-doc-name">Nombre *</Label>
+              <Input
+                id="new-doc-name"
+                value={newDocumentName}
+                onChange={(e) => setNewDocumentName(e.target.value)}
+                placeholder="Ej: Pasaporte vigente"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="new-doc-desc">Descripción</Label>
+              <Textarea
+                id="new-doc-desc"
+                value={newDocumentDescription}
+                onChange={(e) => setNewDocumentDescription(e.target.value)}
+                placeholder="Descripción opcional del documento..."
+                rows={3}
+                className="mt-1 resize-none"
+              />
+            </div>
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div>
+                <p className="text-sm font-semibold text-blue-900">Documento requerido</p>
+                <p className="text-xs text-blue-600">El cliente debe subirlo para avanzar.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={newDocumentRequired}
+                onClick={() => setNewDocumentRequired(!newDocumentRequired)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                  newDocumentRequired ? 'bg-blue-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    newDocumentRequired ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+            <div className="flex items-center justify-between bg-orange-50 border border-orange-200 rounded-lg p-3">
+              <div>
+                <p className="text-sm font-semibold text-orange-900">Requiere copia física</p>
+                <p className="text-xs text-orange-600">El cliente debe enviar el original por correo.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={newDocumentPhysical}
+                onClick={() => setNewDocumentPhysical(!newDocumentPhysical)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 ${
+                  newDocumentPhysical ? 'bg-orange-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    newDocumentPhysical ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={handleCloseAddDocument} disabled={savingNewDocument}>Cancelar</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={handleSaveNewDocument}
+              disabled={savingNewDocument}
+            >
+              {savingNewDocument ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Guardando...</>
+              ) : (
+                'Crear documento'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Client Document Note Modal */}
+      <Dialog open={!!editingDocNote} onOpenChange={(open) => { if (!open) handleCloseDocNoteEditor(); }}>
+        <DialogContent className="bg-white border-gray-200 sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900">Agregar nota</DialogTitle>
+            <DialogDescription>
+              {editingDocNote?.documentLabel ? `Documento: ${editingDocNote.documentLabel}` : 'Agrega una nota interna o visible al cliente.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <Textarea
+              value={docNoteDraft}
+              onChange={(e) => setDocNoteDraft(e.target.value)}
+              placeholder="Escribe una nota sobre este documento..."
+              rows={5}
+              className="resize-none"
+            />
+            <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div>
+                <p className="text-sm font-semibold text-blue-900">Cliente puede ver esta nota</p>
+                <p className="text-xs text-blue-600">Si esta apagado, solo el equipo interno la vera.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={docNoteVisibleDraft}
+                onClick={() => setDocNoteVisibleDraft(!docNoteVisibleDraft)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                  docNoteVisibleDraft ? 'bg-blue-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    docNoteVisibleDraft ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={handleCloseDocNoteEditor} disabled={savingDocNote}>Cancelar</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={handleSaveDocNote}
+              disabled={savingDocNote}
+            >
+              {savingDocNote ? (
+                <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Guardando...</>
+              ) : (
+                'Agregar nota'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

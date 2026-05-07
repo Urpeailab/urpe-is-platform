@@ -92,6 +92,80 @@ def generate_mock_file_url(filename: str) -> str:
     """Generate a mock file URL for demo mode"""
     return f"https://demo-storage.urpe.com/documents/{uuid.uuid4()}/{filename}"
 
+
+def _filter_visible_notes_thread(thread, legacy_text=None, legacy_visible=False, legacy_at=None):
+    """Return only the notes marked visible to the client, falling back to a
+    synthetic legacy entry when there is no thread but a single legacy note."""
+    safe = list(thread) if isinstance(thread, list) else []
+    if not safe and isinstance(legacy_text, str) and legacy_text.strip():
+        safe = [{
+            'id': 'legacy',
+            'text': legacy_text,
+            'visibleToClient': bool(legacy_visible),
+            'createdAt': legacy_at,
+        }]
+    return [
+        {'id': n.get('id'), 'text': n.get('text'), 'createdAt': n.get('createdAt')}
+        for n in safe
+        if isinstance(n, dict) and n.get('visibleToClient')
+    ]
+
+
+def _sanitize_client_documents(documents):
+    """In-place: keep only client-visible notes and strip staff-private fields."""
+    for doc in documents or []:
+        if not isinstance(doc, dict):
+            continue
+        doc['notes'] = _filter_visible_notes_thread(
+            doc.get('notes'),
+            legacy_text=doc.get('note'),
+            legacy_visible=doc.get('noteVisibleToClient'),
+            legacy_at=doc.get('noteUpdatedAt') or doc.get('updatedAt'),
+        )
+        if not doc.get('noteVisibleToClient'):
+            doc.pop('note', None)
+        for k in ('noteVisibleToClient', 'noteUpdatedBy', 'noteUpdatedAt'):
+            doc.pop(k, None)
+
+
+def _sanitize_client_deliverables(deliverables):
+    """In-place: keep only client-visible note entries inside each file and
+    strip staff-private fields. Also normalizes the file-level files array."""
+    for d in deliverables or []:
+        if not isinstance(d, dict):
+            continue
+        files = d.get('files') or []
+        file_url = d.get('file_url') or d.get('fileUrl')
+        has_files = len(files) > 0 or (file_url and isinstance(file_url, str) and file_url.strip())
+        if not has_files:
+            d['files'] = []
+            d['fileName'] = None
+            d['fileUrl'] = None
+            if d.get('status') not in ('pending',):
+                d['status'] = 'pending'
+            continue
+
+        sanitized_files = []
+        for f in files:
+            if not isinstance(f, dict):
+                sanitized_files.append(f)
+                continue
+            clean = dict(f)
+            clean['noteEntries'] = _filter_visible_notes_thread(
+                clean.get('noteEntries'),
+                legacy_text=clean.get('note') or clean.get('notes'),
+                legacy_visible=clean.get('noteVisibleToClient'),
+                legacy_at=clean.get('noteUpdatedAt') or clean.get('uploadedAt'),
+            )
+            if not clean.get('noteVisibleToClient'):
+                clean.pop('note', None)
+                clean.pop('notes', None)
+            for k in ('uploadedBy', 'uploadedByName', 'noteUpdatedBy',
+                      'noteUpdatedAt', 'noteVisibleToClient', 'clientNotified'):
+                clean.pop(k, None)
+            sanitized_files.append(clean)
+        d['files'] = sanitized_files
+
 # =============================================================================
 # CLIENT ENDPOINTS
 # =============================================================================
@@ -132,6 +206,9 @@ def setup_client_endpoints(db, verify_token):
             deliverables = sb_select("visa_deliverables", filters={"case_id": case_id}, limit=200)
             documents = sb_select("visa_documents", filters={"case_id": case_id}, limit=200)
             payments = sb_select("payments", filters={"case_id": case_id}, order="created_at", order_desc=True)
+
+            _sanitize_client_documents(documents)
+            _sanitize_client_deliverables(deliverables)
 
             # Process payments
             for p in payments:
@@ -223,18 +300,7 @@ def setup_client_endpoints(db, verify_token):
                 filters["stage_number"] = stage
 
             deliverables = sb_select("visa_deliverables", filters=filters, order="stage_number", order_desc=False, limit=200)
-
-            # Sanitize: ensure file data consistency
-            for d in deliverables:
-                files = d.get('files') or []
-                file_url = d.get('file_url') or d.get('fileUrl')
-                has_files = len(files) > 0 or (file_url and file_url.strip())
-                if not has_files:
-                    d['files'] = []
-                    d['fileName'] = None
-                    d['fileUrl'] = None
-                    if d.get('status') not in ('pending',):
-                        d['status'] = 'pending'
+            _sanitize_client_deliverables(deliverables)
 
             return {
                 'success': True,
@@ -261,6 +327,7 @@ def setup_client_endpoints(db, verify_token):
                 raise HTTPException(status_code=404, detail="No active visa case found")
 
             documents = sb_select("visa_documents", filters={"case_id": case['id']}, limit=200)
+            _sanitize_client_documents(documents)
 
             grouped = {'pending': [], 'uploaded': [], 'validated': [], 'rejected': []}
             for doc in documents:

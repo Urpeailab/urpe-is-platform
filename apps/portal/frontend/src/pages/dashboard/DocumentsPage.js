@@ -776,6 +776,23 @@ export const DocumentsPage = () => {
                         </div>
                       )}
 
+                      {(doc.notes && doc.notes.length > 0
+                        ? doc.notes
+                        : doc.note
+                          ? [{ id: 'legacy', text: doc.note, createdAt: null }]
+                          : []
+                      ).map((noteEntry) => (
+                        <div key={noteEntry.id} className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <p className="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">Nota del equipo</p>
+                            {noteEntry.createdAt && (
+                              <p className="text-[10px] text-amber-700">{new Date(noteEntry.createdAt).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                            )}
+                          </div>
+                          <p className="text-sm text-amber-900 whitespace-pre-wrap">{noteEntry.text}</p>
+                        </div>
+                      ))}
+
                       {doc.status === 'uploaded' && doc.uploadedAt && (
                         <p className="text-xs text-slate-light mt-2">
                           Subido el {new Date(doc.uploadedAt).toLocaleDateString('es-ES')}

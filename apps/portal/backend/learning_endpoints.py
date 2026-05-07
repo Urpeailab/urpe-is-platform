@@ -23,7 +23,9 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import Optional, List
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
+from fastapi.responses import StreamingResponse
+import json as _json
 
 from db.supabase_client import (
     get_supabase,
@@ -43,6 +45,7 @@ from learning.extract import extract_text
 from learning.retriever import retrieve, format_context
 from learning.llm import (
     chat,
+    chat_stream,
     chat_json,
     build_module_system_prompt,
     build_rag_user_message,
@@ -85,6 +88,10 @@ class SessionStart(BaseModel):
 
 class SessionMessage(BaseModel):
     text: str
+    # Opcional: el cliente puede mandar el historial reciente para que el backend
+    # no tenga que consultar la BD. Ahorra ~150-300ms por turno. Se ignora en
+    # endpoints que no lo soportan (transcribe, test-retrieval).
+    recent_messages: Optional[List[dict]] = None
 
 
 # ===================== Helpers =====================
@@ -764,6 +771,178 @@ def setup_learning_router(db, verify_staff_token):
         except Exception as e:
             logger.exception("[learning] send_message unexpected error")
             raise HTTPException(status_code=500, detail=f"Unexpected: {type(e).__name__}: {e}")
+
+    @router.post("/learning/sessions/{session_id}/message_stream")
+    async def send_message_stream(
+        session_id: str,
+        request: SessionMessage,
+        background_tasks: BackgroundTasks,
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """Versión streaming de send_message: emite SSE para que el frontend
+        empiece a reproducir TTS oración por oración antes de que el LLM
+        termine de generar. Reduce latencia perceptual de ~3s a ~600ms."""
+        _require_role_perm(staff_payload, "consume_learning")
+
+        session = select("learning_sessions", filters={"id": session_id}, single=True)
+        if not session:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        if session.get("staff_id") != staff_payload.get("id"):
+            raise HTTPException(status_code=403, detail="No es tu sesión")
+        if session.get("status") != "active":
+            raise HTTPException(status_code=400, detail="Sesión no activa")
+
+        user_text = (request.text or "").strip()
+        if not user_text:
+            raise HTTPException(status_code=400, detail="Mensaje vacío")
+
+        # Diferimos el insert del mensaje del usuario para que NO bloquee el
+        # stream. BackgroundTasks corre después de que termine la respuesta;
+        # como ya tenemos user_text en memoria, no necesitamos esperar a que
+        # esté en la BD para usarlo en el LLM.
+        background_tasks.add_task(
+            insert,
+            "learning_messages",
+            {"session_id": session_id, "role": "user", "content": user_text},
+        )
+
+        module_id = session.get("module_id")
+        conversational = is_conversational_message(user_text)
+        logger.info(
+            f"[learning.intent] session={session_id} conversational={conversational} "
+            f"text={user_text[:80]!r}"
+        )
+
+        chunks = []
+        context = ""
+        retrieval_failed = False
+        if not conversational:
+            try:
+                chunks = retrieve(user_text, module_id=module_id)
+                context = format_context(chunks)
+            except Exception:
+                logger.exception("[learning] RAG retrieval failed")
+                retrieval_failed = True
+
+        # Pre-armar la respuesta canned para casos sin RAG
+        canned_text = None
+        if not conversational and not chunks and not retrieval_failed:
+            canned_text = (
+                "No encontré información sobre eso en la base de conocimiento. "
+                "Te recomiendo consultarlo con tu líder."
+            )
+
+        # Construcción del system prompt — cargamos el módulo una sola vez
+        # y lo reusamos para system prompt + selección de modelo.
+        mod = None
+        if module_id:
+            try:
+                mod = select("learning_modules", filters={"id": module_id}, single=True)
+            except Exception:
+                mod = None
+
+        if conversational:
+            system_content = build_conversational_system_prompt()
+        else:
+            system_content = build_module_system_prompt(mod or {})
+
+        # Recent messages: si el cliente nos los manda evitamos el query a BD
+        # (ahorra ~150-300ms). Si no, fallback al query.
+        if request.recent_messages:
+            client_recent = [
+                m for m in request.recent_messages
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
+            ][-9:]
+            recent = client_recent + [{"role": "user", "content": user_text}]
+        else:
+            try:
+                messages_db = select(
+                    "learning_messages",
+                    filters={"session_id": session_id},
+                    order="created_at",
+                    order_desc=False,
+                )
+            except Exception as e:
+                logger.exception("[learning] select messages failed")
+                raise HTTPException(status_code=500, detail=f"DB select messages: {e}")
+            db_recent = [m for m in messages_db if m.get("role") in ("user", "assistant")][-9:]
+            recent = db_recent + [{"role": "user", "content": user_text}]
+
+        llm_messages = [{"role": "system", "content": system_content}]
+        for i, m in enumerate(recent):
+            if i == len(recent) - 1 and m.get("role") == "user" and not conversational:
+                llm_messages.append(
+                    {"role": "user", "content": build_rag_user_message(m["content"], context)}
+                )
+            else:
+                llm_messages.append({"role": m["role"], "content": m["content"]})
+
+        model = (mod or {}).get("llm_model") if mod else None
+
+        retrieved_chunks_payload = [
+            {
+                "id": c.get("id"),
+                "content": (c.get("content") or "")[:300],
+                "similarity": c.get("similarity"),
+                "source": (c.get("metadata") or {}).get("source_filename"),
+            }
+            for c in chunks
+        ]
+        chunk_ids = [c.get("id") for c in chunks]
+
+        def event_stream():
+            def fmt(event: dict) -> str:
+                return f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+
+            # Evento meta: el frontend ya puede mostrar fuentes RAG
+            yield fmt({
+                "type": "meta",
+                "rag_skipped": conversational,
+                "retrieved_chunks": retrieved_chunks_payload,
+            })
+
+            full_text = ""
+
+            if canned_text is not None:
+                # Cortocircuito: no llamamos al LLM, mandamos el canned como un solo bloque
+                full_text = canned_text
+                yield fmt({"type": "token", "text": canned_text})
+            else:
+                try:
+                    for delta in chat_stream(llm_messages, model=model):
+                        full_text += delta
+                        yield fmt({"type": "token", "text": delta})
+                except Exception as e:
+                    logger.exception("[learning] LLM stream failed")
+                    yield fmt({"type": "error", "detail": f"Error del modelo: {e}"})
+                    return
+
+            # Mandamos 'done' ANTES de insertar — el cliente ya tiene la
+            # respuesta completa, no tiene que esperar a la BD.
+            yield fmt({"type": "done", "text": full_text})
+
+            # Persistir respuesta (no bloqueante para el usuario, ya recibió 'done')
+            try:
+                insert(
+                    "learning_messages",
+                    {
+                        "session_id": session_id,
+                        "role": "assistant",
+                        "content": full_text,
+                        "retrieved_chunk_ids": chunk_ids,
+                    },
+                )
+            except Exception:
+                logger.exception("[learning] insert assistant message failed")
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",  # desactiva buffering en nginx si lo hay
+            },
+        )
 
     @router.post("/learning/sessions/{session_id}/transcribe")
     async def transcribe_session_audio(

@@ -8313,11 +8313,75 @@ async def get_visa_case_detail(
             deliverables_filters["stage_number"] = acred_stage
         deliverables = select("visa_deliverables", filters=deliverables_filters, limit=100)
 
+        # Enrich each file inside each deliverable with the uploader's display name
+        _staff_name_cache: dict[str, str] = {}
+        def _resolve_staff_name(uploader_id):
+            if not uploader_id:
+                return None
+            if uploader_id in _staff_name_cache:
+                return _staff_name_cache[uploader_id]
+            staff_row = select("staff", filters={"id": uploader_id}, single=True)
+            name = (staff_row or {}).get('name') if staff_row else None
+            _staff_name_cache[uploader_id] = name
+            return name
+
+        for _del in deliverables:
+            _files = _del.get('files') or []
+            _del_fallback_at = (
+                _del.get('uploadedAt')
+                or _del.get('updatedAt')
+                or _del.get('createdAt')
+            )
+            for _f in _files:
+                if not isinstance(_f, dict):
+                    continue
+                if _f.get('uploadedBy') and not _f.get('uploadedByName'):
+                    _f['uploadedByName'] = _resolve_staff_name(_f.get('uploadedBy'))
+                if not _f.get('uploadedAt') and _del_fallback_at:
+                    _f['uploadedAt'] = _del_fallback_at
+                # Materialize legacy single note as the first entry of the thread
+                # and backfill author display names.
+                _f['noteEntries'] = _normalize_file_notes(_f)
+                for _n in _f['noteEntries']:
+                    if isinstance(_n, dict) and _n.get('createdBy') and not _n.get('createdByName'):
+                        _n['createdByName'] = _resolve_staff_name(_n.get('createdBy'))
+
         # Obtener documentos del cliente
         documents_filters = {"case_id": case_id}
         if user_role == 'acreditador' and acred_stage:
             documents_filters["stage_number"] = acred_stage
         documents = select("visa_documents", filters=documents_filters, limit=100)
+
+        # Resolve client name once for documents the client uploaded
+        _client_uploader_name = None
+        _client_user_id_for_docs = case.get('client_id') or case.get('userId')
+        if _client_user_id_for_docs:
+            _client_user_row = select("users", filters={"id": _client_user_id_for_docs}, single=True)
+            if _client_user_row:
+                _client_uploader_name = _client_user_row.get('name')
+
+        for _doc in documents:
+            _doc_fallback_at = (
+                _doc.get('uploadedAt')
+                or _doc.get('updatedAt')
+                or _doc.get('createdAt')
+            )
+            if _client_uploader_name and not _doc.get('uploadedByName'):
+                _doc['uploadedByName'] = _client_uploader_name
+            _doc_files = _doc.get('files') or []
+            for _df in _doc_files:
+                if not isinstance(_df, dict):
+                    continue
+                if _client_uploader_name and not _df.get('uploadedByName'):
+                    _df['uploadedByName'] = _client_uploader_name
+                if not _df.get('uploadedAt') and _doc_fallback_at:
+                    _df['uploadedAt'] = _doc_fallback_at
+            # Materialize legacy single note as the first thread entry and
+            # backfill author display names for all entries.
+            _doc['notes'] = _normalize_doc_notes(_doc)
+            for _n in _doc['notes']:
+                if isinstance(_n, dict) and _n.get('createdBy') and not _n.get('createdByName'):
+                    _n['createdByName'] = _resolve_staff_name(_n.get('createdBy'))
 
         # Obtener pagos
         payments = select("payments", filters={"case_id": case_id}, limit=10)
@@ -8676,7 +8740,28 @@ class DeliverableUploadRequest(BaseModel):
     fileUrl: str
     fileSize: Optional[int] = None
     notes: Optional[str] = None
+    noteVisibleToClient: Optional[bool] = False
     notifyClient: Optional[bool] = True
+
+
+class DeliverableFileNoteUpdateRequest(BaseModel):
+    note: Optional[str] = None
+    noteVisibleToClient: Optional[bool] = False
+
+
+class ClientDocumentNoteUpdateRequest(BaseModel):
+    note: Optional[str] = None
+    noteVisibleToClient: Optional[bool] = False
+
+
+class DeliverableFileNoteAddRequest(BaseModel):
+    text: str
+    visibleToClient: Optional[bool] = False
+
+
+class ClientDocumentNoteAddRequest(BaseModel):
+    text: str
+    visibleToClient: Optional[bool] = False
 
 @api_router.delete("/admin/deliverables/{deliverable_id}")
 async def delete_deliverable(
@@ -8839,6 +8924,167 @@ async def delete_single_deliverable_file(
     except Exception as e:
         logger.error(f"Delete single deliverable file error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+
+
+def _normalize_file_notes(file_obj: dict) -> list:
+    """Return the notes thread for a deliverable file, materializing the legacy
+    single-note fields as the first entry when the new array is empty."""
+    notes = file_obj.get('noteEntries') or []
+    if not isinstance(notes, list):
+        notes = []
+    legacy_text = (file_obj.get('note') or file_obj.get('notes') or '')
+    if isinstance(legacy_text, list):
+        legacy_text = ''
+    legacy_text = (legacy_text or '').strip() if isinstance(legacy_text, str) else ''
+    if not notes and legacy_text:
+        notes = [{
+            'id': 'legacy',
+            'text': legacy_text,
+            'visibleToClient': bool(file_obj.get('noteVisibleToClient')),
+            'createdAt': file_obj.get('noteUpdatedAt') or file_obj.get('uploadedAt'),
+            'createdBy': file_obj.get('noteUpdatedBy') or file_obj.get('uploadedBy'),
+            'createdByName': file_obj.get('uploadedByName'),
+        }]
+    return notes
+
+
+@api_router.post("/admin/deliverables/{deliverable_id}/files/{file_id}/notes")
+async def add_deliverable_file_note(
+    deliverable_id: str,
+    file_id: str,
+    request: DeliverableFileNoteAddRequest,
+    staff_payload: dict = Depends(verify_staff_token)
+):
+    """Append a note to a single file inside a deliverable's notes thread."""
+    try:
+        text = (request.text or '').strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Note text is required")
+
+        deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
+        if not deliverable:
+            raise HTTPException(status_code=404, detail="Deliverable not found")
+
+        files = deliverable.get('files') or []
+        target = next((f for f in files if f.get('id') == file_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        notes = _normalize_file_notes(target)
+        staff_row = select("staff", filters={"id": staff_payload['id']}, single=True)
+        new_entry = {
+            'id': str(uuid.uuid4()),
+            'text': text,
+            'visibleToClient': bool(request.visibleToClient),
+            'createdAt': datetime.now(timezone.utc).isoformat(),
+            'createdBy': staff_payload['id'],
+            'createdByName': staff_payload.get('name') or (staff_row or {}).get('name'),
+        }
+        notes.append(new_entry)
+        target['noteEntries'] = notes
+        # Mirror latest into legacy single-note fields for older readers.
+        target['note'] = text
+        target['notes'] = text
+        target['noteVisibleToClient'] = new_entry['visibleToClient']
+        target['noteUpdatedBy'] = staff_payload['id']
+        target['noteUpdatedAt'] = new_entry['createdAt']
+
+        update("visa_deliverables", filters={"id": deliverable_id}, data={
+            'files': files,
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+        })
+
+        _del_case_id = deliverable.get('case_id') or deliverable.get('caseId')
+        if _del_case_id:
+            await log_case_audit(
+                case_id=_del_case_id,
+                action=f"Nota agregada en archivo '{target.get('fileName', '')}'",
+                action_type="deliverable_file_note_added",
+                performed_by_id=staff_payload['id'],
+                performed_by_name=staff_payload.get('name', 'Staff'),
+                performed_by_role=staff_payload.get('role', ''),
+                details={
+                    'deliverableId': deliverable_id,
+                    'fileId': file_id,
+                    'noteId': new_entry['id'],
+                    'visibleToClient': new_entry['visibleToClient'],
+                },
+            )
+
+        return {'success': True, 'note': new_entry, 'noteEntries': notes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Add deliverable file note error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add note: {str(e)}")
+
+
+@api_router.delete("/admin/deliverables/{deliverable_id}/files/{file_id}/notes/{note_id}")
+async def delete_deliverable_file_note(
+    deliverable_id: str,
+    file_id: str,
+    note_id: str,
+    staff_payload: dict = Depends(verify_staff_token)
+):
+    """Remove a single note from a deliverable file's notes thread."""
+    try:
+        deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
+        if not deliverable:
+            raise HTTPException(status_code=404, detail="Deliverable not found")
+
+        files = deliverable.get('files') or []
+        target = next((f for f in files if f.get('id') == file_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        notes = _normalize_file_notes(target)
+        if not any(n.get('id') == note_id for n in notes):
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        remaining = [n for n in notes if n.get('id') != note_id]
+        target['noteEntries'] = remaining
+
+        if note_id == 'legacy':
+            target['note'] = None
+            target['notes'] = None
+            target['noteVisibleToClient'] = False
+        elif remaining:
+            latest = remaining[-1]
+            target['note'] = latest.get('text')
+            target['notes'] = latest.get('text')
+            target['noteVisibleToClient'] = bool(latest.get('visibleToClient'))
+        else:
+            target['note'] = None
+            target['notes'] = None
+            target['noteVisibleToClient'] = False
+
+        update("visa_deliverables", filters={"id": deliverable_id}, data={
+            'files': files,
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+        })
+
+        _del_case_id = deliverable.get('case_id') or deliverable.get('caseId')
+        if _del_case_id:
+            await log_case_audit(
+                case_id=_del_case_id,
+                action=f"Nota eliminada en archivo '{target.get('fileName', '')}'",
+                action_type="deliverable_file_note_deleted",
+                performed_by_id=staff_payload['id'],
+                performed_by_name=staff_payload.get('name', 'Staff'),
+                performed_by_role=staff_payload.get('role', ''),
+                details={
+                    'deliverableId': deliverable_id,
+                    'fileId': file_id,
+                    'noteId': note_id,
+                },
+            )
+
+        return {'success': True, 'noteEntries': remaining}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete deliverable file note error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete note: {str(e)}")
 
 
 # ============= SINGLE CASE MOVE OPERATIONS =============
@@ -9121,10 +9367,14 @@ async def upload_deliverable(
             'fileUrl': request.fileUrl,
             'fileSize': request.fileSize,
             'uploadedBy': staff_payload['id'],
-            'uploadedAt': datetime.now(timezone.utc).isoformat()
+            'uploadedByName': staff_payload.get('name') or (select("staff", filters={"id": staff_payload['id']}, single=True) or {}).get('name'),
+            'uploadedAt': datetime.now(timezone.utc).isoformat(),
+            'noteVisibleToClient': bool(request.noteVisibleToClient),
+            'clientNotified': bool(request.notifyClient),
         }
         if request.notes:
-            new_file['notes'] = request.notes
+            new_file['note'] = request.notes
+            new_file['notes'] = request.notes  # backwards compatibility
         
         # Get existing files array or create from legacy fileUrl
         existing_files = deliverable.get('files', [])
@@ -9310,6 +9560,322 @@ async def get_case_documents(
     except Exception as e:
         logger.error(f"Get case documents error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get documents: {str(e)}")
+
+
+class ZipDownloadItem(BaseModel):
+    type: str  # 'deliverable' | 'document'
+    itemId: str
+    fileId: Optional[str] = None  # if None, include all files for that item
+
+
+class ZipDownloadRequest(BaseModel):
+    items: List[ZipDownloadItem]
+
+
+@api_router.post("/admin/visa-cases/{case_id}/download-zip")
+async def download_case_files_zip(
+    case_id: str,
+    request: ZipDownloadRequest,
+    staff_payload: dict = Depends(verify_staff_token),
+):
+    """Bundle selected deliverable/document files into a ZIP.
+
+    Folder layout inside the zip:
+      Entregables/<nombre del entregable>/<archivo>
+      Documentos requeridos/<nombre del documento>/<archivo>
+    """
+    import re
+    import zipfile
+    from io import BytesIO
+    import httpx
+
+    def _safe_segment(name: str) -> str:
+        if not name:
+            return 'sin_nombre'
+        cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(name)).strip().strip('.')
+        return cleaned or 'sin_nombre'
+
+    try:
+        case = select("visa_cases", filters={"id": case_id}, single=True)
+        if not case:
+            raise HTTPException(status_code=404, detail="Visa case not found")
+
+        if not request.items:
+            raise HTTPException(status_code=400, detail="No items selected")
+
+        # Cache items so we don't re-fetch the same deliverable/document.
+        deliverables_cache: dict[str, dict] = {}
+        documents_cache: dict[str, dict] = {}
+
+        async def _read_file_bytes(file_url: str) -> Optional[bytes]:
+            if not file_url:
+                return None
+            if file_url.startswith('/api/documents/download/'):
+                fname = file_url.rsplit('/', 1)[-1]
+                fpath = Path("/app/backend/uploads") / fname
+                if fpath.exists():
+                    return fpath.read_bytes()
+                # local-dev fallback
+                fpath_local = Path(__file__).parent / "uploads" / fname
+                if fpath_local.exists():
+                    return fpath_local.read_bytes()
+                return None
+            if file_url.startswith('http://') or file_url.startswith('https://'):
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.get(file_url)
+                    if resp.status_code == 200:
+                        return resp.content
+                    return None
+            # Relative path under uploads
+            fname = file_url.rsplit('/', 1)[-1]
+            fpath = Path("/app/backend/uploads") / fname
+            if fpath.exists():
+                return fpath.read_bytes()
+            return None
+
+        buf = BytesIO()
+        used_paths: set[str] = set()
+        included = 0
+
+        with zipfile.ZipFile(buf, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+            for sel in request.items:
+                if sel.type == 'deliverable':
+                    deliverable = deliverables_cache.get(sel.itemId)
+                    if not deliverable:
+                        deliverable = select("visa_deliverables", filters={"id": sel.itemId}, single=True)
+                        if not deliverable or (deliverable.get('case_id') or deliverable.get('caseId')) != case_id:
+                            continue
+                        deliverables_cache[sel.itemId] = deliverable
+                    parent_label = _safe_segment(
+                        (deliverable.get('name') or {}).get('es')
+                        if isinstance(deliverable.get('name'), dict)
+                        else deliverable.get('name') or 'Entregable'
+                    )
+                    folder = parent_label
+                    files_arr = deliverable.get('files') or []
+                    if not files_arr and deliverable.get('fileUrl'):
+                        files_arr = [{
+                            'id': 'legacy',
+                            'fileName': deliverable.get('fileName') or 'archivo',
+                            'fileUrl': deliverable.get('fileUrl'),
+                        }]
+                elif sel.type == 'document':
+                    document = documents_cache.get(sel.itemId)
+                    if not document:
+                        document = select("visa_documents", filters={"id": sel.itemId}, single=True)
+                        if not document or (document.get('case_id') or document.get('caseId')) != case_id:
+                            continue
+                        documents_cache[sel.itemId] = document
+                    name_field = document.get('name') or document.get('documentName') or document.get('documentType') or 'Documento'
+                    if isinstance(name_field, dict):
+                        name_field = name_field.get('es') or name_field.get('en') or 'Documento'
+                    folder = _safe_segment(name_field)
+                    files_arr = document.get('files') or []
+                    if not files_arr and document.get('fileUrl'):
+                        files_arr = [{
+                            'id': 'legacy',
+                            'fileName': document.get('fileName') or 'archivo',
+                            'fileUrl': document.get('fileUrl'),
+                        }]
+                else:
+                    continue
+
+                # If a specific fileId was requested, narrow to it; otherwise take all.
+                if sel.fileId:
+                    files_arr = [f for f in files_arr if isinstance(f, dict) and f.get('id') == sel.fileId]
+
+                for f in files_arr:
+                    if not isinstance(f, dict):
+                        continue
+                    file_url = f.get('fileUrl') or f.get('file_url')
+                    file_name = _safe_segment(f.get('fileName') or 'archivo')
+                    payload = await _read_file_bytes(file_url)
+                    if payload is None:
+                        logger.warning(f"download-zip: skipping unreadable file {file_url}")
+                        continue
+                    zip_path = f"{folder}/{file_name}"
+                    # Avoid clobbering when two files share a name within the same folder
+                    base_path = zip_path
+                    counter = 1
+                    while zip_path in used_paths:
+                        if '.' in file_name:
+                            stem, ext = file_name.rsplit('.', 1)
+                            zip_path = f"{folder}/{stem}_{counter}.{ext}"
+                        else:
+                            zip_path = f"{base_path}_{counter}"
+                        counter += 1
+                    used_paths.add(zip_path)
+                    zf.writestr(zip_path, payload)
+                    included += 1
+
+        if included == 0:
+            raise HTTPException(status_code=404, detail="No se pudo recuperar ningún archivo del listado")
+
+        buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        client_label = (case.get('client_name') or 'caso').replace(' ', '_')
+        zip_name = f"caso_{client_label}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.zip"
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{zip_name}"',
+                "Content-Length": str(buf.getbuffer().nbytes),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Download case zip error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to build zip: {str(e)}")
+
+
+class CaseDeliverableCreateRequest(BaseModel):
+    stageNumber: int
+    nameEs: str
+    nameEn: Optional[str] = None
+    descriptionEs: Optional[str] = None
+    descriptionEn: Optional[str] = None
+
+
+class CaseDocumentCreateRequest(BaseModel):
+    stageNumber: int
+    nameEs: str
+    nameEn: Optional[str] = None
+    descriptionEs: Optional[str] = None
+    descriptionEn: Optional[str] = None
+    isRequired: Optional[bool] = True
+    requiresPhysicalCopy: Optional[bool] = False
+
+
+@api_router.post("/admin/visa-cases/{case_id}/deliverables")
+async def create_case_deliverable(
+    case_id: str,
+    request: CaseDeliverableCreateRequest,
+    staff_payload: dict = Depends(verify_staff_token)
+):
+    """Create a new deliverable scoped to a single case + stage."""
+    try:
+        if staff_payload.get('role') not in ('admin', 'super_admin'):
+            raise HTTPException(status_code=403, detail="Solo admins pueden agregar entregables a un caso")
+
+        case = select("visa_cases", filters={"id": case_id}, single=True)
+        if not case:
+            raise HTTPException(status_code=404, detail="Visa case not found")
+
+        stage = select("visa_stages", filters={"case_id": case_id, "stage_number": request.stageNumber}, single=True)
+        if not stage:
+            raise HTTPException(status_code=404, detail=f"Stage {request.stageNumber} not found for this case")
+
+        name_es = (request.nameEs or '').strip()
+        if not name_es:
+            raise HTTPException(status_code=400, detail="Deliverable name is required")
+
+        name_obj = {'es': name_es, 'en': (request.nameEn or name_es).strip()}
+        desc_obj = None
+        if request.descriptionEs or request.descriptionEn:
+            desc_obj = {
+                'es': (request.descriptionEs or request.descriptionEn or '').strip(),
+                'en': (request.descriptionEn or request.descriptionEs or '').strip(),
+            }
+
+        new_deliverable = {
+            'id': str(uuid.uuid4()),
+            'caseId': case_id,
+            'stageId': stage.get('id'),
+            'stageNumber': request.stageNumber,
+            'name': name_obj,
+            'description': desc_obj,
+            'status': DeliverableStatus.PENDING,
+            'files': [],
+            'createdAt': datetime.now(timezone.utc).isoformat(),
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+        }
+        insert("visa_deliverables", new_deliverable)
+
+        await log_case_audit(
+            case_id=case_id,
+            action=f"Entregable '{name_es}' agregado en etapa {request.stageNumber}",
+            action_type="deliverable_created",
+            performed_by_id=staff_payload['id'],
+            performed_by_name=staff_payload.get('name', 'Staff'),
+            performed_by_role=staff_payload.get('role', ''),
+            details={'deliverableId': new_deliverable['id'], 'stageNumber': request.stageNumber},
+        )
+
+        return {'success': True, 'deliverable': new_deliverable}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Create case deliverable error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create deliverable: {str(e)}")
+
+
+@api_router.post("/admin/visa-cases/{case_id}/documents")
+async def create_case_document(
+    case_id: str,
+    request: CaseDocumentCreateRequest,
+    staff_payload: dict = Depends(verify_staff_token)
+):
+    """Create a new client-document requirement scoped to a single case + stage."""
+    try:
+        if staff_payload.get('role') not in ('admin', 'super_admin'):
+            raise HTTPException(status_code=403, detail="Solo admins pueden agregar documentos a un caso")
+
+        case = select("visa_cases", filters={"id": case_id}, single=True)
+        if not case:
+            raise HTTPException(status_code=404, detail="Visa case not found")
+
+        stage = select("visa_stages", filters={"case_id": case_id, "stage_number": request.stageNumber}, single=True)
+        if not stage:
+            raise HTTPException(status_code=404, detail=f"Stage {request.stageNumber} not found for this case")
+
+        name_es = (request.nameEs or '').strip()
+        if not name_es:
+            raise HTTPException(status_code=400, detail="Document name is required")
+
+        name_obj = {'es': name_es, 'en': (request.nameEn or name_es).strip()}
+        desc_obj = None
+        if request.descriptionEs or request.descriptionEn:
+            desc_obj = {
+                'es': (request.descriptionEs or request.descriptionEn or '').strip(),
+                'en': (request.descriptionEn or request.descriptionEs or '').strip(),
+            }
+
+        new_document = {
+            'id': str(uuid.uuid4()),
+            'caseId': case_id,
+            'stageNumber': request.stageNumber,
+            'name': name_obj,
+            'documentName': name_es,
+            'documentType': 'custom',
+            'description': desc_obj,
+            'isRequired': bool(request.isRequired),
+            'required': bool(request.isRequired),
+            'requiresPhysicalCopy': bool(request.requiresPhysicalCopy),
+            'status': DocumentStatus.PENDING,
+            'files': [],
+            'createdAt': datetime.now(timezone.utc).isoformat(),
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+        }
+        insert("visa_documents", new_document)
+
+        await log_case_audit(
+            case_id=case_id,
+            action=f"Documento '{name_es}' agregado en etapa {request.stageNumber}",
+            action_type="document_created",
+            performed_by_id=staff_payload['id'],
+            performed_by_name=staff_payload.get('name', 'Staff'),
+            performed_by_role=staff_payload.get('role', ''),
+            details={'documentId': new_document['id'], 'stageNumber': request.stageNumber},
+        )
+
+        return {'success': True, 'document': new_document}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Create case document error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create document: {str(e)}")
 
 
 # ============= STAGE NAME MANAGEMENT (BULK) =============
@@ -10855,6 +11421,148 @@ async def reject_client_document(
     except Exception as e:
         logger.error(f"Reject document error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to reject document: {str(e)}")
+
+
+def _normalize_doc_notes(document: dict) -> list:
+    """Return the notes thread for a document, materializing the legacy single-note
+    columns as the first entry when the new array is empty."""
+    notes = document.get('notes') or []
+    if not isinstance(notes, list):
+        notes = []
+    if not notes and (document.get('note') or '').strip():
+        notes = [{
+            'id': 'legacy',
+            'text': document.get('note'),
+            'visibleToClient': bool(document.get('noteVisibleToClient')),
+            'createdAt': document.get('noteUpdatedAt') or document.get('updatedAt') or document.get('createdAt'),
+            'createdBy': document.get('noteUpdatedBy'),
+            'createdByName': None,
+        }]
+    return notes
+
+
+@api_router.post("/admin/client-documents/{document_id}/notes")
+async def add_client_document_note(
+    document_id: str,
+    request: ClientDocumentNoteAddRequest,
+    staff_payload: dict = Depends(verify_staff_token)
+):
+    """Append a new note to a client document's notes thread."""
+    try:
+        text = (request.text or '').strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Note text is required")
+
+        document = select("visa_documents", filters={"id": document_id}, single=True)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        # Persist legacy single-note as first entry before appending the new one.
+        notes = _normalize_doc_notes(document)
+
+        staff_row = select("staff", filters={"id": staff_payload['id']}, single=True)
+        new_entry = {
+            'id': str(uuid.uuid4()),
+            'text': text,
+            'visibleToClient': bool(request.visibleToClient),
+            'createdAt': datetime.now(timezone.utc).isoformat(),
+            'createdBy': staff_payload['id'],
+            'createdByName': staff_payload.get('name') or (staff_row or {}).get('name'),
+        }
+        notes.append(new_entry)
+
+        update_data = {
+            'notes': notes,
+            # Mirror latest entry into legacy columns for any older readers.
+            'note': text,
+            'noteVisibleToClient': new_entry['visibleToClient'],
+            'noteUpdatedBy': staff_payload['id'],
+            'noteUpdatedAt': new_entry['createdAt'],
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+        }
+        update("visa_documents", filters={"id": document_id}, data=update_data)
+
+        _doc_case_id = document.get('case_id') or document.get('caseId')
+        if _doc_case_id:
+            _doc_label = document.get('document_name') or document.get('documentName') or document.get('name') or 'Documento'
+            await log_case_audit(
+                case_id=_doc_case_id,
+                action=f"Nota agregada en documento '{_doc_label}'",
+                action_type="client_document_note_added",
+                performed_by_id=staff_payload['id'],
+                performed_by_name=staff_payload.get('name', 'Staff'),
+                performed_by_role=staff_payload.get('role', ''),
+                details={
+                    'documentId': document_id,
+                    'noteId': new_entry['id'],
+                    'visibleToClient': new_entry['visibleToClient'],
+                },
+            )
+
+        return {'success': True, 'note': new_entry, 'notes': notes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Add client document note error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add note: {str(e)}")
+
+
+@api_router.delete("/admin/client-documents/{document_id}/notes/{note_id}")
+async def delete_client_document_note(
+    document_id: str,
+    note_id: str,
+    staff_payload: dict = Depends(verify_staff_token)
+):
+    """Remove a single note from a client document's notes thread."""
+    try:
+        document = select("visa_documents", filters={"id": document_id}, single=True)
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        notes = _normalize_doc_notes(document)
+        target = next((n for n in notes if n.get('id') == note_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="Note not found")
+
+        remaining = [n for n in notes if n.get('id') != note_id]
+
+        update_data = {
+            'notes': remaining,
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+        }
+        # If we deleted the legacy synthetic entry, also clear legacy columns.
+        if note_id == 'legacy':
+            update_data['note'] = None
+            update_data['noteVisibleToClient'] = False
+        elif remaining:
+            latest = remaining[-1]
+            update_data['note'] = latest.get('text')
+            update_data['noteVisibleToClient'] = bool(latest.get('visibleToClient'))
+        else:
+            update_data['note'] = None
+            update_data['noteVisibleToClient'] = False
+
+        update("visa_documents", filters={"id": document_id}, data=update_data)
+
+        _doc_case_id = document.get('case_id') or document.get('caseId')
+        if _doc_case_id:
+            _doc_label = document.get('document_name') or document.get('documentName') or document.get('name') or 'Documento'
+            await log_case_audit(
+                case_id=_doc_case_id,
+                action=f"Nota eliminada en documento '{_doc_label}'",
+                action_type="client_document_note_deleted",
+                performed_by_id=staff_payload['id'],
+                performed_by_name=staff_payload.get('name', 'Staff'),
+                performed_by_role=staff_payload.get('role', ''),
+                details={'documentId': document_id, 'noteId': note_id},
+            )
+
+        return {'success': True, 'notes': remaining}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete client document note error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete note: {str(e)}")
 
 
 # ===== Stages Endpoints =====

@@ -1122,36 +1122,54 @@ export const StageDetailPage = () => {
                       {/* Regular files list - show files always, but download only if unlocked */}
                       {delFiles.length > 0 && !hasSpecialDownload && !isLibro && !isBP && (
                         <div className="ml-6 mt-3 space-y-2">
-                          {delFiles.map((file, index) => (
-                            <div 
-                              key={file.id || index}
-                              className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2"
-                            >
-                              <div className="flex items-center gap-2 flex-1 min-w-0">
-                                <File className={`h-4 w-4 flex-shrink-0 ${canDownload ? 'text-[#22C55E]' : 'text-[#475569]'}`} />
-                                <span className={`text-sm truncate ${canDownload ? 'text-[#F8FAFC]' : 'text-[#64748B]'}`}>
-                                  {file.fileName || `Archivo ${index + 1}`}
-                                </span>
+                          {delFiles.map((file, index) => {
+                            const fileNote = file.note || file.notes || '';
+                            return (
+                            <div key={file.id || index} className="space-y-1">
+                              <div className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2">
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  <File className={`h-4 w-4 flex-shrink-0 ${canDownload ? 'text-[#22C55E]' : 'text-[#475569]'}`} />
+                                  <span className={`text-sm truncate ${canDownload ? 'text-[#F8FAFC]' : 'text-[#64748B]'}`}>
+                                    {file.fileName || `Archivo ${index + 1}`}
+                                  </span>
+                                </div>
+                                {canDownload ? (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      const fullUrl = file.fileUrl?.startsWith('http')
+                                        ? file.fileUrl
+                                        : `${BACKEND_URL}${file.fileUrl}`;
+                                      window.open(fullUrl, '_blank');
+                                    }}
+                                    className="h-8 px-2 text-[#64748B] hover:text-[#22C55E] hover:bg-[#22C55E]/10"
+                                  >
+                                    <Download className="h-4 w-4" />
+                                  </Button>
+                                ) : (
+                                  <Lock className="h-4 w-4 text-[#475569]" />
+                                )}
                               </div>
-                              {canDownload ? (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => {
-                                    const fullUrl = file.fileUrl?.startsWith('http') 
-                                      ? file.fileUrl 
-                                      : `${BACKEND_URL}${file.fileUrl}`;
-                                    window.open(fullUrl, '_blank');
-                                  }}
-                                  className="h-8 px-2 text-[#64748B] hover:text-[#22C55E] hover:bg-[#22C55E]/10"
-                                >
-                                  <Download className="h-4 w-4" />
-                                </Button>
-                              ) : (
-                                <Lock className="h-4 w-4 text-[#475569]" />
-                              )}
+                              {(file.noteEntries && file.noteEntries.length > 0
+                                ? file.noteEntries
+                                : fileNote
+                                  ? [{ id: 'legacy', text: fileNote, createdAt: null }]
+                                  : []
+                              ).map((noteEntry) => (
+                                <div key={noteEntry.id} className="px-3 py-2 bg-[#1E293B] rounded-lg border border-[#C9A96A]/30">
+                                  <div className="flex items-center justify-between gap-2 mb-1">
+                                    <p className="text-[10px] uppercase tracking-wider text-[#C9A96A] font-medium">Nota del equipo</p>
+                                    {noteEntry.createdAt && (
+                                      <p className="text-[10px] text-[#94A3B8]">{new Date(noteEntry.createdAt).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-[#E2E8F0] whitespace-pre-wrap">{noteEntry.text}</p>
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
 
@@ -1383,32 +1401,40 @@ export const StageDetailPage = () => {
                           {/* Show uploaded files if any */}
                           {delFiles.length > 0 && (
                             <div className="mt-3 space-y-2">
-                              {delFiles.map((file, index) => (
-                                <div 
-                                  key={file.id || index}
-                                  className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2"
-                                >
-                                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                                    <File className="h-4 w-4 flex-shrink-0 text-[#22C55E]" />
-                                    <span className="text-sm truncate text-[#F8FAFC]">
-                                      {file.fileName || `Archivo ${index + 1}`}
-                                    </span>
+                              {delFiles.map((file, index) => {
+                                const fileNote = file.note || file.notes || '';
+                                return (
+                                <div key={file.id || index} className="space-y-1">
+                                  <div className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2">
+                                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                                      <File className="h-4 w-4 flex-shrink-0 text-[#22C55E]" />
+                                      <span className="text-sm truncate text-[#F8FAFC]">
+                                        {file.fileName || `Archivo ${index + 1}`}
+                                      </span>
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        const fullUrl = file.fileUrl?.startsWith('http')
+                                          ? file.fileUrl
+                                          : `${BACKEND_URL}${file.fileUrl}`;
+                                        window.open(fullUrl, '_blank');
+                                      }}
+                                      className="h-8 px-2 text-[#64748B] hover:text-[#22C55E] hover:bg-[#22C55E]/10"
+                                    >
+                                      <Download className="h-4 w-4" />
+                                    </Button>
                                   </div>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => {
-                                      const fullUrl = file.fileUrl?.startsWith('http') 
-                                        ? file.fileUrl 
-                                        : `${BACKEND_URL}${file.fileUrl}`;
-                                      window.open(fullUrl, '_blank');
-                                    }}
-                                    className="h-8 px-2 text-[#64748B] hover:text-[#22C55E] hover:bg-[#22C55E]/10"
-                                  >
-                                    <Download className="h-4 w-4" />
-                                  </Button>
+                                  {fileNote && (
+                                    <div className="px-3 py-2 bg-[#1E293B] rounded-lg border border-[#C9A96A]/30">
+                                      <p className="text-[10px] uppercase tracking-wider text-[#C9A96A] font-medium mb-1">Nota del equipo</p>
+                                      <p className="text-xs text-[#E2E8F0] whitespace-pre-wrap">{fileNote}</p>
+                                    </div>
+                                  )}
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
                         </div>
@@ -1527,32 +1553,40 @@ export const StageDetailPage = () => {
                           {/* Show uploaded files if any */}
                           {delFiles.length > 0 && (
                             <div className="mt-3 space-y-2">
-                              {delFiles.map((file, index) => (
-                                <div 
-                                  key={file.id || index}
-                                  className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2"
-                                >
-                                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                                    <File className="h-4 w-4 flex-shrink-0 text-[#22C55E]" />
-                                    <span className="text-sm truncate text-[#F8FAFC]">
-                                      {file.fileName || `Archivo ${index + 1}`}
-                                    </span>
+                              {delFiles.map((file, index) => {
+                                const fileNote = file.note || file.notes || '';
+                                return (
+                                <div key={file.id || index} className="space-y-1">
+                                  <div className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2">
+                                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                                      <File className="h-4 w-4 flex-shrink-0 text-[#22C55E]" />
+                                      <span className="text-sm truncate text-[#F8FAFC]">
+                                        {file.fileName || `Archivo ${index + 1}`}
+                                      </span>
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        const fullUrl = file.fileUrl?.startsWith('http')
+                                          ? file.fileUrl
+                                          : `${BACKEND_URL}${file.fileUrl}`;
+                                        window.open(fullUrl, '_blank');
+                                      }}
+                                      className="h-8 px-2 text-[#64748B] hover:text-[#22C55E] hover:bg-[#22C55E]/10"
+                                    >
+                                      <Download className="h-4 w-4" />
+                                    </Button>
                                   </div>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => {
-                                      const fullUrl = file.fileUrl?.startsWith('http') 
-                                        ? file.fileUrl 
-                                        : `${BACKEND_URL}${file.fileUrl}`;
-                                      window.open(fullUrl, '_blank');
-                                    }}
-                                    className="h-8 px-2 text-[#64748B] hover:text-[#22C55E] hover:bg-[#22C55E]/10"
-                                  >
-                                    <Download className="h-4 w-4" />
-                                  </Button>
+                                  {fileNote && (
+                                    <div className="px-3 py-2 bg-[#1E293B] rounded-lg border border-[#C9A96A]/30">
+                                      <p className="text-[10px] uppercase tracking-wider text-[#C9A96A] font-medium mb-1">Nota del equipo</p>
+                                      <p className="text-xs text-[#E2E8F0] whitespace-pre-wrap">{fileNote}</p>
+                                    </div>
+                                  )}
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
                         </div>
@@ -1648,7 +1682,7 @@ export const StageDetailPage = () => {
                       {docFiles.length > 0 && (
                         <div className="ml-0 mt-3 space-y-2">
                           {docFiles.map((file, index) => (
-                            <div 
+                            <div
                               key={file.id || index}
                               className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2"
                             >
@@ -1663,8 +1697,8 @@ export const StageDetailPage = () => {
                                   size="sm"
                                   variant="ghost"
                                   onClick={() => {
-                                    const fullUrl = file.fileUrl?.startsWith('http') 
-                                      ? file.fileUrl 
+                                    const fullUrl = file.fileUrl?.startsWith('http')
+                                      ? file.fileUrl
                                       : `${BACKEND_URL}${file.fileUrl}`;
                                     window.open(fullUrl, '_blank');
                                   }}
@@ -1687,6 +1721,24 @@ export const StageDetailPage = () => {
                           ))}
                         </div>
                       )}
+
+                      {/* Staff notes thread (only entries marked visible to client) */}
+                      {(document.notes && document.notes.length > 0
+                        ? document.notes
+                        : document.note
+                          ? [{ id: 'legacy', text: document.note, createdAt: null }]
+                          : []
+                      ).map((noteEntry) => (
+                        <div key={noteEntry.id} className="mt-3 px-3 py-2 bg-[#1E293B] rounded-lg border border-[#C9A96A]/30">
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <p className="text-[10px] uppercase tracking-wider text-[#C9A96A] font-medium">Nota del equipo</p>
+                            {noteEntry.createdAt && (
+                              <p className="text-[10px] text-[#94A3B8]">{new Date(noteEntry.createdAt).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                            )}
+                          </div>
+                          <p className="text-xs text-[#E2E8F0] whitespace-pre-wrap">{noteEntry.text}</p>
+                        </div>
+                      ))}
                     </div>
                   );
                 })
