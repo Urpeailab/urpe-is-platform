@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Users, 
-  Phone, 
-  Mail, 
-  Calendar, 
-  Search, 
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Users,
+  Phone,
+  Mail,
+  Calendar,
+  Search,
   Filter,
   RefreshCw,
   Trash2,
@@ -14,7 +14,9 @@ import {
   UserCheck,
   MessageCircle,
   Download,
-  CalendarDays
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -39,16 +41,21 @@ import {
 import { toast } from 'sonner';
 
 const API_URL = process.env.REACT_APP_BACKEND_URL;
+const ITEMS_PER_PAGE = 20;
 
 export const LeadsManagement = () => {
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState(null);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const [stats, setStats] = useState({
     total: 0,
     new: 0,
@@ -57,38 +64,48 @@ export const LeadsManagement = () => {
     rejected: 0
   });
 
-  const fetchLeads = async () => {
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  const fetchLeads = useCallback(async () => {
     setLoading(true);
     try {
-      const statusParam = statusFilter !== 'all' ? `&status=${statusFilter}` : '';
-      const response = await fetch(`${API_URL}/api/leads?limit=100${statusParam}`);
-      
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(ITEMS_PER_PAGE),
+      });
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (debouncedSearchTerm) params.set('search', debouncedSearchTerm);
+      if (dateFrom) params.set('date_from', dateFrom);
+      if (dateTo) params.set('date_to', dateTo);
+
+      const response = await fetch(`${API_URL}/api/leads?${params.toString()}`);
       if (!response.ok) throw new Error('Error fetching leads');
-      
+
       const data = await response.json();
       setLeads(data.leads || []);
-      
-      // Calculate stats from ALL leads (not filtered)
-      const allLeads = data.leads || [];
-      setStats({
-        total: allLeads.length,
-        new: allLeads.filter(l => l.status === 'new').length,
-        contacted: allLeads.filter(l => l.status === 'contacted').length,
-        converted: allLeads.filter(l => l.status === 'converted').length,
-        rejected: allLeads.filter(l => l.status === 'rejected').length
-      });
-      
+      setTotalPages(data.totalPages || 1);
+      setTotalCount(data.total || 0);
+      if (data.stats) setStats(data.stats);
     } catch (error) {
       console.error('Error:', error);
       toast.error('Error al cargar los leads');
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, statusFilter, debouncedSearchTerm, dateFrom, dateTo]);
 
   useEffect(() => {
     fetchLeads();
-  }, [statusFilter]);
+  }, [fetchLeads]);
+
+  // Reset to first page when any filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, debouncedSearchTerm, dateFrom, dateTo]);
 
   const handleStatusChange = async (leadId, newStatus) => {
     try {
@@ -134,36 +151,53 @@ export const LeadsManagement = () => {
     window.open(`https://wa.me/${phone}?text=${message}`, '_blank');
   };
 
-  const exportToCSV = () => {
-    if (filteredLeads.length === 0) {
-      toast.error('No hay leads para exportar');
-      return;
+  const exportToCSV = async () => {
+    // Fetch all matching leads (not just current page) so the CSV reflects
+    // every result the current filters select, not only the visible page.
+    try {
+      const params = new URLSearchParams({ page: '1', limit: '10000' });
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (debouncedSearchTerm) params.set('search', debouncedSearchTerm);
+      if (dateFrom) params.set('date_from', dateFrom);
+      if (dateTo) params.set('date_to', dateTo);
+
+      const response = await fetch(`${API_URL}/api/leads?${params.toString()}`);
+      if (!response.ok) throw new Error('export fetch failed');
+      const data = await response.json();
+      const rows = data.leads || [];
+      if (rows.length === 0) {
+        toast.error('No hay leads para exportar');
+        return;
+      }
+
+      const headers = ['Nombre', 'Email', 'Código País', 'Teléfono', 'Estado', 'Fecha'];
+      const csvContent = [
+        headers.join(','),
+        ...rows.map(lead => [
+          `"${lead.name}"`,
+          lead.email,
+          lead.country_code,
+          lead.phone_number,
+          lead.status,
+          formatDate(lead.created_at)
+        ].join(','))
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', `leads_${new Date().toISOString().split('T')[0]}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      toast.success(`${rows.length} leads exportados`);
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Error al exportar leads');
     }
-
-    const headers = ['Nombre', 'Email', 'Código País', 'Teléfono', 'Estado', 'Fecha'];
-    const csvContent = [
-      headers.join(','),
-      ...filteredLeads.map(lead => [
-        `"${lead.name}"`,
-        lead.email,
-        lead.country_code,
-        lead.phone_number,
-        lead.status,
-        formatDate(lead.created_at)
-      ].join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `leads_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    toast.success(`${filteredLeads.length} leads exportados`);
   };
 
   const clearFilters = () => {
@@ -202,32 +236,6 @@ export const LeadsManagement = () => {
       minute: '2-digit'
     });
   };
-
-  const filteredLeads = leads.filter(lead => {
-    // Search filter
-    const matchesSearch = 
-      lead.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lead.phone_number.includes(searchTerm);
-    
-    // Date filter
-    let matchesDate = true;
-    if (dateFrom || dateTo) {
-      const leadDate = new Date(lead.created_at);
-      if (dateFrom) {
-        const fromDate = new Date(dateFrom);
-        fromDate.setHours(0, 0, 0, 0);
-        if (leadDate < fromDate) matchesDate = false;
-      }
-      if (dateTo) {
-        const toDate = new Date(dateTo);
-        toDate.setHours(23, 59, 59, 999);
-        if (leadDate > toDate) matchesDate = false;
-      }
-    }
-    
-    return matchesSearch && matchesDate;
-  });
 
   const hasActiveFilters = searchTerm || statusFilter !== 'all' || dateFrom || dateTo;
 
@@ -363,7 +371,7 @@ export const LeadsManagement = () => {
         {/* Active filters indicator */}
         {hasActiveFilters && (
           <p className="text-sm text-gray-500">
-            Mostrando {filteredLeads.length} de {leads.length} leads
+            {totalCount} {totalCount === 1 ? 'lead encontrado' : 'leads encontrados'}
           </p>
         )}
       </div>
@@ -374,7 +382,7 @@ export const LeadsManagement = () => {
           <div className="flex items-center justify-center p-12">
             <RefreshCw className="h-8 w-8 text-gray-400 animate-spin" />
           </div>
-        ) : filteredLeads.length === 0 ? (
+        ) : leads.length === 0 ? (
           <div className="text-center p-12">
             <Users className="h-12 w-12 text-gray-300 mx-auto mb-4" />
             <p className="text-gray-500">No hay leads para mostrar</p>
@@ -392,7 +400,7 @@ export const LeadsManagement = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {filteredLeads.map((lead) => (
+                {leads.map((lead) => (
                   <tr key={lead.id} className="hover:bg-gray-50 transition-colors" data-testid={`lead-row-${lead.id}`}>
                     <td className="px-4 py-4">
                       <p className="font-medium text-gray-900">{lead.name}</p>
@@ -460,6 +468,40 @@ export const LeadsManagement = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination */}
+        {!loading && totalCount > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-white">
+            <p className="text-sm text-gray-600">
+              Mostrando {((page - 1) * ITEMS_PER_PAGE) + 1}–{Math.min(page * ITEMS_PER_PAGE, totalCount)} de {totalCount}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="border-gray-300"
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Anterior
+              </Button>
+              <span className="text-sm text-gray-700 px-2">
+                Página {page} de {totalPages}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="border-gray-300"
+              >
+                Siguiente
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
           </div>
         )}
       </div>

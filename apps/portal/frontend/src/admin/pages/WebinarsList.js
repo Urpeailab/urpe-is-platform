@@ -13,6 +13,25 @@ import { WebinarFormModal } from '../components/WebinarFormModal';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Title/description columns are stored as JSONB but some rows or the supabase
+// driver can return them as a JSON-encoded string. Accept both shapes.
+const i18nText = (value, fallback = '') => {
+  if (!value) return fallback;
+  let v = value;
+  if (typeof v === 'string') {
+    const trimmed = v.trim();
+    if (trimmed.startsWith('{')) {
+      try { v = JSON.parse(trimmed); } catch { return v; }
+    } else {
+      return v;
+    }
+  }
+  if (typeof v === 'object') {
+    return v.es || v.en || fallback;
+  }
+  return String(v);
+};
+
 export const WebinarsList = () => {
   const navigate = useNavigate();
   const { hasPermission, admin } = useAdminAuth();
@@ -121,10 +140,10 @@ export const WebinarsList = () => {
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <CardTitle className="text-gray-900 text-lg">
-                          {webinar.title?.en || 'Untitled'}
+                          {i18nText(webinar.title, 'Untitled')}
                         </CardTitle>
                         <p className="text-sm text-gray-600 mt-1">
-                          {webinar.description?.en?.substring(0, 80)}...
+                          {i18nText(webinar.description).substring(0, 80)}{i18nText(webinar.description).length > 80 ? '...' : ''}
                         </p>
                       </div>
                     </div>
@@ -164,7 +183,7 @@ export const WebinarsList = () => {
                         <Button
                           variant="destructive"
                           size="sm"
-                          onClick={() => handleDelete(webinar._id, webinar.title?.en)}
+                          onClick={() => handleDelete(webinar._id, i18nText(webinar.title, 'webinar'))}
                           className="flex-1"
                         >
                           <Trash2 className="h-4 w-4 mr-2" />

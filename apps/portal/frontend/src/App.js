@@ -57,7 +57,6 @@ import { ManualPaymentsManagement } from './admin/pages/ManualPaymentsManagement
 import { LeadsManagement } from './admin/pages/LeadsManagement';
 import { StageManagement } from './admin/pages/StageManagement';
 import { DeliverableDocumentManagement } from './admin/pages/DeliverableDocumentManagement';
-import { SpyDashboard } from './admin/pages/SpyDashboard';
 import USCISFormsDashboard from './admin/pages/USCISFormsDashboard';
 import USCISFormsNew from './admin/pages/USCISFormsNew';
 import USCISFormsFill from './admin/pages/USCISFormsFill';
@@ -277,7 +276,6 @@ function AppContent() {
           <Route path="leads" element={<LeadsManagement />} />
           <Route path="stage-management" element={<StageManagement />} />
           <Route path="deliverable-management" element={<DeliverableDocumentManagement />} />
-          <Route path="spy" element={<SpyDashboard />} />
           <Route path="uscis-forms" element={<USCISFormsDashboard />} />
           <Route path="uscis-forms/new" element={<USCISFormsNew />} />
           <Route path="uscis-forms/fill/:templateId" element={<USCISFormsFill />} />

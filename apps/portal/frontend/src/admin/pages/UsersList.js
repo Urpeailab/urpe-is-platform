@@ -33,8 +33,21 @@ export const UsersList = () => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [page, setPage] = useState(1);
+
+  // Debounce search input so we don't fire a request on every keystroke
+  // and avoid race conditions between in-flight requests.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Reset to page 1 whenever the filters or search term change.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, filter]);
   const [pagination, setPagination] = useState(null);
   const [selectedUsers, setSelectedUsers] = useState([]);
   const [activeFilters, setActiveFilters] = useState({});
@@ -69,7 +82,7 @@ export const UsersList = () => {
     }
   ];
 
-  const fetchUsers = async () => {
+  const fetchUsers = async (signal) => {
     try {
       setLoading(true);
       const token = localStorage.getItem('admin_token');
@@ -77,17 +90,18 @@ export const UsersList = () => {
         params: {
           page,
           limit: 20,
-          search: search || undefined,
+          search: debouncedSearch || undefined,
           userState: filter !== 'all' ? filter : undefined
         },
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        signal,
       });
-      console.log('Users data from API:', data.users.slice(0, 2)); // Debug log
       setUsers(data.users);
       setPagination(data.pagination);
     } catch (error) {
-      console.error('Failed a load users:', error);
-      toast.error('Failed a load users');
+      if (axios.isCancel?.(error) || error?.code === 'ERR_CANCELED') return;
+      console.error('Failed to load users:', error);
+      toast.error('Error al cargar usuarios');
     } finally {
       setLoading(false);
     }
@@ -179,8 +193,10 @@ export const UsersList = () => {
   };
 
   useEffect(() => {
-    fetchUsers();
-  }, [page, search, filter]);
+    const controller = new AbortController();
+    fetchUsers(controller.signal);
+    return () => controller.abort();
+  }, [page, debouncedSearch, filter]);
 
   const getStateBadge = (state) => {
     const badges = {
@@ -190,14 +206,6 @@ export const UsersList = () => {
     };
     return badges[state] || badges.U1;
   };
-
-  if (loading && users.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 text-yellow-500 animate-spin" />
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6 bg-white min-h-screen">
@@ -220,8 +228,11 @@ export const UsersList = () => {
                   placeholder="Buscar por nombre, email, teléfono..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="pl-10 bg-white border-2 border-gray-300 text-gray-900 focus:border-yellow-500"
+                  className="pl-10 pr-10 bg-white border-2 border-gray-300 text-gray-900 focus:border-yellow-500"
                 />
+                {loading && (
+                  <Loader2 className="absolute right-3 top-3 h-4 w-4 text-yellow-500 animate-spin" />
+                )}
               </div>
               <AdvancedFilters
                 filters={filterOptions}
@@ -286,7 +297,19 @@ export const UsersList = () => {
         </CardHeader>
         
         <CardContent>
-          <div className="space-y-3">
+          {loading && users.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-500">
+              <Loader2 className="h-6 w-6 text-yellow-500 animate-spin mb-2" />
+              <p className="text-sm">Cargando usuarios...</p>
+            </div>
+          ) : !loading && users.length === 0 ? (
+            <div className="text-center py-12 text-gray-500 text-sm">
+              {debouncedSearch
+                ? `No se encontraron usuarios para "${debouncedSearch}"`
+                : 'No hay usuarios para mostrar'}
+            </div>
+          ) : null}
+          <div className={`space-y-3 transition-opacity ${loading && users.length > 0 ? 'opacity-50 pointer-events-none' : ''}`}>
             {users.map((user) => {
               const stateBadge = getStateBadge(user.userState);
               return (

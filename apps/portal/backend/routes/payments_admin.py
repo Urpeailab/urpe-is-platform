@@ -202,6 +202,7 @@ async def get_all_payments(
         # Batch enrich — collect ids
         user_ids = list({p.get('client_id') or p.get('userId') or p.get('clientId') for p in payments_raw if (p.get('client_id') or p.get('userId') or p.get('clientId'))})
         case_ids = list({p.get('case_id') or p.get('caseId') for p in payments_raw if (p.get('case_id') or p.get('caseId'))})
+        staff_ids = list({p.get('registered_by') or p.get('registeredBy') for p in payments_raw if (p.get('registered_by') or p.get('registeredBy'))})
 
         users_map = {}
         if user_ids:
@@ -215,12 +216,20 @@ async def get_all_payments(
             for c in (c_res.data or []):
                 cases_map[str(c['id'])] = c
 
+        staff_map = {}
+        if staff_ids:
+            s_res = sb.table("staff").select("id,name,email").in_("id", staff_ids).execute()
+            for s in (s_res.data or []):
+                staff_map[str(s['id'])] = s
+
         all_payments = []
         for p in payments_raw:
             uid = p.get('client_id') or p.get('userId') or p.get('clientId')
             cid = p.get('case_id') or p.get('caseId')
+            sid = p.get('registered_by') or p.get('registeredBy')
             user = users_map.get(str(uid)) if uid else None
             case = cases_map.get(str(cid)) if cid else None
+            staff = staff_map.get(str(sid)) if sid else None
             if user:
                 p['userName'] = user.get('name')
                 p['userEmail'] = user.get('email')
@@ -229,11 +238,28 @@ async def get_all_payments(
                 p['visaType'] = case.get('visa_type')
                 p['caseStatus'] = case.get('status')
                 p['overallProgress'] = case.get('overall_progress', 0)
-            if 'createdBy' in p and isinstance(p['createdBy'], dict):
+
+            # Date alias the frontend reads.
+            p['paymentDate'] = p.get('paid_at') or p.get('paidAt') or p.get('created_at') or p.get('createdAt')
+
+            # Who registered it — prefer staff table lookup, fall back to
+            # metadata snapshot (in case the staff record is gone) or any
+            # legacy createdBy JSONB shape.
+            md = p.get('metadata') or {}
+            if isinstance(md, dict):
+                md_name = md.get('registered_by_name')
+                md_email = md.get('registered_by_email')
+            else:
+                md_name = md_email = None
+            if staff:
+                p['registeredByName'] = staff.get('name') or md_name or 'N/A'
+                p['registeredByEmail'] = staff.get('email') or md_email
+            elif isinstance(p.get('createdBy'), dict):
                 p['registeredByName'] = p['createdBy'].get('name', 'N/A')
-                p['registeredBy'] = p['createdBy'].get('id', '')
-            elif 'registeredByName' not in p:
-                p['registeredByName'] = p.get('created_by_name') or 'N/A'
+                p['registeredBy'] = p['createdBy'].get('id', '') or sid
+            else:
+                p['registeredByName'] = md_name or 'N/A'
+                p['registeredByEmail'] = md_email
             all_payments.append(p)
 
         return {

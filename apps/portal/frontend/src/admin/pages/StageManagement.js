@@ -75,7 +75,7 @@ export const StageManagement = () => {
     setLoadingCases(true);
     try {
       const token = localStorage.getItem('admin_token');
-      const response = await fetch(`${API_URL}/api/admin/cases`, {
+      const response = await fetch(`${API_URL}/api/admin/visa-cases?limit=500`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       

@@ -2065,11 +2065,6 @@ export const VisaCaseDetailRedesign = () => {
           } catch { toast.error('Error al cambiar estado'); }
         }}
         isDownloading={downloadingPDF}
-        primaryAction={{
-          label: 'Agregar Entregable',
-          icon: Upload,
-          onClick: () => setUploadModalOpen(true)
-        }}
       />
 
       <div className="max-w-[1600px] mx-auto p-6">
@@ -4412,12 +4407,24 @@ export const VisaCaseDetailRedesign = () => {
                         const colorMap = {
                           'client_uploaded_doc': 'bg-blue-500',
                           'staff_uploaded_deliverable': 'bg-purple-500',
+                          'deliverable_file_uploaded': 'bg-purple-500',
+                          'deliverable_file_deleted': 'bg-red-400',
+                          'deliverable_created': 'bg-purple-400',
+                          'document_created': 'bg-blue-400',
                           'doc_validated': 'bg-emerald-500',
+                          'document_validated': 'bg-emerald-500',
                           'doc_rejected': 'bg-red-500',
+                          'document_rejected': 'bg-red-500',
                           'payment_registered': 'bg-green-500',
+                          'payment_deleted': 'bg-red-400',
                           'stage_unlocked': 'bg-amber-500',
                           'case_status_changed': 'bg-indigo-500',
                           'coordinator_assigned': 'bg-cyan-500',
+                          'note_added': 'bg-yellow-500',
+                          'deliverable_file_note_added': 'bg-yellow-500',
+                          'deliverable_file_note_deleted': 'bg-yellow-300',
+                          'client_document_note_added': 'bg-yellow-500',
+                          'client_document_note_deleted': 'bg-yellow-300',
                         };
                         const dot = colorMap[act.type] || 'bg-gray-400';
                         const ts = act.timestamp ? new Date(act.timestamp) : null;

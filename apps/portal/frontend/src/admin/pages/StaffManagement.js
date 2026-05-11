@@ -33,7 +33,15 @@ export const StaffManagement = () => {
   const [loading, setLoading] = useState(true);
   const [isFetching, setIsFetching] = useState(false); // Para cambios de página sin bloquear UI
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [activeTab, setActiveTab] = useState('all');
+
+  // Debounce the search input so we don't fire one request per keystroke
+  // (avoids race conditions where an older response overwrites a newer one).
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
   
   // Pagination states - server-side
   const [currentPage, setCurrentPage] = useState(1);
@@ -111,14 +119,16 @@ export const StaffManagement = () => {
     fetchDepartmentCounts();
   }, []); // Initial load only
 
-  // Subsequent loads (pagination, search, filters)
+  // Subsequent loads (pagination, search, filters) - cancel in-flight requests
+  // when the inputs change so the latest query always wins.
   useEffect(() => {
-    if (!loading) {
-      fetchAllData(false);
-    }
-  }, [currentPage, search, activeTab, loading]); // Depend on these values
+    if (loading) return undefined;
+    const controller = new AbortController();
+    fetchAllData(false, controller.signal);
+    return () => controller.abort();
+  }, [currentPage, debouncedSearch, activeTab, loading]);
 
-  const fetchAllData = async (isInitialLoad = false) => {
+  const fetchAllData = async (isInitialLoad = false, signal) => {
     try {
       // Use different loading states for initial vs subsequent loads
       if (isInitialLoad) {
@@ -126,36 +136,39 @@ export const StaffManagement = () => {
       } else {
         setIsFetching(true);
       }
-      
+
       const token = localStorage.getItem('admin_token');
-      
+
       // Build query parameters
       const params = new URLSearchParams({
         page: currentPage.toString(),
         limit: itemsPerPage.toString(),
       });
-      
-      if (search) {
-        params.append('search', search);
+
+      const searchTerm = isInitialLoad ? search : debouncedSearch;
+      if (searchTerm) {
+        params.append('search', searchTerm);
       }
-      
+
       if (activeTab && activeTab !== 'all') {
         params.append('department', activeTab);
       }
-      
+
       // Fetch staff with pagination
       const staffResponse = await axios.get(`${API}/admin/staff?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        signal,
       });
-      
+
       setStaff(staffResponse.data.staff || []);
-      
+
       // Update pagination metadata
       if (staffResponse.data.pagination) {
         setTotalRecords(staffResponse.data.pagination.total);
         setTotalPages(staffResponse.data.pagination.pages);
       }
     } catch (error) {
+      if (axios.isCancel?.(error) || error?.code === 'ERR_CANCELED') return;
       console.error('Error loading data:', error);
       toast.error('Error al cargar datos');
     } finally {
@@ -250,6 +263,12 @@ export const StaffManagement = () => {
     setSearch(value);
     setCurrentPage(1);
   };
+
+  // Reset to page 1 when the debounced query changes (so we don't keep
+  // querying page N for a different filter).
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch]);
 
   const handlePageChange = (page) => {
     setCurrentPage(page);
@@ -461,11 +480,14 @@ export const StaffManagement = () => {
             <div className="relative">
               <Search className="absolute left-3 top-3 h-4 w-4 text-gray-500" />
               <Input
-                placeholder="Buscar por nombre o email..."
+                placeholder="Buscar por nombre, email o teléfono..."
                 value={search}
                 onChange={(e) => handleSearchChange(e.target.value)}
-                className="pl-10 bg-white border-2 border-gray-300 text-gray-900 focus:border-yellow-500"
+                className="pl-10 pr-10 bg-white border-2 border-gray-300 text-gray-900 focus:border-yellow-500"
               />
+              {(isFetching || (search && search !== debouncedSearch)) && (
+                <Loader2 className="absolute right-3 top-3 h-4 w-4 text-yellow-500 animate-spin" />
+              )}
             </div>
           </CardHeader>
 

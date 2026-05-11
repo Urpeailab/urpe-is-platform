@@ -2065,8 +2065,10 @@ async def create_test_eligibility_report(
     try:
         import httpx
         
-        # Generate unique test ID
-        test_id = f"test_{uuid.uuid4().hex[:8]}"
+        # Generate unique test ID. The `id` column is a UUID, so we can't use
+        # a "test_<hex>" prefix here — the is_test flag (DB column + webhook
+        # payload) already marks it as a test run.
+        test_id = str(uuid.uuid4())
         
         logger.info(f"🧪 Creating TEST eligibility report: {test_id}")
         logger.info(f"📎 CV URL: {request.cvUrl}")
@@ -2096,26 +2098,34 @@ async def create_test_eligibility_report(
             "test": True  # FLAG DE PRUEBA
         }
         
-        # Save test report record to database BEFORE calling N8N
-        test_record = {
-            "id": test_id,
+        # The `eligibility_assessments` table only has flat columns for real
+        # client assessments. Test reports stash all their fields inside the
+        # existing `result` JSONB column so we don't depend on extra columns
+        # that may not exist on every deployment.
+        sb = get_supabase()
+        test_payload = {
+            "isTest": True,
+            "status": "processing",
             "testName": request.testName,
             "testEmail": request.testEmail,
             "cvUrl": request.cvUrl,
             "notes": request.notes,
-            "status": "processing",
-            "isTest": True,
             "createdAt": datetime.now(timezone.utc).isoformat(),
             "createdBy": {
                 "id": staff_payload.get('id'),
                 "name": staff_payload.get('name'),
-                "email": staff_payload.get('email')
+                "email": staff_payload.get('email'),
             },
             "webhookResponse": None,
-            "reportData": None
+            "reportData": None,
         }
-        
-        insert("eligibility_assessments", test_record)
+        test_record = {
+            "id": test_id,
+            "assessed_by": staff_payload.get('id'),
+            "result": test_payload,
+            "report_url": request.cvUrl,
+        }
+        sb.table("eligibility_assessments").insert(test_record).execute()
         logger.info(f"💾 Test record saved to database: {test_id}")
         
         # Call N8N webhook with extended timeout
@@ -2130,25 +2140,22 @@ async def create_test_eligibility_report(
             )
             
             logger.info(f"✅ N8N webhook response: {response.status_code}")
-            
-            # Update test record with response
-            update_data = {
-                "webhookStatus": response.status_code,
-                "webhookResponse": response.text[:500] if response.text else None,
-                "updatedAt": datetime.now(timezone.utc).isoformat()
-            }
-            
+
+            # Merge the webhook outcome into the existing result JSONB.
+            test_payload["webhookStatus"] = response.status_code
+            test_payload["webhookResponse"] = response.text[:500] if response.text else None
+            test_payload["updatedAt"] = datetime.now(timezone.utc).isoformat()
             if response.status_code in [200, 201, 202]:
-                update_data["status"] = "completed"
+                test_payload["status"] = "completed"
                 try:
-                    update_data["reportData"] = response.json()
-                except:
+                    test_payload["reportData"] = response.json()
+                except Exception:
                     pass
             else:
-                update_data["status"] = "failed"
-                update_data["error"] = f"N8N returned {response.status_code}"
-            
-            update("eligibility_assessments", {"id": test_id}, update_data)
+                test_payload["status"] = "failed"
+                test_payload["error"] = f"N8N returned {response.status_code}"
+
+            sb.table("eligibility_assessments").update({"result": test_payload}).eq("id", test_id).execute()
             
             if response.status_code not in [200, 201, 202]:
                 logger.error(f"❌ N8N webhook failed: {response.status_code} - {response.text}")
@@ -2167,7 +2174,12 @@ async def create_test_eligibility_report(
             
     except httpx.TimeoutException:
         logger.error("❌ N8N webhook timeout (TEST)")
-        update("eligibility_assessments", {"id": test_id}, {"status": "timeout", "error": "N8N webhook timeout"})
+        try:
+            test_payload["status"] = "timeout"
+            test_payload["error"] = "N8N webhook timeout"
+            sb.table("eligibility_assessments").update({"result": test_payload}).eq("id", test_id).execute()
+        except Exception:
+            pass
         raise HTTPException(
             status_code=504,
             detail="N8N webhook timeout"
@@ -2184,14 +2196,37 @@ async def get_test_eligibility_reports(
     limit: int = 50,
     staff_payload: dict = Depends(verify_staff_token)
 ):
-    """Get all test eligibility reports"""
+    """Get all test eligibility reports.
+
+    Test reports live inside the `result` JSONB column of
+    `eligibility_assessments`, marked with `isTest: true`. We flatten that
+    blob back to top-level fields so the frontend can read them directly.
+    """
     try:
-        reports = select("eligibility_assessments", order="createdAt", order_desc=True, limit=limit)
-        
+        sb = get_supabase()
+        res = (
+            sb.table("eligibility_assessments")
+            .select("id,result,report_url,created_at")
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        reports = []
+        for r in (res.data or []):
+            payload = r.get("result") or {}
+            if not isinstance(payload, dict) or not payload.get("isTest"):
+                continue
+            reports.append({
+                "id": r["id"],
+                "createdAt": r.get("created_at"),
+                "cvUrl": payload.get("cvUrl") or r.get("report_url"),
+                **{k: v for k, v in payload.items() if k != "cvUrl"},
+            })
+
         return {
             "success": True,
             "reports": reports,
-            "total": len(reports)
+            "total": len(reports),
         }
     except Exception as e:
         logger.error(f"Error fetching test reports: {e}")
@@ -2415,7 +2450,51 @@ async def get_all_payments_admin(
             q = q.gte("amount", amount_min)
         if amount_max is not None:
             q = q.lte("amount", amount_max)
-        transactions = q.execute().data or []
+        raw_transactions = q.execute().data or []
+
+        # Batch-fetch user and case info for transactions in one round-trip each
+        # so the table can show the payer's name and the search filter can match
+        # against it. Without this, rows render as "N/A" and search-by-name fails.
+        tx_user_ids = list({t.get('user_id') for t in raw_transactions if t.get('user_id')})
+        tx_case_ids = list({t.get('case_id') for t in raw_transactions if t.get('case_id')})
+        tx_users_map = {}
+        if tx_user_ids:
+            tx_users_rows = sb.table("users").select("id,name,email,phone").in_("id", tx_user_ids).execute().data or []
+            tx_users_map = {u['id']: u for u in tx_users_rows}
+        tx_cases_map = {}
+        if tx_case_ids:
+            tx_cases_rows = sb.table("visa_cases").select("id,visa_type,status,overall_progress").in_("id", tx_case_ids).execute().data or []
+            tx_cases_map = {c['id']: c for c in tx_cases_rows}
+
+        transactions = []
+        for t in raw_transactions:
+            u = tx_users_map.get(t.get('user_id')) or {}
+            c = tx_cases_map.get(t.get('case_id')) or {}
+            transactions.append({
+                'id': t.get('id'),
+                'sessionId': t.get('session_id'),
+                'caseId': t.get('case_id'),
+                'userId': t.get('user_id'),
+                'userName': u.get('name'),
+                'userEmail': u.get('email'),
+                'userPhone': u.get('phone'),
+                'visaType': c.get('visa_type'),
+                'caseStatus': c.get('status'),
+                'overallProgress': c.get('overall_progress', 0),
+                'stageNumber': t.get('stage_number'),
+                'stageName': t.get('stage_name'),
+                'amount': t.get('amount', 0),
+                'currency': t.get('currency', 'USD'),
+                'status': t.get('status'),
+                'paymentStatus': t.get('status'),
+                'paymentMethod': t.get('payment_method'),
+                'reference': t.get('reference'),
+                'notes': t.get('notes'),
+                'receiptUrl': t.get('receipt_url'),
+                'createdAt': t.get('created_at'),
+                'completedAt': t.get('completed_at'),
+                'isManual': False,
+            })
 
         # Get manual payments (they are always completed)
         if status and status not in ['all', 'completed']:
@@ -3074,28 +3153,49 @@ async def register_payment(request: Request, staff_info: dict = Depends(verify_s
         automatic_note = f"Pago registrado para Etapa {stage_number}."
         final_notes = f"{automatic_note} {notes}" if notes else automatic_note
         
+        # Align with the `payments` table schema: registered_by is a UUID FK
+        # to staff. The staff name/email don't have dedicated columns, so we
+        # stash them in metadata JSONB for the GET to read back.
         payment_record = {
             "id": payment_id,
-            "userId": user_id,  # Link payment to user
+            "userId": user_id,  # → client_id via wrapper alias
             "caseId": case_id,
             "stageNumber": stage_number,
-            "stageNumbers": [stage_number],  # Also store as array for consistency
+            "stageNumbers": [stage_number],
             "amount": float(amount),
-            "paymentDate": payment_date,
+            "paymentDate": payment_date,  # → paid_at via wrapper alias
             "paymentMethod": payment_method,
             "reference": reference,
             "receiptUrl": receipt_url,
             "notes": final_notes,
-            "createdBy": {
-                "id": created_by_id,
-                "name": created_by_name,
-                "email": created_by_email
+            "status": "completed",
+            "registeredBy": created_by_id,  # → registered_by (UUID FK to staff)
+            "metadata": {
+                "registered_by_name": created_by_name,
+                "registered_by_email": created_by_email,
             },
-            "createdAt": datetime.now(timezone.utc).isoformat()
+            "createdAt": datetime.now(timezone.utc).isoformat(),
         }
-        
+
         insert("payments", payment_record)
-        
+
+        # Case audit log so the payment shows up in the activities timeline.
+        await log_case_audit(
+            case_id=case_id,
+            action=f"Pago de ${amount} registrado para etapa {stage_number}",
+            action_type=AuditActionTypes.PAYMENT_REGISTERED,
+            performed_by_id=created_by_id,
+            performed_by_name=created_by_name,
+            performed_by_role=staff_info.get('role', 'coordinator'),
+            details={
+                'paymentId': payment_id,
+                'amount': float(amount),
+                'stageNumbers': [stage_number],
+                'paymentMethod': payment_method,
+                'reference': reference,
+            },
+        )
+
         # Get stages from visa_stages table using case_id
         stages = select("visa_stages", filters={"case_id": case_id})
         logger.info(f"Found {len(stages)} stages for case {case_id}")
@@ -4249,9 +4349,15 @@ async def get_case_activities(
         "deliverable_file_uploaded": ("upload", "Archivo subido"),
         "deliverable_file_deleted": ("trash", "Archivo eliminado"),
         "deliverable_moved": ("move", "Entregable movido"),
+        "deliverable_created": ("plus", "Entregable agregado"),
+        "deliverable_file_note_added": ("message", "Nota agregada al archivo"),
+        "deliverable_file_note_deleted": ("message", "Nota eliminada del archivo"),
+        "document_created": ("plus", "Documento solicitado"),
         "document_moved": ("move", "Documento movido"),
         "document_validated": ("check", "Documento validado"),
         "document_rejected": ("x", "Documento rechazado"),
+        "client_document_note_added": ("message", "Nota agregada al documento"),
+        "client_document_note_deleted": ("message", "Nota eliminada del documento"),
         "payment_registered": ("dollar", "Pago registrado"),
         "payment_deleted": ("trash", "Pago eliminado"),
         "case_updated": ("edit", "Caso actualizado"),
@@ -6672,14 +6778,12 @@ async def reset_staff_password(
         # Hash the new password
         password_hash = pwd_context.hash(new_password)
         
-        # Update password in database
-
-        
+        # Update password in database (the staff table only stores password_hash;
+        # there is no must_change_password column, so we don't write that field).
         update("staff", {'id': staff_id}, {
-                    'passwordHash': password_hash,
-                    'mustChangePassword': True,
-                    'updatedAt': datetime.now(timezone.utc)
-                })
+            'passwordHash': password_hash,
+            'updatedAt': datetime.now(timezone.utc).isoformat(),
+        })
         
         # Log activity
         log = ActivityLog.create_log(
@@ -9905,136 +10009,110 @@ async def create_stage_template(
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can create stage templates")
 
-        # Find the highest stage number in both collections
+        # Compute the next stage number from visa_stages. The legacy `stages`
+        # template table doesn't exist on Postgres — every stage is per-case.
         sb = get_supabase()
         _max_visa_r = sb.table("visa_stages").select("stage_number").order("stage_number", desc=True).limit(1).execute()
-        _max_stages_r = sb.table("stages").select("stageNumber").order("stageNumber", desc=True).limit(1).execute()
-
         max_visa = _max_visa_r.data[0]['stage_number'] if _max_visa_r.data else 0
-        max_stages = _max_stages_r.data[0]['stageNumber'] if _max_stages_r.data else 0
-        
-        new_stage_number = max(max_visa, max_stages) + 1
-        
+        new_stage_number = (max_visa or 0) + 1
+
         # Build stage name and description objects
         stage_name = {
             "es": request.name_es,
             "en": request.name_en or request.name_es
         }
-        
+
         stage_description = {
             "es": request.description_es or "",
             "en": request.description_en or request.description_es or ""
         }
-        
-        # Check if stage template already exists
-        existing = select("visa_stages", filters={"stageNumber": new_stage_number}, single=True)
-        if existing:
-            raise HTTPException(status_code=400, detail=f"Stage {new_stage_number} already exists")
-        
-        # Create the stage template document
-        stage_template = {
-            "stageNumber": new_stage_number,
-            "name": stage_name,
-            "description": stage_description,
-            "amount": 0,
-            "status": "template",
-            "isTemplate": True,
-            "createdAt": datetime.now(timezone.utc),
-            "updatedAt": datetime.now(timezone.utc),
-            "createdBy": staff_payload['id']
-        }
-        
-        # Insert the stage template
-        result = insert("visa_stages", stage_template)
-        
-        # Apply to cases based on the option
+
+        # Resolve which case IDs receive the new stage. For `all_cases` we
+        # fetch them server-side, paginating to bypass the 1000-row PostgREST
+        # cap (the frontend just sends apply_to and an empty case_ids list).
         cases_affected = 0
-        
         if request.apply_to == 'all_cases':
-            # Get all cases - use _id as fallback
-            all_cases = select("visa_cases")
-            case_ids_to_apply = [case.get('id') for case in all_cases if case.get('id')]
-            
-        elif request.apply_to == 'selected_cases':
-            case_ids_to_apply = request.case_ids
-        else:
-            # new_only - don't apply to any existing cases
             case_ids_to_apply = []
-        
-        # Create stage instances for selected cases
+            page_size = 1000
+            offset = 0
+            while True:
+                page = sb.table("visa_cases").select("id").range(offset, offset + page_size - 1).execute()
+                rows = page.data or []
+                case_ids_to_apply.extend(r['id'] for r in rows if r.get('id'))
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+            logger.info(f"Stage create: apply_to=all_cases, found {len(case_ids_to_apply)} cases")
+        elif request.apply_to == 'selected_cases':
+            case_ids_to_apply = list(request.case_ids or [])
+            logger.info(f"Stage create: apply_to=selected_cases, {len(case_ids_to_apply)} ids from frontend")
+        else:
+            # new_only — no per-case rows to create.
+            case_ids_to_apply = []
+            logger.info("Stage create: apply_to=new_only, no per-case rows")
+
         if case_ids_to_apply:
             import uuid
-            stage_instances = []
-            
-            for case_id in case_ids_to_apply:
-                try:
-                    # Get case
-                    case = select("visa_cases", filters={"id": case_id}, single=True)
-
-                    if not case:
-                        logger.warning(f"Case {case_id} not found, skipping")
-                        continue
-
-                    actual_case_id = case.get('id')
-                    
-                    stage_instance = {
-                        "id": str(uuid.uuid4()),
-                        "caseId": actual_case_id,
-                        "stageNumber": new_stage_number,
-                        "name": stage_name,
-                        "description": stage_description,
-                        "percentage": 0,
-                        "amount": 0,
-                        "status": "locked",  # New stages start as locked
-                        "isPaid": False,
-                        "completedDeliverablesCount": 0,
-                        "totalDeliverablesCount": 0,
-                        "startDate": None,
-                        "completionDate": None,
-                        "createdAt": datetime.now(timezone.utc).isoformat(),
-                        "updatedAt": datetime.now(timezone.utc).isoformat(),
-                        "paidAmount": 0,
-                        "paidAt": None,
-                        "paymentId": None
-                    }
-                    stage_instances.append(stage_instance)
-                    
-                except Exception as case_error:
-                    logger.error(f"Error processing case {case_id}: {case_error}")
-                    continue
-            
-            if stage_instances:
-                # insert_many: iterate and insert each
-
-                for _doc in stage_instances:
-
-                    insert("visa_stages", _doc)
-                cases_affected = len(stage_instances)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            stage_instances = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "case_id": case_id,
+                    "stage_number": new_stage_number,
+                    "name": stage_name,
+                    "description": stage_description,
+                    "percentage": 0,
+                    "amount": 0,
+                    "status": "locked",
+                    "is_paid": False,
+                    "completed_deliverables_count": 0,
+                    "total_deliverables_count": 0,
+                    "start_date": None,
+                    "completion_date": None,
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                    "paid_amount": 0,
+                }
+                for case_id in case_ids_to_apply
+            ]
+            # Chunk inserts so we don't hit PostgREST payload/return-row caps
+            # and so a partial failure is reported with a useful error.
+            chunk_size = 200
+            for i in range(0, len(stage_instances), chunk_size):
+                chunk = stage_instances[i:i + chunk_size]
+                resp = sb.table("visa_stages").insert(chunk).execute()
+                inserted = len(resp.data or [])
+                cases_affected += inserted
+                logger.info(f"Stage create: inserted chunk {i}-{i+len(chunk)} ({inserted}/{len(chunk)} rows)")
+            logger.info(f"Stage create: total cases affected = {cases_affected}")
         
-        # Log the activity
-        log = ActivityLog.create_log(
-            staff_id=staff_payload['id'],
-            action='create',
-            resource='stage_template',
-            resource_id=f"stage_{new_stage_number}",
-            details={
-                'stageNumber': new_stage_number,
-                'name': stage_name,
-                'description': stage_description,
-                'applyTo': request.apply_to,
-                'casesAffected': cases_affected
-            }
-        )
-        insert("activity_logs", log)
-        
+        # Log the activity. activity_logs is optional/legacy — don't crash the
+        # whole creation if it's missing.
+        try:
+            log = ActivityLog.create_log(
+                staff_id=staff_payload['id'],
+                action='create',
+                resource='stage_template',
+                resource_id=f"stage_{new_stage_number}",
+                details={
+                    'stageNumber': new_stage_number,
+                    'name': stage_name,
+                    'description': stage_description,
+                    'applyTo': request.apply_to,
+                    'casesAffected': cases_affected
+                }
+            )
+            insert("activity_logs", log)
+        except Exception as _log_err:
+            logger.warning(f"activity_logs insert skipped: {_log_err}")
+
         logger.info(f"New stage template created: Stage {new_stage_number} - '{stage_name['es']}' by staff {staff_payload['id']} - Applied to {cases_affected} cases")
-        
+
         return {
-            "message": f"Nueva etapa creada exitosamente",
+            "message": "Nueva etapa creada exitosamente",
             "stage_number": new_stage_number,
             "name": stage_name,
             "description": stage_description,
-            "template_id": str(result.get('id', '')),
             "cases_affected": cases_affected
         }
         
@@ -10062,37 +10140,63 @@ async def get_stage_templates(
             {"$sort": {"_id": 1}}
         ]
         
-        # Get all visa stages and group in Python
+        # Group visa_stages rows by stage_number. Keep names/descriptions as
+        # dicts (JSONB returns dicts) so the frontend can read .es / .en —
+        # the previous code did str(name) which produced a Python repr string
+        # and broke the i18n rendering.
         _all_vs = select("visa_stages")
-        from collections import defaultdict
-        _sg = defaultdict(lambda: {"names": set(), "descriptions": set(), "count": 0})
+        _sg = {}
         for s in _all_vs:
             sn = s.get('stage_number') or s.get('stageNumber')
-            if sn is not None:
-                _sg[sn]["count"] += 1
-                name = s.get('name')
-                desc = s.get('description')
-                if name: _sg[sn]["names"].add(str(name))
-                if desc: _sg[sn]["descriptions"].add(str(desc))
-        stages_in_cases = [{"_id": sn, "names": list(g["names"]), "descriptions": list(g["descriptions"]), "totalCases": g["count"]} for sn, g in sorted(_sg.items())]
+            if sn is None:
+                continue
+            g = _sg.setdefault(sn, {"name": None, "description": None, "name_keys": set(), "count": 0})
+            g["count"] += 1
+            name = s.get('name')
+            desc = s.get('description')
+            if name:
+                # Track distinct serialized forms only to compute hasVariations.
+                # Keep the first non-empty dict as the canonical display name.
+                key = str(name) if not isinstance(name, str) else name
+                g["name_keys"].add(key)
+                if g["name"] is None:
+                    g["name"] = name
+            if desc and g["description"] is None:
+                g["description"] = desc
+        stages_in_cases = [
+            {
+                "id": sn,
+                "name": g["name"],
+                "description": g["description"],
+                "hasVariations": len(g["name_keys"]) > 1,
+                "totalCases": g["count"],
+            }
+            for sn, g in sorted(_sg.items())
+        ]
         
-        # Get all stage templates from stages collection
-        stage_templates = select("stages", filters={"isTemplate": True}, limit=100)
+        # Get all stage templates from stages collection. The `stages` table is
+        # legacy/optional — if it doesn't exist on this deployment, treat it as
+        # no extra templates rather than 500'ing the whole endpoint.
+        try:
+            stage_templates = select("stages", filters={"isTemplate": True}, limit=100)
+        except Exception as _stages_err:
+            logger.warning(f"stages table not queryable, skipping templates: {_stages_err}")
+            stage_templates = []
         
         # Create a dict for quick lookup
         stages_dict = {}
         
         # Add stages from cases
         for stage in stages_in_cases:
-            current_name = stage["names"][0] if stage["names"] else {"es": f"Etapa {stage['id']}", "en": f"Stage {stage['id']}"}
-            current_desc = stage["descriptions"][0] if stage["descriptions"] else {"es": "", "en": ""}
-            
+            current_name = stage["name"] or {"es": f"Etapa {stage['id']}", "en": f"Stage {stage['id']}"}
+            current_desc = stage["description"] or {"es": "", "en": ""}
+
             stages_dict[stage["id"]] = {
                 "stageNumber": stage["id"],
                 "currentName": current_name,
                 "currentDescription": current_desc,
                 "totalCases": stage["totalCases"],
-                "hasVariations": len(stage["names"]) > 1,
+                "hasVariations": stage["hasVariations"],
                 "isTemplate": False
             }
         

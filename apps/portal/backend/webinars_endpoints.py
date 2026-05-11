@@ -79,16 +79,19 @@ def setup_webinars_router(db, verify_staff_token):
                 "title": request.title,
                 "description": request.description,
                 "type": request.type,
-                "date": request.date,
-                "time": request.time,
+                # The DB column is TEXT, but it has a NOT NULL-friendly default.
+                # Empty strings cause some Supabase clients to treat the value
+                # oddly when the underlying column expects null — coerce to None.
+                "date": request.date or None,
+                "time": request.time or None,
                 "duration": request.duration,
                 "capacity": request.capacity,
-                "video_url": request.videoUrl,
-                "meeting_link": request.videoUrl,
-                "thumbnail": request.thumbnail,
+                "video_url": request.videoUrl or None,
+                "meeting_link": request.videoUrl or None,
+                "thumbnail": request.thumbnail or None,
                 "presenter": request.presenter,
                 "level": request.level,
-                "topics": request.topics,
+                "topics": request.topics or [],
                 "language": request.language,
                 "registered_count": 0,
                 "created_by": staff_payload['id'],
@@ -97,15 +100,17 @@ def setup_webinars_router(db, verify_staff_token):
             result = insert('webinars', webinar)
             webinar_id = result.get('id')
             logger.info(f"Webinar created: {webinar_id} by {staff_payload.get('name', 'admin')}")
-            
+
             return {
                 "success": True,
                 "message": "Webinar created successfully",
-                "webinar": webinar
+                "webinar": result or webinar,
             }
         except Exception as e:
-            logger.error(f"Error creating webinar: {e}")
-            raise HTTPException(status_code=500, detail="Failed to create webinar")
+            # Surface the actual Supabase error so the client can see what
+            # column / constraint is failing instead of a generic 500.
+            logger.error(f"Error creating webinar: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to create webinar: {str(e)}")
 
     @webinars_router.put("/admin/webinars/{webinar_id}")
     async def update_webinar(

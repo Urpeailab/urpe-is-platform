@@ -100,7 +100,6 @@ export const AdminLayout = () => {
     'stage-management': Layers,
     'deliverable-management': Package,
     'uscis-forms': ClipboardList,
-    'spy': Eye,
     'learning': GraduationCap,
     'learning-admin': Sparkles
   };
@@ -187,14 +186,6 @@ export const AdminLayout = () => {
     show: true // Visible para todos los usuarios del dashboard
   };
 
-  const spyMenuItem = {
-    id: 'spy',
-    label: 'Monica Spy',
-    path: '/admin/spy',
-    icon: Eye,
-    show: admin?.role === 'admin' || admin?.role === 'super_admin'
-  };
-
   const testEligibilityMenuItem = {
     id: 'test-eligibility',
     label: 'Pruebas Elegibilidad',
@@ -237,7 +228,7 @@ export const AdminLayout = () => {
 
   const allMenuItems = admin?.role === 'acreditador'
     ? menuItems
-    : [...menuItems, paymentsMenuItem, filesMenuItem, uscisFormsMenuItem, spyMenuItem, testEligibilityMenuItem, leadsMenuItem, stageManagementMenuItem, deliverableManagementMenuItem, masterCaseMenuItem, successStoriesMenuItem, paymentAuthMenuItem, proposalMenuItem, classicCasesMenuItem, learningMenuItem, learningAdminMenuItem];
+    : [...menuItems, paymentsMenuItem, filesMenuItem, uscisFormsMenuItem, testEligibilityMenuItem, leadsMenuItem, stageManagementMenuItem, deliverableManagementMenuItem, masterCaseMenuItem, successStoriesMenuItem, paymentAuthMenuItem, proposalMenuItem, classicCasesMenuItem, learningMenuItem, learningAdminMenuItem];
   const visibleItems = allMenuItems.filter(item => item.show);
 
   return (
