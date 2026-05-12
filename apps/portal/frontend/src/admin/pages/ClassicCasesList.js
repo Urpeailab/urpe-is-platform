@@ -79,7 +79,14 @@ const ClassicCasesList = () => {
   }, []);
 
   useEffect(() => { fetchCases(); }, [fetchCases]);
-  useEffect(() => { fetchStaff(); fetchUsers(); }, [fetchStaff, fetchUsers]);
+  useEffect(() => { fetchStaff(); }, [fetchStaff]);
+  // Lazy-load the users list — it's only used inside the "Nuevo Cliente"
+  // modal, so no need to block the initial page render with a 500-row fetch.
+  useEffect(() => {
+    if (createOpen && users.length === 0) {
+      fetchUsers();
+    }
+  }, [createOpen, users.length, fetchUsers]);
   useEffect(() => { setPage(1); }, [search, statusFilter, coordFilter]);
 
   const toggleSelect = (id) => {

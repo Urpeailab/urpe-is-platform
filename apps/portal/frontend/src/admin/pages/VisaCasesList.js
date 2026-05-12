@@ -46,7 +46,7 @@ export const VisaCasesList = () => {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [visaTypeFilter, setVisaTypeFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('priority');
+  const [sortBy, setSortBy] = useState('recent');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
   const [caseStats, setCaseStats] = useState({ active: 0, filed: 0, approved: 0 });
@@ -428,9 +428,9 @@ export const VisaCasesList = () => {
               <SelectValue className="text-gray-900" placeholder="Ordenar por..." />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="priority">
+              <SelectItem value="recent">
                 <span className="flex items-center gap-2">
-                  🎯 Más Urgentes (Recomendado)
+                  📅 Más Recientes (Recomendado)
                 </span>
               </SelectItem>
               <SelectItem value="updated">
@@ -438,9 +438,9 @@ export const VisaCasesList = () => {
                   ⏰ Sin Actualizar (Más Antiguos)
                 </span>
               </SelectItem>
-              <SelectItem value="recent">
+              <SelectItem value="priority">
                 <span className="flex items-center gap-2">
-                  📅 Más Recientes
+                  🎯 Más Urgentes (lento)
                 </span>
               </SelectItem>
               <SelectItem value="oldest">

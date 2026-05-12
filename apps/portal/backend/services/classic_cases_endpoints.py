@@ -345,37 +345,87 @@ def setup_classic_cases_router(db, verify_staff_token):
         coordinatorId: str = None, workStatus: str = None,
         userId: str = None
     ):
-        """List all classic cases with filters."""
-        query = {}
+        """List classic cases (Supabase). Legacy case fields live in the
+        `data` JSONB column — we flatten them to the top level so the
+        existing frontend keeps working."""
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
+        page = max(1, int(page))
+        limit = max(1, min(int(limit), 200))
+        offset = (page - 1) * limit
+
+        q = sb.table("classic_cases").select("*", count="exact")
         if status and status != "all":
-            query["status"] = status
-        if workStatus and workStatus != "all":
-            query["workStatus"] = workStatus
+            q = q.eq("status", status)
         if coordinatorId:
-            query["coordinatorId"] = coordinatorId
+            q = q.eq("assigned_to", coordinatorId)
         if userId:
-            query["userId"] = userId
+            q = q.eq("client_id", userId)
+        q = q.order("created_at", desc=True)
+
+        # If we have to filter on JSONB fields (workStatus, search), pull a
+        # bigger window and trim in Python. For deployments with thousands of
+        # rows this becomes inaccurate, but the table is small in practice.
+        needs_post_filter = bool(search) or (workStatus and workStatus != "all")
+        if needs_post_filter:
+            q = q.range(0, 4999)
+        else:
+            q = q.range(offset, offset + limit - 1)
+
+        res = q.execute()
+        rows = res.data or []
+        total = res.count or 0
+
+        def flatten(r):
+            data = r.get("data") or {}
+            if not isinstance(data, dict):
+                data = {}
+            out = dict(data)  # legacy fields first
+            out["id"] = r.get("id")
+            out["clientId"] = r.get("client_id")
+            out["caseType"] = r.get("case_type")
+            out["status"] = r.get("status") or data.get("status")
+            out["coordinatorId"] = r.get("assigned_to") or data.get("coordinatorId")
+            out["createdAt"] = r.get("created_at")
+            out["updatedAt"] = r.get("updated_at")
+            # Drop bulky checklist payload from the listing.
+            out.pop("deliverables", None)
+            return out
+
+        cases = [flatten(r) for r in rows]
+
+        # Post-fetch filters for JSONB-stored fields.
+        if workStatus and workStatus != "all":
+            cases = [c for c in cases if (c.get("workStatus") == workStatus)]
         if search:
-            query["$or"] = [
-                {"name": {"$regex": search, "$options": "i"}},
-                {"email": {"$regex": search, "$options": "i"}},
-                {"ioeNumber": {"$regex": search, "$options": "i"}},
-            ]
+            term = search.lower()
+            def matches(c):
+                return (
+                    term in (c.get("name") or "").lower()
+                    or term in (c.get("email") or "").lower()
+                    or term in (c.get("ioeNumber") or "").lower()
+                )
+            cases = [c for c in cases if matches(c)]
 
-        skip = (page - 1) * limit
-        total = await db.classic_cases.count_documents(query)
-        cases = await db.classic_cases.find(query, {"_id": 0, "deliverables": 0}).sort("createdAt", -1).skip(skip).limit(limit).to_list(limit)
+        # Apply pagination after post-filtering if it ran.
+        if needs_post_filter:
+            total = len(cases)
+            cases = cases[offset:offset + limit]
 
-        # Add coordinator names
-        for case in cases:
-            if case.get("coordinatorId"):
-                coord = await db.staff.find_one({"_id": case["coordinatorId"]}, {"name": 1})
-                case["coordinatorName"] = coord.get("name", "") if coord else ""
+        # Enrich coordinator names in a single staff lookup.
+        coord_ids = list({c.get("coordinatorId") for c in cases if c.get("coordinatorId")})
+        coord_map = {}
+        if coord_ids:
+            staff_rows = sb.table("staff").select("id,name").in_("id", coord_ids).execute().data or []
+            coord_map = {s["id"]: s.get("name", "") for s in staff_rows}
+        for c in cases:
+            c["coordinatorName"] = coord_map.get(c.get("coordinatorId"), "") if c.get("coordinatorId") else ""
 
+        pages = max(1, (total + limit - 1) // limit)
         return {
             "success": True,
             "cases": cases,
-            "pagination": {"page": page, "limit": limit, "total": total, "pages": max(1, (total + limit - 1) // limit)}
+            "pagination": {"page": page, "limit": limit, "total": total, "pages": pages},
         }
 
     @router.get("/admin/{case_id}")

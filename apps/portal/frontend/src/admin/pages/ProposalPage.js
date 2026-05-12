@@ -6,10 +6,9 @@ import { toast } from 'sonner';
 import axios from 'axios';
 
 const API = process.env.REACT_APP_BACKEND_URL;
-const IS_PRODUCTION = window.location.hostname === 'panel.urpeintegralservices.co';
-const PROD_URL = 'https://redaccion.urpeintegralservices.co';
-const LOCAL_URL = 'http://localhost:8002';
-const IS_LOCAL = window.location.hostname === 'localhost';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const PROD_URL = process.env.REACT_APP_REDACCION_URL || 'https://redaccion.urpeintegralservices.co';
+const LOCAL_URL = process.env.REACT_APP_REDACCION_URL_LOCAL || 'http://localhost:8002';
 
 const ProposalPage = () => {
   const [iframeUrl, setIframeUrl] = useState('');
@@ -34,7 +33,9 @@ const ProposalPage = () => {
         }, { headers: { Authorization: `Bearer ${token}` } });
 
         const apiToken = data.token;
-        const baseUrl = IS_PRODUCTION ? PROD_URL : (IS_LOCAL ? LOCAL_URL : (localStorage.getItem('redac_dev_url') || PROD_URL));
+        const baseUrl = IS_PRODUCTION
+          ? PROD_URL
+          : (localStorage.getItem('redac_dev_url') || LOCAL_URL);
         const url = `${baseUrl}?token=${apiToken}`;
         setIframeUrl(url);
         setDevToken(apiToken);

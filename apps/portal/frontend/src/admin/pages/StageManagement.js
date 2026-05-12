@@ -627,7 +627,10 @@ export const StageManagement = () => {
               
               <RadioGroup value={applyTo} onValueChange={(value) => {
                 setApplyTo(value);
-                if (value !== 'new_only' && allCases.length === 0) {
+                // Only fetch cases when the admin needs to pick them manually.
+                // For `all_cases` the backend resolves the full list itself
+                // (paginated, no client-side cap).
+                if (value === 'selected_cases' && allCases.length === 0) {
                   fetchCases();
                 }
               }}>

@@ -3,6 +3,7 @@ Payment Authorization Endpoints
 Public form for third-party payment authorization + PDF generation
 """
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
@@ -69,43 +70,46 @@ def setup_payment_auth_router(db):
             if not data.accountLastFour or len(data.accountLastFour) != 4:
                 raise HTTPException(status_code=400, detail="Ingrese los ultimos 4 digitos de la cuenta")
 
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
         submission_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
 
         record = {
-            "_id": submission_id,
             "id": submission_id,
-            "payerName": data.payerName.strip(),
-            "payerAddress": data.payerAddress.strip(),
-            "payerZip": data.payerZip.strip(),
-            "payerPhone": data.payerPhone.strip(),
-            "payerEmail": data.payerEmail,
-            "paymentMethod": data.paymentMethod,
-            "cardType": data.cardType,
-            "cardLastFour": data.cardLastFour,
-            "bankName": data.bankName,
-            "accountType": data.accountType,
-            "accountLastFour": data.accountLastFour,
+            "payer_name": data.payerName.strip(),
+            "payer_address": data.payerAddress.strip(),
+            "payer_zip": data.payerZip.strip(),
+            "payer_phone": data.payerPhone.strip(),
+            "payer_email": data.payerEmail,
+            "payment_method": data.paymentMethod,
+            "card_type": data.cardType,
+            "card_last_four": data.cardLastFour,
+            "bank_name": data.bankName,
+            "account_type": data.accountType,
+            "account_last_four": data.accountLastFour,
             "amount": data.amount,
             "currency": data.currency,
-            "procedureType": data.procedureType,
-            "beneficiaryName": data.beneficiaryName.strip(),
-            "beneficiaryAddress": data.beneficiaryAddress,
-            "beneficiaryZip": data.beneficiaryZip,
-            "isSamePerson": data.isSamePerson,
+            "procedure_type": data.procedureType,
+            "beneficiary_name": data.beneficiaryName.strip(),
+            "beneficiary_address": data.beneficiaryAddress,
+            "beneficiary_zip": data.beneficiaryZip,
+            "is_same_person": data.isSamePerson,
             "relationship": data.relationship,
-            "signatureDataUrl": data.signatureDataUrl,
-            "agreedToTerms": data.agreedToTerms,
-            "ipAddress": data.ipAddress,
-            "submittedAt": now.isoformat(),
+            "signature_data_url": data.signatureDataUrl,
+            "agreed_to_terms": data.agreedToTerms,
+            "ip_address": data.ipAddress,
+            "submitted_at": now.isoformat(),
             "status": "completed",
         }
 
-        await db.payment_authorizations.insert_one(record)
-        record.pop("_id", None)
+        sb.table("payment_authorizations").insert(record).execute()
 
-        # Generate PDF
-        pdf_bytes = _generate_authorization_pdf(record)
+        # Generate PDF. _generate_authorization_pdf reads camelCase keys
+        # (payerName, signatureDataUrl, etc.) so we augment the snake_case
+        # record with camelCase aliases before passing it in.
+        from db.supabase_client import _add_camel_aliases
+        pdf_bytes = _generate_authorization_pdf(_add_camel_aliases(record))
 
         # Upload PDF to storage
         pdf_url = None
@@ -120,7 +124,7 @@ def setup_payment_auth_router(db):
                 path = f"payment-authorizations/{submission_id}.pdf"
                 supa.storage.from_(bucket).upload(path, pdf_bytes, file_options={"content-type": "application/pdf", "upsert": "true"})
                 pdf_url = supa.storage.from_(bucket).get_public_url(path)
-                await db.payment_authorizations.update_one({"id": submission_id}, {"$set": {"pdfUrl": pdf_url}})
+                sb.table("payment_authorizations").update({"pdf_url": pdf_url}).eq("id", submission_id).execute()
         except Exception as e:
             logger.error(f"PDF upload error: {e}")
 
@@ -148,9 +152,21 @@ def setup_payment_auth_router(db):
             )
             if pdf_url:
                 body += f"<p><a href='{pdf_url}' style='color:#007AFF;'>Descargar PDF de confirmación</a></p>"
+            body += "<p style='color:#64748B;font-size:13px;'>El PDF firmado va adjunto a este correo.</p>"
 
             html = _email_wrapper("Equipo Finanzas", "Confirmación de pago realizado", body)
-            _send_email("finanzas@urpeintegralservices.co", f"Confirmación de pago: {data.payerName} → {data.beneficiaryName}", html)
+            # Attach the PDF directly so finanzas always has it, even if the
+            # Supabase Storage upload failed.
+            pdf_attachment = [{
+                "filename": f"payment-authorization-{submission_id}.pdf",
+                "content": pdf_bytes,
+            }]
+            _send_email(
+                "finanzas@urpeintegralservices.co",
+                f"Confirmación de pago: {data.payerName} → {data.beneficiaryName}",
+                html,
+                attachments=pdf_attachment,
+            )
         except Exception as e:
             logger.error(f"Email notification error: {e}")
 
@@ -161,11 +177,104 @@ def setup_payment_auth_router(db):
             "pdfUrl": pdf_url,
         }
 
+    @router.get("/admin/payment-authorizations/{auth_id}/pdf")
+    async def get_authorization_pdf(auth_id: str):
+        """Regenerate the authorization PDF on demand from the stored row.
+        Used by the admin list so the download button always works, even if
+        the original Supabase Storage upload failed."""
+        from db.supabase_client import get_supabase, _add_camel_aliases
+        sb = get_supabase()
+        res = (
+            sb.table("payment_authorizations")
+            .select("*")
+            .eq("id", auth_id)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Authorization not found")
+        row = _add_camel_aliases(res.data[0])
+        pdf_bytes = _generate_authorization_pdf(row)
+        filename = f"payment-authorization-{auth_id}.pdf"
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     @router.get("/admin/payment-authorizations")
-    async def list_payment_authorizations():
-        """Admin: list all payment authorizations."""
-        auths = await db.payment_authorizations.find({}, {"_id": 0, "signatureDataUrl": 0}).sort("submittedAt", -1).to_list(500)
-        return {"success": True, "authorizations": auths, "total": len(auths)}
+    async def list_payment_authorizations(
+        page: int = 1,
+        limit: int = 20,
+        search: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ):
+        """Admin: list payment authorizations with server-side pagination,
+        search, and date filters."""
+        from db.supabase_client import get_supabase, _add_camel_aliases
+        sb = get_supabase()
+        page = max(1, int(page))
+        limit = max(1, min(int(limit), 200))
+        offset = (page - 1) * limit
+
+        # Exclude signature_data_url (large base64 blob) from the listing.
+        cols = (
+            "id,payer_name,payer_address,payer_zip,payer_phone,payer_email,"
+            "payment_method,card_type,card_last_four,bank_name,account_type,"
+            "account_last_four,amount,currency,procedure_type,beneficiary_name,"
+            "beneficiary_address,beneficiary_zip,is_same_person,relationship,"
+            "agreed_to_terms,ip_address,submitted_at,status,pdf_url,created_at"
+        )
+
+        def apply_filters(q):
+            if search:
+                term = f"%{search}%"
+                q = q.or_(
+                    f"payer_name.ilike.{term},"
+                    f"beneficiary_name.ilike.{term},"
+                    f"payer_email.ilike.{term},"
+                    f"id.ilike.{term}"
+                )
+            if date_from:
+                q = q.gte("submitted_at", date_from)
+            if date_to:
+                from datetime import timedelta
+                try:
+                    dt_to = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+                except ValueError:
+                    dt_to = datetime.fromisoformat(date_to)
+                q = q.lt("submitted_at", (dt_to + timedelta(days=1)).isoformat())
+            return q
+
+        q = apply_filters(sb.table("payment_authorizations").select(cols, count="exact"))
+        q = q.order("submitted_at", desc=True).range(offset, offset + limit - 1)
+        res = q.execute()
+        auths = [_add_camel_aliases(r) for r in (res.data or [])]
+        total = res.count or 0
+        total_pages = (total + limit - 1) // limit if limit else 1
+
+        # Sum of `amount` across the entire filtered set (not just this page).
+        # Pull just the amount column for the same filters in a separate query
+        # — keeps the page response small while still showing an accurate total.
+        sum_q = apply_filters(sb.table("payment_authorizations").select("amount"))
+        sum_rows = sum_q.execute().data or []
+        total_amount = sum((r.get("amount") or 0) for r in sum_rows)
+
+        return {
+            "success": True,
+            "authorizations": auths,
+            "total": total,
+            "totalAmount": float(total_amount),
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "totalPages": total_pages,
+                "hasNextPage": page < total_pages,
+                "hasPrevPage": page > 1,
+            },
+        }
 
     return router
 

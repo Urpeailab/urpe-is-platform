@@ -40,7 +40,13 @@ import {
   FlaskConical,
   CreditCard,
   GraduationCap,
-  Sparkles
+  Sparkles,
+  Briefcase,
+  BookOpen,
+  Wallet,
+  Contact,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
 import { GlobalSearch } from '../components/GlobalSearch';
 import { NotificationsPanel } from '../components/NotificationsPanel';
@@ -52,6 +58,24 @@ export const AdminLayout = () => {
   const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState(() => {
+    try {
+      const stored = localStorage.getItem('admin_sidebar_groups');
+      return stored ? JSON.parse(stored) : {};
+    } catch (_) {
+      return {};
+    }
+  });
+
+  const toggleGroup = (id) => {
+    setExpandedGroups((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      try {
+        localStorage.setItem('admin_sidebar_groups', JSON.stringify(next));
+      } catch (_) {}
+      return next;
+    });
+  };
 
   // Keyboard shortcut for search (Cmd+K or Ctrl+K)
   useEffect(() => {
@@ -106,11 +130,21 @@ export const AdminLayout = () => {
 
   // Get menu items from RBAC system
   const backendMenuItems = getMenuItems();
-  
-  // Map backend menu items to frontend format with icons
+
+  // Role gates for backend-provided items that we want to restrict beyond the
+  // RBAC permission set.
+  const role = admin?.role;
+  const isSuperAdmin = role === 'super_admin';
+  const isAdminOrSuper = role === 'admin' || role === 'super_admin';
+  const backendItemShowOverrides = {
+    users: isAdminOrSuper, // Usuarios: solo admin y super_admin
+  };
+
+  // Map backend menu items to frontend format with icons + apply overrides.
   const menuItems = backendMenuItems.map(item => ({
     ...item,
-    icon: iconMap[item.id] || FileText
+    icon: iconMap[item.id] || FileText,
+    show: item.id in backendItemShowOverrides ? backendItemShowOverrides[item.id] : item.show,
   }));
 
   // Add Payments and Files menu items (temporary - should come from backend)
@@ -151,7 +185,7 @@ export const AdminLayout = () => {
     label: 'Entregables/Documentos',
     path: '/admin/deliverable-management',
     icon: Package,
-    show: isAdmin || isSuperAdmin
+    show: isSuperAdmin
   };
 
   const masterCaseMenuItem = {
@@ -159,7 +193,7 @@ export const AdminLayout = () => {
     label: 'Caso Maestro',
     path: '/admin/master-case',
     icon: Settings,
-    show: isAdmin() // Solo admins pueden ver esto
+    show: isSuperAdmin
   };
 
   const successStoriesMenuItem = {
@@ -167,7 +201,7 @@ export const AdminLayout = () => {
     label: 'Casos de Éxito',
     path: '/admin/success-stories',
     icon: Award,
-    show: isAdmin() // Solo admins pueden gestionar casos de éxito
+    show: isSuperAdmin
   };
 
   const paymentAuthMenuItem = {
@@ -229,7 +263,139 @@ export const AdminLayout = () => {
   const allMenuItems = admin?.role === 'acreditador'
     ? menuItems
     : [...menuItems, paymentsMenuItem, filesMenuItem, uscisFormsMenuItem, testEligibilityMenuItem, leadsMenuItem, stageManagementMenuItem, deliverableManagementMenuItem, masterCaseMenuItem, successStoriesMenuItem, paymentAuthMenuItem, proposalMenuItem, classicCasesMenuItem, learningMenuItem, learningAdminMenuItem];
-  const visibleItems = allMenuItems.filter(item => item.show);
+  // Dedupe by id (backend can return items also added manually here, e.g. learning)
+  const dedupedItems = Array.from(
+    new Map(allMenuItems.map((item) => [item.id, item])).values()
+  );
+  const visibleItems = dedupedItems.filter((item) => item.show);
+
+  const MENU_GROUPS = [
+    { type: 'item', id: 'dashboard' },
+    {
+      type: 'group',
+      id: 'cases',
+      label: 'Casos',
+      icon: Briefcase,
+      children: ['visa-cases', 'classic-cases', 'timeline-management'],
+    },
+    {
+      type: 'group',
+      id: 'clients',
+      label: 'Clientes & Leads',
+      icon: Contact,
+      children: ['users', 'leads'],
+    },
+    { type: 'item', id: 'staff-management' },
+    {
+      type: 'group',
+      id: 'finance',
+      label: 'Finanzas',
+      icon: Wallet,
+      children: ['payments', 'payment-authorizations'],
+    },
+    {
+      type: 'group',
+      id: 'tools',
+      label: 'Herramientas IA',
+      icon: Sparkles,
+      children: ['test-eligibility', 'eligibility', 'proposal', 'comparator', 'uscis-forms'],
+    },
+    {
+      type: 'group',
+      id: 'content',
+      label: 'Contenido & Aprendizaje',
+      icon: BookOpen,
+      children: ['webinars', 'legal-library', 'learning', 'learning-admin'],
+    },
+    {
+      type: 'group',
+      id: 'config',
+      label: 'Configuración',
+      icon: Settings,
+      children: ['stage-management', 'deliverable-management', 'master-case', 'success-stories'],
+    },
+    { type: 'item', id: 'files' },
+    { type: 'item', id: 'audit-logs' },
+  ];
+
+  const itemMap = Object.fromEntries(visibleItems.map((item) => [item.id, item]));
+  const knownIds = new Set();
+  MENU_GROUPS.forEach((g) => {
+    if (g.type === 'item') knownIds.add(g.id);
+    else g.children.forEach((c) => knownIds.add(c));
+  });
+  const leftoverItems = visibleItems.filter((item) => !knownIds.has(item.id));
+
+  const renderItem = (item, nested = false) => {
+    const Icon = item.icon;
+    const isActive = location.pathname === item.path;
+    return (
+      <Link
+        key={item.id}
+        to={item.path}
+        onClick={() => setSidebarOpen(false)}
+        className={`group flex items-center space-x-3 ${nested ? 'px-3 py-2' : 'px-4 py-3.5'} rounded-xl transition-all duration-200 ${
+          isActive
+            ? 'bg-gradient-to-r from-yellow-500/20 to-yellow-500/10 text-yellow-500 border border-yellow-500/30 shadow-lg shadow-yellow-500/10'
+            : 'text-gray-400 hover:text-white hover:bg-gray-800/50 hover:translate-x-1'
+        }`}
+      >
+        <div className={`${nested ? 'p-1' : 'p-1.5'} rounded-lg transition-colors ${
+          isActive ? 'bg-yellow-500/20' : 'bg-gray-800/50 group-hover:bg-gray-800'
+        }`}>
+          <Icon className={nested ? 'h-4 w-4' : 'h-5 w-5'} />
+        </div>
+        <span className={`font-medium ${nested ? 'text-sm' : ''}`}>{item.label}</span>
+        {isActive && (
+          <div className="ml-auto w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></div>
+        )}
+      </Link>
+    );
+  };
+
+  const renderGroup = (group) => {
+    const groupChildren = group.children
+      .map((id) => itemMap[id])
+      .filter(Boolean);
+    if (groupChildren.length === 0) return null;
+    const hasActive = groupChildren.some((c) => c.path === location.pathname);
+    const isOpen = hasActive || !!expandedGroups[group.id];
+    const GroupIcon = group.icon;
+    return (
+      <div key={group.id} className="space-y-1">
+        <button
+          type="button"
+          onClick={() => toggleGroup(group.id)}
+          aria-expanded={isOpen}
+          className={`w-full group flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+            hasActive
+              ? 'text-yellow-500'
+              : 'text-gray-300 hover:text-white hover:bg-gray-800/50'
+          }`}
+        >
+          <div className={`p-1.5 rounded-lg transition-colors ${
+            hasActive ? 'bg-yellow-500/20' : 'bg-gray-800/50 group-hover:bg-gray-800'
+          }`}>
+            <GroupIcon className="h-5 w-5" />
+          </div>
+          <span className="font-medium flex-1 text-left">{group.label}</span>
+          {hasActive && !isOpen && (
+            <span className="w-2 h-2 rounded-full bg-yellow-500"></span>
+          )}
+          {isOpen ? (
+            <ChevronDown className="h-4 w-4 opacity-70" />
+          ) : (
+            <ChevronRight className="h-4 w-4 opacity-70" />
+          )}
+        </button>
+        {isOpen && (
+          <div className="ml-4 pl-3 border-l border-gray-700/50 space-y-1">
+            {groupChildren.map((item) => renderItem(item, true))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-white">
@@ -310,32 +476,25 @@ export const AdminLayout = () => {
       >
         {/* Navegación con scroll */}
         <nav className="flex-1 overflow-y-auto p-4 space-y-1 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-900">
-          {visibleItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = location.pathname === item.path;
-            return (
-              <Link
-                key={item.id}
-                to={item.path}
-                onClick={() => setSidebarOpen(false)}
-                className={`group flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-all duration-200 ${
-                  isActive
-                    ? 'bg-gradient-to-r from-yellow-500/20 to-yellow-500/10 text-yellow-500 border border-yellow-500/30 shadow-lg shadow-yellow-500/10'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-800/50 hover:translate-x-1'
-                }`}
-              >
-                <div className={`p-1.5 rounded-lg transition-colors ${
-                  isActive ? 'bg-yellow-500/20' : 'bg-gray-800/50 group-hover:bg-gray-800'
-                }`}>
-                  <Icon className="h-5 w-5" />
+          {admin?.role === 'acreditador' ? (
+            visibleItems.map((item) => renderItem(item))
+          ) : (
+            <>
+              {MENU_GROUPS.map((g) => {
+                if (g.type === 'item') {
+                  const item = itemMap[g.id];
+                  if (!item) return null;
+                  return renderItem(item);
+                }
+                return renderGroup(g);
+              })}
+              {leftoverItems.length > 0 && (
+                <div className="pt-2 mt-2 border-t border-gray-800 space-y-1">
+                  {leftoverItems.map((item) => renderItem(item))}
                 </div>
-                <span className="font-medium">{item.label}</span>
-                {isActive && (
-                  <div className="ml-auto w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></div>
-                )}
-              </Link>
-            );
-          })}
+              )}
+            </>
+          )}
         </nav>
         
         {/* Sidebar Footer - Fijo al fondo, sin bloquear */}

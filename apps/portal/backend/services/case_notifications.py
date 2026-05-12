@@ -130,18 +130,37 @@ async def get_case_team(db, case_id: str):
     return coordinator, sales_rep, client
 
 
-def _send_email(to_email: str, subject: str, html: str):
-    """Send an email via Resend. Non-blocking best-effort."""
+def _send_email(to_email: str, subject: str, html: str, attachments: list = None):
+    """Send an email via Resend. Non-blocking best-effort.
+
+    `attachments` is an optional list of dicts with shape
+    `{"filename": str, "content": bytes}` — passed through to Resend (which
+    accepts base64-encoded content under the `content` key).
+    """
     if not to_email or not os.environ.get("RESEND_API_KEY"):
         return
     try:
         r = _get_resend()
-        r.Emails.send({
+        payload = {
             "from": f"URPE Integral Services <{EMAIL_FROM}>",
             "to": [to_email],
             "subject": subject,
             "html": html,
-        })
+        }
+        if attachments:
+            import base64
+            payload["attachments"] = [
+                {
+                    "filename": a["filename"],
+                    "content": (
+                        base64.b64encode(a["content"]).decode("ascii")
+                        if isinstance(a.get("content"), (bytes, bytearray))
+                        else a.get("content")
+                    ),
+                }
+                for a in attachments
+            ]
+        r.Emails.send(payload)
         logger.info(f"Email sent to {to_email}: {subject}")
     except Exception as e:
         logger.error(f"Email send failed to {to_email}: {e}")

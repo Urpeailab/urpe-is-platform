@@ -5115,68 +5115,81 @@ async def get_all_users(
     search: str = None,
     user_state: str = None
 ):
-    """Get list of all users/clients (with pagination and filters)"""
+    """Get list of all users/clients (with pagination and filters).
+
+    Performance: paginates and searches server-side instead of pulling all
+    rows. Case counts are fetched in a single query for the visible page
+    (was N+1 — one count call per user).
+    """
     try:
-        # Verificar permisos usando RBAC
         user_role = staff_payload.get('role', 'advisor')
-        
         if not has_permission(user_role, 'view_all_users') and not has_permission(user_role, 'view_assigned_users'):
             raise HTTPException(status_code=403, detail="Insufficient permissions to view users")
-        
-        # Build filters for Supabase (simple eq filters only; search done in Python)
-        sb_filters = {}
+
+        sb = get_supabase()
+        page = max(1, int(page))
+        limit = max(1, min(int(limit), 500))
+        offset = (page - 1) * limit
+
+        q = sb.table("clients").select(
+            "id,name,email,phone,profession,user_state,language,created_at,updated_at",
+            count="exact",
+        )
         if user_state:
-            sb_filters['userState'] = user_state
-        if not has_permission(user_role, 'view_all_users'):
-            if has_permission(user_role, 'view_assigned_users'):
-                sb_filters['assignedAdvisor'] = staff_payload['id']
-
-        all_users = select("clients", filters=sb_filters if sb_filters else None, limit=10000)
-
-        # Apply search filter in Python (case-insensitive substring match)
+            q = q.eq("user_state", user_state)
+        if not has_permission(user_role, 'view_all_users') and has_permission(user_role, 'view_assigned_users'):
+            # Non-superadmin path: restrict to assigned clients. Column may
+            # not exist on every deployment — wrap to avoid breaking listing.
+            try:
+                q = q.eq("assigned_advisor", staff_payload['id'])
+            except Exception:
+                pass
         if search:
-            _search_lower = search.lower()
-            all_users = [u for u in all_users if
-                         _search_lower in (u.get('name') or '').lower() or
-                         _search_lower in (u.get('email') or '').lower() or
-                         _search_lower in (u.get('phone') or '').lower()]
+            term = f"%{search}%"
+            q = q.or_(f"name.ilike.{term},email.ilike.{term},phone.ilike.{term}")
+        q = q.order("created_at", desc=True).range(offset, offset + limit - 1)
 
-        # Paginación
-        skip = (page - 1) * limit
-        total = len(all_users)
-        users_list = all_users[skip:skip + limit]
-        
-        # Serializar usuarios con conteo de casos
+        res = q.execute()
+        rows = res.data or []
+        total = res.count or 0
+
+        # Single batched query for case counts on this page's user IDs.
+        page_ids = [r["id"] for r in rows]
+        cases_count_by_user = {uid: 0 for uid in page_ids}
+        if page_ids:
+            cases_res = (
+                sb.table("visa_cases").select("client_id").in_("client_id", page_ids).execute()
+            )
+            for c in (cases_res.data or []):
+                cid = c.get("client_id")
+                if cid in cases_count_by_user:
+                    cases_count_by_user[cid] += 1
+
         users_serialized = []
-        for user in users_list:
-            user_id = str(user['id'])
-            
-            # Contar casos asociados al usuario
-            cases_count = count("visa_cases", {'userId': user_id})
-            
-            user_dict = {
-                '_id': user_id,
-                'id': user_id,
-                'name': user.get('name', ''),
-                'email': user.get('email', ''),
-                'phone': user.get('phone', ''),
-                'profession': user.get('profession', ''),
-                'userState': user.get('userState', 'U1'),
-                'casesCount': cases_count,  # Agregar conteo de casos
-                'language': user.get('language', 'es'),
-                'createdAt': user.get('createdAt', ''),
-                'updatedAt': user.get('updatedAt', '')
-            }
-            users_serialized.append(user_dict)
-        
+        for u in rows:
+            uid = str(u["id"])
+            users_serialized.append({
+                '_id': uid,
+                'id': uid,
+                'name': u.get('name', '') or '',
+                'email': u.get('email', '') or '',
+                'phone': u.get('phone', '') or '',
+                'profession': u.get('profession', '') or '',
+                'userState': u.get('user_state', 'U1'),
+                'casesCount': cases_count_by_user.get(u["id"], 0),
+                'language': u.get('language', 'es'),
+                'createdAt': u.get('created_at', ''),
+                'updatedAt': u.get('updated_at', ''),
+            })
+
         return {
             'users': users_serialized,
             'pagination': {
                 'page': page,
                 'limit': limit,
                 'total': total,
-                'pages': (total + limit - 1) // limit
-            }
+                'pages': max(1, (total + limit - 1) // limit),
+            },
         }
         
     except HTTPException:
@@ -7292,12 +7305,14 @@ async def create_user_with_case(
                     detail=f"Ya existe un usuario con el email {request.email}. Por favor, usa el usuario existente o verifica el email."
                 )
         
-        # Create user (only columns that exist in clients table)
+        # Create user (only columns that exist in clients table).
+        # email must be None (not "") when missing — clients.email is UNIQUE
+        # and Postgres allows multiple NULLs but not multiple empty strings.
         user_id = str(uuid.uuid4())
         user = {
             "id": user_id,
             "name": request.name,
-            "email": request.email or "",
+            "email": request.email or None,
             "phone": request.phone or "",
             "user_state": "U1",
             "cv_url": request.cvUrl or None,
@@ -7916,7 +7931,7 @@ async def get_all_visa_cases(
     dateTo: str = None,
     progressMin: int = None,
     progressMax: int = None,
-    sortBy: str = "priority",
+    sortBy: str = "recent",
     userId: str = None
 ):
     """Get list of all visa cases with filters, search and intelligent sorting"""
@@ -7991,7 +8006,173 @@ async def get_all_visa_cases(
             _search_user_ids = [u['id'] for u in matching_users if u.get('id')]
             if not _search_user_ids:
                 _search_user_ids = []  # Empty list = no results
-        
+
+        # ============================================================
+        # FAST PATH: server-side order + pagination via Supabase.
+        # When sorting by a real column AND no post-processing filter
+        # is active, we can paginate in DB and only enrich the page —
+        # avoiding the priorityScore computation over every case.
+        # ============================================================
+        DB_SORT_MAP = {
+            "recent":        ("created_at",       True),
+            "oldest":        ("created_at",       False),
+            "updated":       ("updated_at",       True),
+            "progress_desc": ("overall_progress", True),
+            "progress_asc":  ("overall_progress", False),
+            "stage":         ("current_stage",    False),
+        }
+
+        post_filters_active = (
+            bool(_filter_unassigned)
+            or (advisorName and advisorName != 'all')
+            or (stageFilter is not None and stageFilter >= 0)
+            or bool(coordinatorOrAdvisor)
+            or is_acreditador
+        )
+
+        def _apply_db_filters(q):
+            """Apply the DB-level filters built above to a query builder."""
+            if query.get('userId'):
+                q = q.eq("client_id", query['userId'])
+            if query.get('status'):
+                q = q.eq("status", query['status'])
+            if query.get('visaType'):
+                q = q.eq("visa_type", query['visaType'])
+            if query.get('coordinatorId'):
+                q = q.eq("coordinator_id", query['coordinatorId'])
+            if query.get('salesRepId'):
+                q = q.eq("advisor_id", query['salesRepId'])
+            if query.get('sellerId'):
+                q = q.eq("advisor_id", query['sellerId'])
+            if dateFrom:
+                q = q.gte("created_at", dateFrom + "T00:00:00")
+            if dateTo:
+                q = q.lte("created_at", dateTo + "T23:59:59")
+            if progressMin is not None:
+                q = q.gte("overall_progress", progressMin)
+            if progressMax is not None:
+                q = q.lte("overall_progress", progressMax)
+            if _filter_staff_assigned:
+                q = q.or_(
+                    f"coordinator_id.eq.{_filter_staff_assigned},advisor_id.eq.{_filter_staff_assigned}"
+                )
+            if search:
+                if _search_user_ids:
+                    q = q.in_("client_id", _search_user_ids)
+                else:
+                    q = q.in_("client_id", ["__no_match__"])
+            return q
+
+        if sortBy in DB_SORT_MAP and not post_filters_active:
+            from db.supabase_client import _add_camel_aliases as _acr
+            from collections import defaultdict
+
+            col, desc = DB_SORT_MAP[sortBy]
+            sb = get_supabase()
+            skip = (page - 1) * limit
+
+            # Single query: ordered, paginated, exact count in headers
+            data_q = sb.table("visa_cases").select("*", count="exact")
+            data_q = _apply_db_filters(data_q).order(col, desc=desc).range(skip, skip + limit - 1)
+            data_result = data_q.execute()
+            page_cases = [_acr(c) for c in (data_result.data or [])]
+            total = data_result.count or 0
+
+            # Enrich ONLY the page
+            if page_cases:
+                user_ids = set()
+                staff_ids = set()
+                case_ids = set()
+                for c in page_cases:
+                    if c.get('client_id'):
+                        user_ids.add(c['client_id'])
+                    if c.get('coordinator_id'):
+                        staff_ids.add(c['coordinator_id'])
+                    if c.get('advisor_id'):
+                        staff_ids.add(c['advisor_id'])
+                    if c.get('id'):
+                        case_ids.add(str(c['id']))
+
+                users_map = {}
+                if user_ids:
+                    r = sb.table("clients").select("id,name,email,phone").in_("id", list(user_ids)).execute()
+                    for u in (r.data or []):
+                        if u.get('id'):
+                            users_map[str(u['id'])] = u
+
+                staff_map = {}
+                if staff_ids:
+                    r = sb.table("staff").select("id,name").in_("id", list(staff_ids)).execute()
+                    for s in (r.data or []):
+                        if s.get('id'):
+                            staff_map[str(s['id'])] = s
+
+                paid_max = defaultdict(int)
+                stage_counts = defaultdict(int)
+                if case_ids:
+                    r = sb.table("visa_stages").select("case_id,stage_number,is_paid").in_("case_id", list(case_ids)).execute()
+                    for s in (r.data or []):
+                        cid = s.get('case_id')
+                        sn = s.get('stage_number', 0)
+                        stage_counts[cid] += 1
+                        if s.get('is_paid'):
+                            paid_max[cid] = max(paid_max[cid], sn)
+
+                for c in page_cases:
+                    uid = c.get('client_id')
+                    u = users_map.get(str(uid)) if uid else None
+                    c['userName']  = (u or {}).get('name')  or 'Cliente Sin Nombre'
+                    c['userEmail'] = (u or {}).get('email') or 'No disponible'
+                    c['userPhone'] = (u or {}).get('phone') or 'No disponible'
+
+                    coord_id = c.get('coordinator_id')
+                    if coord_id:
+                        s = staff_map.get(str(coord_id))
+                        if s:
+                            c['coordinatorName'] = s.get('name', 'Coordinador Sin Nombre')
+
+                    adv_id = c.get('advisor_id')
+                    if adv_id:
+                        s = staff_map.get(str(adv_id))
+                        if s:
+                            c['salesRepName'] = s.get('name', '')
+                            c['advisorName']  = s.get('name', '')
+
+                    cid_str = str(c.get('id') or '')
+                    c['lastPaidStage'] = paid_max.get(cid_str, 0)
+                    c['totalStages']   = stage_counts.get(cid_str, 11)
+
+            # Stats via cheap count queries (3 groups, one count each)
+            stats = {'active': 0, 'filed': 0, 'approved': 0}
+            _stat_groups = [
+                ('active',   ['en_proceso']),
+                ('filed',    ['ready_to_file', 'filed']),
+                ('approved', ['completed', 'approved']),
+            ]
+            for label, statuses in _stat_groups:
+                group_total = 0
+                for st in statuses:
+                    cq = sb.table("visa_cases").select("id", count="exact")
+                    cq = _apply_db_filters(cq).eq("status", st)
+                    cr = cq.execute()
+                    group_total += cr.count or 0
+                stats[label] = group_total
+
+            return {
+                'cases': page_cases,
+                'stats': stats,
+                'pagination': {
+                    'page': page,
+                    'limit': limit,
+                    'total': total,
+                    'pages': (total + limit - 1) // limit if limit else 1,
+                }
+            }
+
+        # ============================================================
+        # SLOW PATH: sortBy=priority/status, or post-processing filters.
+        # Loads everything to compute scores / apply enrichment-based filters.
+        # ============================================================
         # Build Supabase query — select all columns from visa_cases
         sb = get_supabase()
         q = sb.table("visa_cases").select("*")
@@ -8779,59 +8960,136 @@ async def update_master_case(
     request: dict,
     staff_payload: dict = Depends(verify_staff_token)
 ):
-    """Update the master case template"""
+    """Update the master case template.
+
+    Wipes the master case's stages/deliverables/documents and recreates them
+    from the payload. Uses the master case's UUID for FKs (not the readable
+    `case_id` text) and whitelists allowed columns per table to ignore the
+    legacy camelCase/snake_case duplicates the frontend echoes back.
+    """
     try:
-        # Clear existing data
-        delete("visa_stages", {'caseId': MASTER_CASE_ID})
-        delete("visa_deliverables", {'caseId': MASTER_CASE_ID})
-        delete("visa_documents", {'caseId': MASTER_CASE_ID})
-        
-        # Insert stages
-        if request.get('stages'):
-            stages = request['stages']
-            for stage in stages:
-                stage['caseId'] = MASTER_CASE_ID
-                stage['id'] = f"{MASTER_CASE_ID}_stage_{stage['stageNumber']}"
-            # insert_many: iterate and insert each
+        sb = get_supabase()
+        import uuid as _uuid
 
-            for _doc in stages:
+        # Resolve master case UUID — child tables FK on the UUID, not the
+        # readable case_id text.
+        master_case = select("visa_cases", filters={"is_master_case": True}, single=True)
+        if not master_case:
+            master_case = select("visa_cases", filters={"case_id": MASTER_CASE_ID}, single=True)
+        if not master_case:
+            raise HTTPException(status_code=404, detail="Master case not found")
+        master_uuid = master_case.get("id")
 
-                insert("visa_stages", _doc)
-        
-        # Insert deliverables
-        if request.get('deliverables'):
-            deliverables = request['deliverables']
-            for i, deliverable in enumerate(deliverables):
-                deliverable['caseId'] = MASTER_CASE_ID
-                deliverable['id'] = f"{MASTER_CASE_ID}_deliverable_{i+1}"
-            # insert_many: iterate and insert each
+        # Clear existing child rows
+        sb.table("visa_stages").delete().eq("case_id", master_uuid).execute()
+        sb.table("visa_deliverables").delete().eq("case_id", master_uuid).execute()
+        sb.table("visa_documents").delete().eq("case_id", master_uuid).execute()
 
-            for _doc in deliverables:
+        def pick(src: dict, keys):
+            """Take camelCase or snake_case from src, prefer snake_case."""
+            out = {}
+            for snake, camel in keys:
+                if snake in src and src[snake] is not None:
+                    out[snake] = src[snake]
+                elif camel and camel in src and src[camel] is not None:
+                    out[snake] = src[camel]
+            return out
 
-                insert("visa_deliverables", _doc)
-        
-        # Insert documents
-        if request.get('documents'):
-            documents = request['documents']
-            for i, doc in enumerate(documents):
-                doc['caseId'] = MASTER_CASE_ID
-                doc['id'] = f"{MASTER_CASE_ID}_document_{i+1}"
-                doc['status'] = 'pending'
-            # insert_many: iterate and insert each
+        STAGE_COLS = [
+            ("stage_number", "stageNumber"),
+            ("name", None),
+            ("description", None),
+            ("percentage", None),
+            ("amount", None),
+            ("status", None),
+            ("is_paid", "isPaid"),
+            ("paid_amount", "paidAmount"),
+            ("paid_date", "paidDate"),
+            ("completed_deliverables_count", "completedDeliverablesCount"),
+            ("total_deliverables_count", "totalDeliverablesCount"),
+            ("start_date", "startDate"),
+            ("completion_date", "completionDate"),
+        ]
+        DELIV_COLS = [
+            ("stage_number", "stageNumber"),
+            ("name", None),
+            ("description", None),
+            ("file_url", "fileUrl"),
+            ("file_name", "fileName"),
+            ("status", None),
+            ("files", None),
+        ]
+        DOC_COLS = [
+            ("stage_number", "stageNumber"),
+            ("document_type", "documentType"),
+            ("name", None),
+            ("document_name", "documentName"),
+            ("description", None),
+            ("required", None),
+            ("requires_physical_copy", "requiresPhysicalCopy"),
+            ("type", None),
+            ("text_value", "textValue"),
+            ("input_type", "inputType"),
+            ("is_required", "isRequired"),
+            ("files", None),
+        ]
 
-            for _doc in documents:
+        stages_in = request.get("stages") or []
+        if stages_in:
+            rows = []
+            for s in stages_in:
+                row = pick(s, STAGE_COLS)
+                row["id"] = str(_uuid.uuid4())
+                row["case_id"] = master_uuid
+                if "status" not in row:
+                    row["status"] = "locked"
+                rows.append(row)
+            for i in range(0, len(rows), 200):
+                sb.table("visa_stages").insert(rows[i:i + 200]).execute()
 
-                insert("visa_documents", _doc)
-        
-        logger.info(f"Master case updated by {staff_payload.get('name', 'admin')}")
-        
+        delivs_in = request.get("deliverables") or []
+        if delivs_in:
+            rows = []
+            for d in delivs_in:
+                row = pick(d, DELIV_COLS)
+                row["id"] = str(_uuid.uuid4())
+                row["case_id"] = master_uuid
+                if "status" not in row:
+                    row["status"] = "draft"
+                if "files" not in row:
+                    row["files"] = []
+                rows.append(row)
+            for i in range(0, len(rows), 200):
+                sb.table("visa_deliverables").insert(rows[i:i + 200]).execute()
+
+        docs_in = request.get("documents") or []
+        if docs_in:
+            rows = []
+            for d in docs_in:
+                row = pick(d, DOC_COLS)
+                row["id"] = str(_uuid.uuid4())
+                row["case_id"] = master_uuid
+                row["status"] = "pending"
+                if "files" not in row:
+                    row["files"] = []
+                rows.append(row)
+            for i in range(0, len(rows), 200):
+                sb.table("visa_documents").insert(rows[i:i + 200]).execute()
+
+        logger.info(f"Master case updated by {staff_payload.get('name', 'admin')}: stages={len(stages_in)} delivs={len(delivs_in)} docs={len(docs_in)}")
+
         return {
             "success": True,
-            "message": "Master case updated successfully"
+            "message": "Master case updated successfully",
+            "stages": len(stages_in),
+            "deliverables": len(delivs_in),
+            "documents": len(docs_in),
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error updating master case: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update master case")
+        logger.error(f"Error updating master case: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update master case: {str(e)}")
 
 
 # ===== Deliverables Endpoints =====
@@ -10128,23 +10386,24 @@ async def get_stage_templates(
 ):
     """Get unique stage configurations with counts, including templates without cases"""
     try:
-        # Aggregate from visa_stages to get stages used in cases
-        pipeline = [
-            {
-                "$group": {
-                    "names": {"$addToSet": "$name"},
-                    "descriptions": {"$addToSet": "$description"},
-                    "totalCases": {"$sum": 1}
-                }
-            },
-            {"$sort": {"_id": 1}}
-        ]
-        
         # Group visa_stages rows by stage_number. Keep names/descriptions as
         # dicts (JSONB returns dicts) so the frontend can read .es / .en —
         # the previous code did str(name) which produced a Python repr string
-        # and broke the i18n rendering.
-        _all_vs = select("visa_stages")
+        # and broke the i18n rendering. Paginated so we don't miss rows past
+        # the 1000-row PostgREST cap (frequent once a stage has been applied
+        # to all cases × multiple existing stages).
+        sb = get_supabase()
+        _all_vs = []
+        page_size = 1000
+        offset = 0
+        while True:
+            page = sb.table("visa_stages").select("stage_number,name,description").range(offset, offset + page_size - 1).execute()
+            rows = page.data or []
+            _all_vs.extend(rows)
+            if len(rows) < page_size:
+                break
+            offset += page_size
+        logger.info(f"stage-templates GET: loaded {len(_all_vs)} visa_stages rows")
         _sg = {}
         for s in _all_vs:
             sn = s.get('stage_number') or s.get('stageNumber')
@@ -10576,25 +10835,25 @@ async def get_deliverable_templates(
 ):
     """Get unique deliverables grouped by stage number"""
     try:
-        pipeline = [
-            {
-                "$group": {
-                    "_id": {
-                        "stageNumber": "$stageNumber",
-                        "name": "$name"
-                    },
-                    "deliverableName": {"$first": "$deliverableName"},
-                    "description": {"$first": "$description"},
-                    "required": {"$first": "$required"},
-                    "count": {"$sum": 1},
-                    "sampleId": {"$first": "$_id"}
-                }
-            },
-            {"$sort": {"_id.stageNumber": 1, "_id.name.es": 1}}
-        ]
-        
-        # Get all deliverables and group in Python
-        _all_delivs = select("visa_deliverables")
+        # Paginate so we don't miss recently-inserted rows past the 1000-row
+        # PostgREST cap (deliverables grow with every case × stage).
+        sb = get_supabase()
+        _all_delivs = []
+        page_size = 1000
+        offset = 0
+        while True:
+            page = (
+                sb.table("visa_deliverables")
+                .select("*")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = page.data or []
+            _all_delivs.extend(rows)
+            if len(rows) < page_size:
+                break
+            offset += page_size
+        logger.info(f"deliverable-templates GET: loaded {len(_all_delivs)} visa_deliverables rows")
         from collections import defaultdict
         _dg = defaultdict(lambda: {"count": 0, "first": None})
         for d in _all_delivs:
@@ -10677,72 +10936,79 @@ async def create_deliverable_template(
             "en": request.name_en or request.name_es
         }
         
-        # Determine which cases to apply to
+        # Resolve which cases get this deliverable.
         cases_affected = 0
         case_ids_to_apply = []
-        
+        sb = get_supabase()
+
         if request.apply_to == 'all_cases':
-            # Get all cases that have this stage
-            pipeline = [
-                {"$match": {"stageNumber": request.stage_number}},
-                {"$group": {"_id": "$caseId"}}
-            ]
-            _stage_cases = select("visa_stages", filters={"stage_number": request.stage_number})
-            case_ids_to_apply = list(set(s.get('case_id') for s in _stage_cases if s.get('case_id')))
-            
+            # All cases whose visa_stages already contains this stage_number.
+            # Paginated so large deployments don't fall off the 1000-row cap.
+            page_size = 1000
+            offset = 0
+            seen = set()
+            while True:
+                page = (
+                    sb.table("visa_stages")
+                    .select("case_id")
+                    .eq("stage_number", request.stage_number)
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = page.data or []
+                for r in rows:
+                    cid = r.get('case_id')
+                    if cid:
+                        seen.add(cid)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+            case_ids_to_apply = list(seen)
+            logger.info(f"Deliverable template: all_cases with stage {request.stage_number} → {len(case_ids_to_apply)} cases")
         elif request.apply_to == 'selected_cases':
-            case_ids_to_apply = request.case_ids
-        
-        # Create deliverable instances for selected cases
+            case_ids_to_apply = list(request.case_ids or [])
+
+        # Batch insert one row per target case. The previous code had a typo
+        # (`deliverable_instance["_id"]`) that KeyError'd on every iteration
+        # so no rows ever got inserted.
         if case_ids_to_apply:
             import uuid
-            deliverable_instances = []
-            
-            for case_id in case_ids_to_apply:
-                try:
-                    case = select("visa_cases", filters={"id": case_id}, single=True)
-                    if not case:
-                        continue
+            now_iso = datetime.now(timezone.utc).isoformat()
+            deliverable_instances = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "case_id": case_id,
+                    "stage_number": request.stage_number,
+                    "name": name,
+                    "status": "pending",
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                }
+                for case_id in case_ids_to_apply
+            ]
+            chunk_size = 200
+            for i in range(0, len(deliverable_instances), chunk_size):
+                chunk = deliverable_instances[i:i + chunk_size]
+                resp = sb.table("visa_deliverables").insert(chunk).execute()
+                cases_affected += len(resp.data or [])
+                logger.info(f"Deliverable template: inserted chunk {i}-{i+len(chunk)} ({len(resp.data or [])}/{len(chunk)} rows)")
 
-                    actual_case_id = case.get('id')
-                    
-                    deliverable_instance = {
-                        "caseId": actual_case_id,
-                        "stageNumber": request.stage_number,
-                        "name": name,
-                        "isComplete": False,
-                        "completedAt": None,
-                        "createdAt": datetime.now(timezone.utc).isoformat(),
-                        "updatedAt": datetime.now(timezone.utc).isoformat()
-                    }
-                    deliverable_instance["id"] = deliverable_instance["_id"]
-                    deliverable_instances.append(deliverable_instance)
-                    
-                except Exception as case_error:
-                    logger.error(f"Error processing case {case_id}: {case_error}")
-                    continue
-            
-            if deliverable_instances:
-                # insert_many: iterate and insert each
-
-                for _doc in deliverable_instances:
-
-                    insert("visa_deliverables", _doc)
-                cases_affected = len(deliverable_instances)
-        
-        log = ActivityLog.create_log(
-            staff_id=staff_payload['id'],
-            action='create',
-            resource='deliverable_template',
-            resource_id=f"stage_{request.stage_number}_{name['es']}",
-            details={
-                'stageNumber': request.stage_number,
-                'name': name,
-                'applyTo': request.apply_to,
-                'casesAffected': cases_affected
-            }
-        )
-        insert("activity_logs", log)
+        try:
+            log = ActivityLog.create_log(
+                staff_id=staff_payload['id'],
+                action='create',
+                resource='deliverable_template',
+                resource_id=f"stage_{request.stage_number}_{name['es']}",
+                details={
+                    'stageNumber': request.stage_number,
+                    'name': name,
+                    'applyTo': request.apply_to,
+                    'casesAffected': cases_affected
+                }
+            )
+            insert("activity_logs", log)
+        except Exception as _log_err:
+            logger.warning(f"activity_logs insert skipped: {_log_err}")
         
         logger.info(f"Deliverable template created: Stage {request.stage_number} - '{name['es']}' by staff {staff_payload['id']} - Applied to {cases_affected} cases")
         
@@ -10956,8 +11222,33 @@ async def get_document_templates(
 ):
     """Get unique client documents grouped by stage number from both collections"""
     try:
-        # Fetch all visa_documents and group by stageNumber + name in Python
-        all_visa_docs = select("visa_documents", columns="id,stageNumber,name,documentName", limit=10000)
+        # Paginated read — limit=10000 hits the PostgREST max-rows cap on
+        # Supabase (default 1000), so newly inserted rows past that point
+        # never show up. Iterate with .range() until the table is exhausted.
+        sb = get_supabase()
+        all_visa_docs = []
+        page_size = 1000
+        offset = 0
+        while True:
+            page = (
+                sb.table("visa_documents")
+                .select("id,stage_number,name,document_name")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            rows = page.data or []
+            # Match the camelCase shape the rest of this function expects.
+            for r in rows:
+                all_visa_docs.append({
+                    "id": r.get("id"),
+                    "stageNumber": r.get("stage_number"),
+                    "name": r.get("name"),
+                    "documentName": r.get("document_name"),
+                })
+            if len(rows) < page_size:
+                break
+            offset += page_size
+        logger.info(f"document-templates GET: loaded {len(all_visa_docs)} visa_documents rows")
 
         # Group by stage
         stages_dict = {}
@@ -11031,75 +11322,80 @@ async def create_document_template(
             "en": request.name_en or request.name_es
         }
         
-        # Determine which cases to apply to
+        # Resolve which cases get this document. Mirror the deliverable
+        # template logic — paginated, no per-case round trip.
         cases_affected = 0
         case_ids_to_apply = []
-        
+        sb = get_supabase()
+
         if request.apply_to == 'all_cases':
-            # Get all cases that have this stage
-            pipeline = [
-                {"$match": {"stageNumber": request.stage_number}},
-                {"$group": {"_id": "$caseId"}}
-            ]
-            _stage_cases = select("visa_stages", filters={"stage_number": request.stage_number})
-            case_ids_to_apply = list(set(s.get('case_id') for s in _stage_cases if s.get('case_id')))
-            
+            page_size = 1000
+            offset = 0
+            seen = set()
+            while True:
+                page = (
+                    sb.table("visa_stages")
+                    .select("case_id")
+                    .eq("stage_number", request.stage_number)
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = page.data or []
+                for r in rows:
+                    cid = r.get('case_id')
+                    if cid:
+                        seen.add(cid)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+            case_ids_to_apply = list(seen)
+            logger.info(f"Document template: all_cases with stage {request.stage_number} → {len(case_ids_to_apply)} cases")
         elif request.apply_to == 'selected_cases':
-            case_ids_to_apply = request.case_ids
-        
-        # Create document instances for selected cases
+            case_ids_to_apply = list(request.case_ids or [])
+
+        # The previous code inserted into `case_documents` (table doesn't
+        # exist) using columns like `isUploaded` / `fileUrl` / `uploadedAt`
+        # that visa_documents doesn't have. Use the real schema.
         if case_ids_to_apply:
             import uuid
-            document_instances = []
-            
-            for case_id in case_ids_to_apply:
-                try:
-                    case = select("visa_cases", filters={"id": case_id}, single=True)
-                    if not case:
-                        continue
+            now_iso = datetime.now(timezone.utc).isoformat()
+            document_instances = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "case_id": case_id,
+                    "stage_number": request.stage_number,
+                    "name": name,
+                    "status": "pending",
+                    "is_required": True,
+                    "files": [],
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                }
+                for case_id in case_ids_to_apply
+            ]
+            chunk_size = 200
+            for i in range(0, len(document_instances), chunk_size):
+                chunk = document_instances[i:i + chunk_size]
+                resp = sb.table("visa_documents").insert(chunk).execute()
+                cases_affected += len(resp.data or [])
+                logger.info(f"Document template: inserted chunk {i}-{i+len(chunk)} ({len(resp.data or [])}/{len(chunk)} rows)")
 
-                    actual_case_id = case.get('id')
-                    user_id = case.get('userId')
-                    
-                    document_instance = {
-                        "id": str(uuid.uuid4()),
-                        "caseId": actual_case_id,
-                        "userId": user_id,
-                        "stageNumber": request.stage_number,
-                        "name": name,
-                        "isUploaded": False,
-                        "fileUrl": None,
-                        "uploadedAt": None,
-                        "createdAt": datetime.now(timezone.utc).isoformat(),
-                        "updatedAt": datetime.now(timezone.utc).isoformat()
-                    }
-                    document_instances.append(document_instance)
-                    
-                except Exception as case_error:
-                    logger.error(f"Error processing case {case_id}: {case_error}")
-                    continue
-            
-            if document_instances:
-                # insert_many: iterate and insert each
-
-                for _doc in document_instances:
-
-                    insert("case_documents", _doc)
-                cases_affected = len(document_instances)
-        
-        log = ActivityLog.create_log(
-            staff_id=staff_payload['id'],
-            action='create',
-            resource='document_template',
-            resource_id=f"stage_{request.stage_number}_{name['es']}",
-            details={
-                'stageNumber': request.stage_number,
-                'name': name,
-                'applyTo': request.apply_to,
-                'casesAffected': cases_affected
-            }
-        )
-        insert("activity_logs", log)
+        try:
+            log = ActivityLog.create_log(
+                staff_id=staff_payload['id'],
+                action='create',
+                resource='document_template',
+                resource_id=f"stage_{request.stage_number}_{name['es']}",
+                details={
+                    'stageNumber': request.stage_number,
+                    'name': name,
+                    'applyTo': request.apply_to,
+                    'casesAffected': cases_affected
+                }
+            )
+            insert("activity_logs", log)
+        except Exception as _log_err:
+            logger.warning(f"activity_logs insert skipped: {_log_err}")
         
         logger.info(f"Document template created: Stage {request.stage_number} - '{name['es']}' by staff {staff_payload['id']} - Applied to {cases_affected} cases")
         
