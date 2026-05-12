@@ -6,7 +6,11 @@ import { toast } from 'sonner';
 import axios from 'axios';
 
 const API = process.env.REACT_APP_BACKEND_URL;
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+// Explicit override: 'production' | 'development'. Falls back to NODE_ENV when empty.
+const REDAC_MODE = (process.env.REACT_APP_REDACCION_MODE || '').toLowerCase();
+const IS_PRODUCTION = REDAC_MODE
+  ? REDAC_MODE === 'production'
+  : process.env.NODE_ENV === 'production';
 const PROD_URL = process.env.REACT_APP_REDACCION_URL || 'https://redaccion.urpeintegralservices.co';
 const LOCAL_URL = process.env.REACT_APP_REDACCION_URL_LOCAL || 'http://localhost:8002';
 
