@@ -554,227 +554,303 @@ PRONG 3: {profile.get('prong3_summary', '')}
 {json.dumps(profile.get('strongest_evidence', []), indent=2, default=str)}"""
 
     RULES = f"""
-CRITICAL RULES:
-- Write in FIRST PERSON ("I submit...", "My work...", "I respectfully request...")
+CRITICAL RULES (NON-NEGOTIABLE):
+
+VOICE & TONE:
+- Write in FIRST PERSON SINGULAR ("I submit...", "My work...", "I respectfully request...")
+- Narrative legal voice — confident yet respectful before the adjudicating officer
+- This is a LEGAL ALLEGATION, not an expanded CV — argue, do not list
+- Specific about numbers, dates, names, institutions — no vague qualifiers
+- Self-praise comes EXCLUSIVELY from VERBATIM QUOTES of independent signatories — never adjectives applied to oneself
+
+CITATION RULES:
 - CITE each exhibit by number (Exhibit 1, Exhibit 2, etc.) whenever you mention it
-- USE verbatim quotes from documents (in quotation marks)
+- For EACH recommendation/expert letter you reference, INCLUDE A VERBATIM QUOTE in quotation marks with full attribution:
+  Pattern: "As Dr. [Full Name] has independently observed in [his/her] expert opinion: '[exact quote]'."
+- For EACH signatory mentioned: name + academic/professional title + institution + years of experience + nature of relationship with petitioner + EXPLICIT statement of financial independence
 - DO NOT invent information — use ONLY what is in the provided data
-- Include ALL quantitative data available
-- Professional, legal and persuasive tone appropriate for USCIS
-- For EACH proprietary methodology, explain ALL its phases/steps in detail
-- CITE ALL experts who wrote recommendation letters with their exact quotes
-- Include references to federal policies when relevant
+- If a data point is missing or ambiguous, use generic language or a visible placeholder like "[VERIFY]" — NEVER fabricate
+
+MANDATORY DHANASAR PHRASES (use at least once each, naturally embedded):
+- "within the meaning of Matter of Dhanasar"
+- "substantial merit and national importance"
+- "well-positioned to advance the proposed endeavor"
+- "on balance, it would be beneficial to the United States to waive..."
+- "structurally rare in the labor market" OR "skill set exists in too few professionals to populate one"
+- Reference "Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016)" at least once in any section that mentions Dhanasar
+
+PROHIBITED PHRASES (do NOT use):
+- "Unique combination" without demonstrating it through specific competencies
+- "Highly qualified" (generic)
+- "World-class" (empty)
+- "Game-changer" / "Game changing"
+- "Cutting-edge" without technical substance
+- Adjectives without a measurable noun attached
+
+UNIQUE-ANGLE ARGUMENT:
+- Identify WHAT MAKES THIS PETITIONER UNIQUE — typically an unusual convergence of competencies
+  (e.g. "national-IT-infrastructure + construction entrepreneurship", "maritime-medicine + rural-telehealth")
+- Articulate that convergence as the central thread — DO NOT repeat the word "unique"; DEMONSTRATE it
+  through the specific combination of credentials, years of experience, and observed problems
+
+NATIONAL FIGURES:
+- Cite official sources whenever possible (BLS, Census Bureau, EPA, CDC, HRSA, FDA, DEA, ONDCP, Pew Research, etc.)
+- Always with SPECIFIC YEAR
+- If the documents already cite them, repeat the figures exactly
+
+PERSONAL ↔ NATIONAL BRIDGE:
+- Show the petitioner has been a direct, on-the-ground witness to the problem the project solves
+- Use phrases like "I have personally observed...", "I have personally absorbed, in my own [context]...",
+  "Across [X] years I have been a sustained, professional, on-the-ground witness to..."
+
+PRONG 3 TIME-SENSITIVITY:
+- QUANTIFY the cost of a PERM delay
+  Example: "A 12-to-18-month PERM delay therefore translates, in expected value, into approximately
+  [N] [units of harm] that would not be prevented during the delay window alone."
+
+FORMAT:
+- Use HTML formatting: <h1>, <h2>, <h3>, <h4>, <p>, <ul>, <li>, <strong>, <em>
+- Section headings (I-VIII): use <h1> with the EXACT title given
+- Subsection headings (A/B/C/D): use <h2> with <strong><em>…</em></strong> styling
+- Perjury declarations: wrap in <em> tags (italic)
+- Endeavor descriptions in the opening block: wrap in <em>
+- Narrative prose — avoid unnecessary bullets in body
+- NO tables in body — use fluent prose
 - Today's date is {today} — use it directly, NEVER write [Date] or any bracket placeholder
 - DO NOT wrap in <html>, <head>, <body> or add <style> blocks — only content HTML
-- DO NOT use any bracket placeholders like [Name], [Address], [TODO]"""
+- DO NOT use bracket placeholders like [Name], [Address], [TODO] (the only allowed bracket is [VERIFY] when data is genuinely missing)
+"""
 
-    system_prompt = f"""You are a specialist legal assistant in U.S. immigration petitions, helping lawyers draft EB-2 NIW self-petition letters.
+    system_prompt = f"""You are a specialist legal assistant in U.S. immigration petitions, drafting EB-2 NIW Self-Petitioner Statements under the framework of Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
 
 This is a legitimate legal document for USCIS (U.S. Citizenship and Immigration Services).
-Your task is to draft a specific SECTION of the self-petition letter for {applicant_name}.
-Use ONLY the provided document information — do not invent anything.
-Write in first person from the petitioner's perspective.
-Use HTML formatting: <h1>, <h2>, <h3>, <h4>, <p>, <ul>, <li>, <strong>, <em>
-Do NOT wrap in <html>/<head>/<body> or add CSS <style> blocks."""
 
-    # ── CALL 1: Section I (Introduction) + Section II (Prong 1) ───────────────
-    logging.warning("✍️ CALL 1/3: Introduction + Prong 1...")
+Your role is to draft a specific SECTION of the self-petition letter for {applicant_name}, writing in the FIRST PERSON SINGULAR as if {applicant_name} were the author — confident, narrative, legally argumentative, never robotic.
+
+The complete final letter (across all sections) targets 7,000–9,000 words; each section you draft must be substantive and meet the per-section word counts indicated in the user prompt.
+
+Use ONLY the provided document information — never invent data. If a fact is missing, leave the visible placeholder [VERIFY] in its place.
+
+Output format: HTML using <h1>, <h2>, <h3>, <h4>, <p>, <ul>, <li>, <strong>, <em>. Do NOT wrap in <html>/<head>/<body> or add <style> blocks. No code fences."""
+
+    # ── CALL 1: Header + Sections I, II, III ──────────────────────────────────
+    logging.warning("✍️ CALL 1/3: Header + Intro + Background + Endeavor Summary...")
     prompt_1 = f"""{profile_ctx}
 
-Write SECTION I and SECTION II of the EB-2 NIW self-petition letter for {applicant_name}.
-Target: 10-12 pages (approximately 3,500-4,500 words). BE VERY DETAILED AND COMPREHENSIVE.
+Write the LETTER HEADER and SECTIONS I, II, and III of the EB-2 NIW Self-Petitioner Statement for {applicant_name}.
+Target: ~3,000–3,500 words combined (Section I ~500, Section II ~2,000, Section III ~800).
 
-SECTION I: INTRODUCTION AND PURPOSE OF THIS PETITION
-A. Preliminary Statement
-   - Formal presentation of the petitioner: full name, exact profession and specialization
-   - Years of experience (domestic and international)
-   - Academic credentials with U.S. equivalency evaluations
-B. Overview of My Proposed Endeavor
-   - FULL name of the proposed project
-   - Detailed description of ALL project COMPONENTS (linguistic, civic, digital if applicable)
-   - Target population with SPECIFIC NUMBERS
-   - Mention econometric study if it exists
-C. Summary of Qualifications
-   - Academic credentials list
-   - Key quantified experience
-   - Proprietary methodologies developed (list with acronyms)
-D. Legal Framework for the National Interest Waiver
-   - Reference to Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016)
-   - Explanation of the three prongs
+────────────────────────────────────────────
+HEADER (output first, centered using <p style="text-align:center">):
+- FULL NAME in <strong> (centered)
+- 2–3 lines with key credentials (centered)
+- Line: "Founder — [Project Name]" (centered)
+- Physical address, phone, email (centered)
 
-SECTION II: PRONG 1 — SUBSTANTIAL MERIT AND NATIONAL IMPORTANCE
-A. The National Challenge — Context and Magnitude
-   1. Demographic Dimension of the Problem
-      - SPECIFIC statistics (millions of people affected, exact percentages)
-   2. Documented Economic Impact
-      - Economic losses in SPECIFIC DOLLARS
-      - Impact on underemployment, productivity
-   3. Impact on Social Cohesion and Civic Participation
-      - Statistics on electoral participation, social isolation
-   4. Post-Pandemic Digital Divide (if applicable)
-      - Digital gap and its consequences
-   5. Federal Recognition of the Problem
-      - CITE specific federal laws (WIOA Title II, Digital Equity Act, etc.)
-      - Relevant Executive Orders
+Then a left-aligned opening block (no centering):
+- Today's date ({today})
+- "U.S. Citizenship and Immigration Services"
+- "Attn: EB-2 National Interest Waiver Adjudication Unit"
 
-B. The Proposed Solution: Comprehensive Platform with Validated Methodologies
-   For EACH PROJECT COMPONENT, explain in detail:
-   - Component name and purpose
-   - Methodology used (with acronym and COMPLETE description of each phase/step)
-   - Evidence of Effectiveness (expert quotes)
-   
-   IMPORTANT: For EACH proprietary methodology (RISE, GCBT, GON, DGC, CABT, etc.):
-   - Expand the acronym fully
-   - Describe EACH PHASE or step in detail
-   - Cite where it is documented
-   - Include expert quote validating its effectiveness
+Then a <p> block with the case caption:
+- "<strong>Re:</strong>" followed by the letter title
+- "Self-Petitioner: <strong>{applicant_name.upper()}</strong>"
+- "Nationality: …"
+- "Proposed Endeavor: <em>…</em>" (long description in italics)
 
-C. Quantitative Evidence of National Impact: The Econometric Study
-   - Study name (if exists)
-   - DIRECT ECONOMIC IMPACT:
-     * Economic Value Generation: $X-Y million (with explanation)
-     * Job Creation: X-Y jobs (with job types and salaries)
-     * Economic Multiplier / Social ROI: X:1 ratio
-   - SAVINGS IN PUBLIC COSTS (itemized)
-   - PROJECTED SOCIAL IMPACT:
-     * Language proficiency improvement (%)
-     * Increase in labor participation (%)
-     * Increase in civic participation (%)
-   - NATIONAL SCALABILITY: users by year 1, 3, 5
+Then salutation: "Dear Immigration Officer:"
 
-D. Alignment with Regional and Sectoral Specific Needs
-   - High-impact regions with statistics
-   - Economic sectors with worker shortages
+────────────────────────────────────────────
+SECTION I — INTRODUCTION AND PURPOSE OF THIS STATEMENT
+<h1>I. INTRODUCTION AND PURPOSE OF THIS STATEMENT</h1>
+- Paragraph 1: Legal identification of petitioner, statutory basis (INA §203(b)(2)(B)) and reference to Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
+- Paragraph 2: Summary of academic credentials and professional trajectory with SPECIFIC YEARS and EXACT institution names.
+- Paragraph 3: Why this endeavor — personal, non-technical voice. Mention committed capital, IP, relationships cultivated.
+- Close with this declaration WRAPPED IN <em> tags:
+  "I make this statement under penalty of perjury, and I declare that the information presented herein is true, complete, and accurate to the best of my knowledge and belief."
 
-E. Why Current Solutions Are Insufficient
-   - Problems with traditional programs
-   - The gap that petitioner's project fills
+────────────────────────────────────────────
+SECTION II — PROFESSIONAL BACKGROUND AND THE PATH THAT LED ME TO THIS ENDEAVOR
+<h1>II. MY PROFESSIONAL BACKGROUND AND THE PATH THAT LED ME TO THIS ENDEAVOR</h1>
 
-F. Conclusion on Prong 1 — Strong compelling summary
+Use these EXACT subsection headings (each as <h2><strong><em>…</em></strong></h2>):
+
+A. Academic Foundation [and Specialized Training]
+   - Each degree: full name, field, institution, country, year, U.S. equivalency evaluation if mentioned
+   - GPA if mentioned
+   - Direct relevance of curriculum to the proposed endeavor
+
+B. More Than [X] Years of Continuous Professional Experience
+   - Chronological organization with upward trajectory
+   - For EACH position: exact title, employer, location, dates, key responsibilities, quantified achievements, connection to the proposed endeavor
+
+C. Independent Validation of My Track Record
+   - For EACH expert/recommendation signatory referenced: full name + degree/title + institution + years of experience + nature of relationship (years of direct observation, supervision, or independent evaluation without prior collaboration) + EXPLICIT statement of financial independence
+   - VERBATIM QUOTE of their key observation about the petitioner, in quotation marks, with full attribution
+   - Cite Exhibit number for each letter
+
+D. Direct Observation of the Problem the Endeavor Is Designed to Solve
+   - Show the petitioner has been a sustained on-the-ground witness to the national problem
+   - Use phrases like "I have personally observed…", "I have personally absorbed, in my own [context]…", "Across [X] years I have been a sustained, professional, on-the-ground witness to…"
+
+E. Why This Endeavor, and Why Me
+   - Articulate the unique convergence of competencies that defines the petitioner (do NOT say "unique" — demonstrate it through the specific combination)
+
+────────────────────────────────────────────
+SECTION III — SUMMARY OF THE PROPOSED ENDEAVOR
+<h1>III. SUMMARY OF THE PROPOSED ENDEAVOR</h1>
+- Layered technical architecture (4–5 layers typically — name each layer and describe it)
+- Quantitative project KPIs (percentages, dollars, timelines)
+- Capital structure (founder %, partners %, grants %)
+- EXPLICIT mention of the USPTO provisional patent if it exists (with reference to Exhibit number)
+
 {RULES}"""
 
-    # ── CALL 2: Section III (Prong 2) ─────────────────────────────────────────
-    logging.warning("✍️ CALL 2/3: Prong 2 (Well Positioned)...")
+    # ── CALL 2: Sections IV (Prong 1) + V (Prong 2) ───────────────────────────
+    logging.warning("✍️ CALL 2/3: Prong 1 + Prong 2...")
     prompt_2 = f"""{profile_ctx}
 
-Write SECTION III of the EB-2 NIW self-petition letter for {applicant_name}.
-Target: 12-14 pages (approximately 4,500-5,500 words). BE VERY DETAILED AND COMPREHENSIVE.
-This is the LONGEST and most important section — it demonstrates the petitioner is well-positioned.
+Write SECTIONS IV and V of the EB-2 NIW Self-Petitioner Statement for {applicant_name}.
+Target: ~2,700–3,000 words combined (Section IV ~1,200, Section V ~1,500).
 
-SECTION III: PRONG 2 — I AM WELL POSITIONED TO ADVANCE THE PROPOSED ENDEAVOR
-A. Introduction
-B. Advanced Level Academic Credentials
-   For EACH degree:
-   - Full degree name and field of study
-   - Institution, country, graduation year
-   - U.S. equivalency evaluation (CED, WES, etc.) — evaluator and result
-   - GPA if mentioned
-   - How the curriculum is directly relevant to the proposed project
+────────────────────────────────────────────
+SECTION IV — PRONG 1: THE PROPOSED ENDEAVOR HAS SUBSTANTIAL MERIT AND NATIONAL IMPORTANCE
+<h1>IV. PRONG 1 — THE PROPOSED ENDEAVOR HAS SUBSTANTIAL MERIT AND NATIONAL IMPORTANCE</h1>
 
-C. Verifiable and Progressive Professional Experience (organize by:)
-   - CURRENT U.S. EXPERIENCE: Current employer, position, responsibilities, achievements, connection to project
-   - INTERNATIONAL EXPERIENCE: Countries, positions, scope, achievements
-   - PREVIOUS EXPERIENCE: Chronological with upward trajectory
-   For EACH position:
-   - Exact title, employer, location, dates
-   - Key responsibilities (detailed list)
-   - Specific achievements with numbers
-   - Direct connection to the proposed endeavor
+Use these EXACT subsection headings (each as <h2><strong><em>…</em></strong></h2>):
 
-D. Intellectual Property: Validated and Documented Methodologies
-   For EACH proprietary methodology/framework:
-   - Full name and acronym
-   - What problem it solves
-   - ALL phases, steps, or components in detail
-   - Where it is documented (manuscript, publication, etc.)
-   - Expert validation — who validated it, their quote, Exhibit number
-   - Evidence of effectiveness (pilot results, testimonials)
+A. Substantial Merit
+   - Argue the merit of the endeavor with reference to documented evidence, methodologies, and prior validation
+   - Quote independent signatories verbatim where they have spoken to merit, with full attribution and Exhibit number
 
-E. Recognition by Multidisciplinary Experts
-   For EACH expert endorsement:
-   - Expert's full name and complete credentials (degrees, titles)
-   - Organization and position
-   - VERBATIM QUOTE of what they say about the petitioner
-   - How their expertise makes their endorsement credible
-   - Exhibit number
-   
-F. Track Record of Success (Evidence of Execution Capacity)
-   - Programs implemented with results
-   - Quantified achievements
-   - Students/beneficiaries reached
-   - Collaborations established
-   - Current pilot phase status
+B. National Importance
+   Provide FIVE distinct reasons, each in its OWN paragraph, opening with the exact ordinal phrasing below:
+   - "First, the affected population is national in scope…" — cite specific demographic statistics with year and source (BLS, Census, CDC, etc.)
+   - "Second, the economic and fiscal consequences…" — quantify in dollars, jobs, productivity loss
+   - "Third, [project-specific dimension]…" — tie to a specific dimension only this endeavor addresses
+   - "Fourth, declared federal-policy alignment…" — cite specific federal laws, agencies, Executive Orders, or strategic plans the project advances
+   - "Fifth, [replicability / scalability / sustainability]…" — argue why this can scale beyond a single jurisdiction or pilot
 
-G. Resources and Plan for Advancing the Endeavor
+Use the phrase "substantial merit and national importance" at least once. Reference Matter of Dhanasar at least once in this section.
+
+────────────────────────────────────────────
+SECTION V — PRONG 2: I AM WELL-POSITIONED TO ADVANCE THE PROPOSED ENDEAVOR
+<h1>V. PRONG 2 — I AM WELL-POSITIONED TO ADVANCE THE PROPOSED ENDEAVOR</h1>
+
+Use these EXACT subsection headings (each as <h2><strong><em>…</em></strong></h2>):
+
+A. Education and Specialized Knowledge
+   - For EACH degree: full name, field, institution, country, year, U.S. equivalency evaluation
+   - Concrete link to the competencies the endeavor demands
+
+B. Record of Success
+   - For EACH proprietary methodology / framework: full name, acronym expanded, problem it solves, ALL phases described, where documented, expert validation quote (verbatim, attributed, with Exhibit), evidence of effectiveness
+   - Quantified achievements (programs implemented, beneficiaries reached, partnerships, pilot status)
+
+C. Plan for Future Activities
    - Year 1 implementation plan
-   - Scaling plan (years 1-5)
-   - Committed partnerships
-   - Technology resources
-   - Financial sustainability model
+   - 1–5 year scaling plan
+   - Committed partnerships, technology resources, financial sustainability model
+   - Mention the USPTO provisional patent here as part of the future-activities IP roadmap (with Exhibit reference)
 
-H. Conclusion on Prong 2 — Strong compelling summary
+D. Support from Relevant Stakeholders
+   List EVERY recommendation/expert letter with enumerated markers (i), (ii), (iii), … For each:
+   - Full name + complete credentials (degrees, titles)
+   - Organization and position
+   - Years of experience
+   - Nature of relationship with the petitioner + explicit financial-independence statement
+   - VERBATIM QUOTE of their key endorsement, in quotation marks, with attribution and Exhibit number
+   Pattern to follow:
+   "(i) Dr. [Full Name], [Title], [Institution] ([X] years of experience). [Nature of relationship + financial-independence statement]. As Dr. [Last Name] independently observed: '[exact quote]' (Exhibit [N])."
+
+Use the phrase "well-positioned to advance the proposed endeavor" at least once.
+
 {RULES}"""
 
-    # ── CALL 3: Section IV (Prong 3) + Section V (Conclusion) ────────────────
-    logging.warning("✍️ CALL 3/3: Prong 3 + Conclusion...")
+    # ── CALL 3: Sections VI (Prong 3) + VII (Additional) + VIII (Conclusion) + Closing + Enclosures ─
+    logging.warning("✍️ CALL 3/3: Prong 3 + Additional Considerations + Conclusion + Enclosures...")
     prompt_3 = f"""{profile_ctx}
 
-Write SECTION IV and SECTION V of the EB-2 NIW self-petition letter for {applicant_name}.
-Target: 10-12 pages (approximately 3,500-4,500 words). BE VERY DETAILED AND COMPREHENSIVE.
+Write SECTIONS VI, VII, and VIII plus the LETTER CLOSING and ENCLOSURES LIST of the EB-2 NIW Self-Petitioner Statement for {applicant_name}.
+Target: ~2,200–2,500 words combined (Section VI ~1,200, Section VII ~600, Section VIII ~400, plus closing and enclosures).
 
-SECTION IV: PRONG 3 — IT WOULD BENEFIT THE UNITED STATES TO WAIVE THE JOB OFFER AND LABOR CERTIFICATION REQUIREMENTS
-A. Introduction
-B. The Nature of My Proposed Project (Not Traditional Employment)
-   1. Job Creator vs. Job Occupant
-      - How many jobs will be created (specific number and types)
-      - The petitioner is not filling an existing vacancy
-      - Entrepreneurial/directorial unique role
-   2. Highly Specialized Expertise — Unique Combination
-      - What skills/knowledge combination cannot be replicated by U.S. workers
-      - Why no other person is positioned the same way
-C. Urgency of the National Interest Problem
-   - Opportunity cost of delay
-   - Impact of each year without the solution (in dollars and lives affected)
-   - Why timing matters for this specific endeavor
-D. The PERM Process Is Not Appropriate for This Case (Legal Analysis)
-   - Why PERM is designed for different employment situations
-   - Why PERM would be counterproductive for entrepreneurial projects
-   - Cite Dhanasar on entrepreneurs and self-directed projects
-E. Balance of Interests: National vs. Standard Process
-   - Specific national benefits that outweigh standard process interest
-   - Economic, social, civic benefits quantified
-F. Precedent and Consistency with USCIS Policy
-   - How this case aligns with approved NIW precedents
-   - Consistency with current administration priorities
-G. No Conflict with U.S. Workers
-   - How the project creates opportunities for U.S. workers
-   - Complementary, not competitive nature
-H. Conclusion on Prong 3 — Strong compelling summary
+────────────────────────────────────────────
+SECTION VI — PRONG 3: ON BALANCE, WAIVING THE JOB-OFFER AND LABOR-CERTIFICATION REQUIREMENTS WOULD BENEFIT THE UNITED STATES
+<h1>VI. PRONG 3 — ON BALANCE, WAIVING THE JOB-OFFER AND LABOR-CERTIFICATION REQUIREMENTS WOULD BENEFIT THE UNITED STATES</h1>
 
-SECTION V: CONCLUSION AND FORMAL PETITION
-A. Summary of Evidence Presented
-   - Concise synthesis of the strongest points for all three prongs
-B. Why This Case Merits Approval
-   - The unique combination of factors that make this NIW compelling
-C. Consistency with Precedents and Policy
-D. Formal Petition and Request
-   - Formal language requesting USCIS to approve the I-140
-   - Reference to the petition being in the national interest
-E. Final Personal Statement
-   - Petitioner's personal commitment to the proposed endeavor
-   - Vision for impact on the United States
+Use these EXACT subsection headings (each as <h2><strong><em>…</em></strong></h2>):
 
-LIST OF EXHIBITS
-(Number each exhibit as provided in the exhibit list below, with filename and document type)
+A. The Endeavor Is Entrepreneurial, Not an Employment Vacancy
+   - Establish there is no specific U.S. employer/job to fill — the petitioner is the founder
+   - Cite Dhanasar guidance on entrepreneurial and self-directed projects
+
+B. The Endeavor Creates Jobs for U.S. Workers Rather Than Competing for Them
+   - Specific number and types of jobs the endeavor will create (with timeline)
+   - Argue complementarity (not competition) with the U.S. labor market
+
+C. The Time Sensitivity of the National Need Weighs Against PERM Delay
+   - QUANTIFY the cost of a 12-to-18-month PERM delay in concrete units
+     (e.g., "A 12-to-18-month PERM delay therefore translates, in expected value, into approximately
+     [N] [units of harm — e.g., people without service, dollars in unrealized productivity, preventable incidents]
+     that would not be prevented during the delay window alone.")
+   - Cite the national-importance figures from Section IV to ground the quantification
+
+D. The Convergence of Competencies Cannot Be Sourced Through PERM
+   - The skill set is "structurally rare in the labor market" OR "exists in too few professionals to populate one"
+   - Demonstrate that no PERM recruitment process could realistically identify a substitute
+   - Build on the unique-convergence argument from Section II.E
+
+Use the phrase "on balance, it would be beneficial to the United States to waive..." in this section.
+
+────────────────────────────────────────────
+SECTION VII — ADDITIONAL CONSIDERATIONS
+<h1>VII. ADDITIONAL CONSIDERATIONS</h1>
+
+Use these EXACT subsection headings (each as <h2><strong><em>…</em></strong></h2>):
+
+A. Personal Capital Commitment and Accountability
+   - Concrete financial commitment to the endeavor (founder capital, percentage of net worth committed, equity stakes)
+   - Argue accountability beyond a typical employee role
+
+B. Intellectual-Property Contribution
+   - USPTO provisional patent (if applicable) — describe the IP, its function in the endeavor, and reference the Exhibit
+   - Trademarks, copyrights, proprietary methodologies registered or in process
+
+C. Commitment to U.S. Regulatory Compliance and [Applicable Framework]
+   - Identify the specific U.S. regulatory frameworks the endeavor will adhere to (HIPAA, FERPA, FDA, EPA, SEC, state licensing, etc. — whichever applies)
+   - State the petitioner's commitment to operating under those frameworks
+
+────────────────────────────────────────────
+SECTION VIII — CONCLUSION AND RESPECTFUL REQUEST
+<h1>VIII. CONCLUSION AND RESPECTFUL REQUEST</h1>
+
+- Paragraph recapitulating the three prongs — substantial merit + well-positioned + waiver beneficial — within the meaning of Matter of Dhanasar
+- Formal request for approval of the I-140 petition
+- Close with this declaration WRAPPED IN <em> tags (REPEATED from Section I — required):
+  "I make this statement under penalty of perjury, and I declare that the information presented herein is true, complete, and accurate to the best of my knowledge and belief."
+
+────────────────────────────────────────────
+LETTER CLOSING (output after Section VIII):
+- "Respectfully submitted,"
+- Blank line for signature (use <p>&nbsp;</p> or two <br/>)
+- Full name in <strong> (no centering — left aligned)
+- 2–3 lines with credentials and "Founder — [Project Name]" role
+
+────────────────────────────────────────────
+ENCLOSURES (output last):
+<h1>ENCLOSURES</h1>
+Numbered list of EVERY exhibit referenced. Use the exact exhibit list below — each item as "Exhibit [N]: [filename] — [document type/description]".
+
 {exhibit_list}
+
 {RULES}"""
 
     # ── Execute all 3 calls ────────────────────────────────────────────────────
     section_contents = []
     for i, (name, prompt) in enumerate([
-        ("Section_I+II", prompt_1),
-        ("Section_III", prompt_2),
-        ("Section_IV+V", prompt_3),
+        ("Header+Sections_I-III", prompt_1),
+        ("Sections_IV-V_Prongs1-2", prompt_2),
+        ("Sections_VI-VIII+Closing+Enclosures", prompt_3),
     ], start=1):
         content = await _call_ai_with_fallback(openrouter_key, openai_client, system_prompt, prompt, name)
         section_contents.append(content)

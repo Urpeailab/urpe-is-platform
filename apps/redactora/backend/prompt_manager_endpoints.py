@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-ADMIN_PROMPT_EMAILS = {"dau@urpeailab.com"}
+ADMIN_PROMPT_EMAILS = {"dau@urpeailab.com", "admin@urpe.com"}
 
 ADMIN_PROMPT_EMAIL_LIST = sorted(ADMIN_PROMPT_EMAILS)
 

@@ -8440,7 +8440,7 @@ const UserManagement = () => {
   const handleFileSelected = (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
-    const invalid = files.filter(f => !f.name.endsWith('.json'));
+    const invalid = files.filter(f => !f.name.toLowerCase().endsWith('.json'));
     if (invalid.length) {
       toast.error(`Algunos archivos no son JSON: ${invalid.map(f => f.name).join(', ')}`);
       return;
@@ -8456,9 +8456,9 @@ const UserManagement = () => {
     setImportProgress({ current: 0, total: selectedFiles.length, currentName: '' });
     const token = localStorage.getItem('token');
     let totalUpserted = 0;
-    let totalModified = 0;
     let totalCollections = 0;
     let fileResults = [];
+    let skippedSet = new Set();
     try {
       setIsImporting(true);
       for (let i = 0; i < selectedFiles.length; i++) {
@@ -8468,17 +8468,18 @@ const UserManagement = () => {
         formPayload.append('file', file);
         const response = await axios.post(`${API}/admin/import-database`, formPayload, {
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'multipart/form-data' },
-          timeout: 120000
+          timeout: 1800000  // 30 min — bulk de archivos grandes (cientos de MB)
         });
         const result = response.data;
         totalUpserted += result.total_upserted || 0;
-        totalModified += result.total_modified || 0;
         totalCollections = Math.max(totalCollections, result.total_collections || 0);
-        fileResults.push({ name: file.name, database: result.database_name, upserted: result.total_upserted, modified: result.total_modified });
+        (result.skipped_collections || []).forEach(s => skippedSet.add(s.name));
+        fileResults.push({ name: file.name, database: result.database_name, upserted: result.total_upserted, skipped: (result.skipped_collections || []).length });
       }
-      setImportResult({ total_upserted: totalUpserted, total_modified: totalModified, total_collections: totalCollections, files: fileResults });
+      setImportResult({ total_upserted: totalUpserted, total_collections: totalCollections, files: fileResults, skipped_collections: Array.from(skippedSet) });
       setSelectedFiles([]);
-      toast.success(`${selectedFiles.length} archivo(s) importados: ${totalUpserted} insertados, ${totalModified} actualizados.`);
+      toast.success(`${selectedFiles.length} archivo(s): ${totalUpserted} registros importados${skippedSet.size ? `, ${skippedSet.size} tabla(s) omitida(s)` : ''}.`);
+      loadUsers();
     } catch (error) {
       console.error('Error importing database:', error);
       toast.error(error.response?.data?.detail || 'Error al importar la base de datos');
@@ -8636,7 +8637,7 @@ const UserManagement = () => {
             Usuarios Registrados ({users.length})
           </h2>
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-            {user?.email === 'dau@urpeailab.com' && (
+            {user?.role?.toUpperCase() === 'ADMIN' && (
               <>
                 <input
                   ref={importFileRef}
@@ -8678,19 +8679,24 @@ const UserManagement = () => {
               Importación Completada
             </h3>
             <p style={{ fontSize: '0.875rem', color: '#15803d', marginBottom: '0.5rem' }}>
-              {importResult.total_upserted} documentos insertados · {importResult.total_modified} documentos actualizados · {importResult.total_collections} colecciones procesadas
+              {importResult.total_upserted} registros importados · {importResult.total_collections} colecciones procesadas
             </p>
             {importResult.files && importResult.files.length > 0 && (
               <ul style={{ fontSize: '0.8rem', color: '#166534', marginBottom: '0.5rem', paddingLeft: '1rem' }}>
                 {importResult.files.map((f, i) => (
                   <li key={i}>
-                    <strong>{f.name}</strong> ({f.database}) — {f.upserted} insertados, {f.modified} actualizados
+                    <strong>{f.name}</strong> ({f.database}) — {f.upserted} importados{f.skipped ? `, ${f.skipped} colección(es) omitida(s)` : ''}
                   </li>
                 ))}
               </ul>
             )}
+            {importResult.skipped_collections && importResult.skipped_collections.length > 0 && (
+              <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: '#fef3c7', borderRadius: '0.25rem', fontSize: '0.8rem', color: '#92400e' }}>
+                <strong>Colecciones sin tabla destino en Supabase:</strong> {importResult.skipped_collections.join(', ')}
+              </div>
+            )}
             <button
-              style={{ fontSize: '0.75rem', color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer' }}
+              style={{ fontSize: '0.75rem', color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer', marginTop: '0.5rem' }}
               onClick={() => setImportResult(null)}
             >
               Cerrar
@@ -8770,13 +8776,13 @@ const UserManagement = () => {
                     <strong>{selectedFiles.length} archivo(s) seleccionado(s):</strong><br/>
                     {selectedFiles.map((f, i) => (
                       <span key={i} style={{ display: 'block', fontSize: '0.8rem', color: '#374151', marginTop: '0.25rem' }}>
-                        • {f.name} ({(f.size / 1024 / 1024).toFixed(1)} MB)
+                        • {f.name} ({(f.size / 1024 / 1024).toFixed(2)} MB)
                       </span>
                     ))}
                     <br/>
                   </span>
                 )}
-                Los documentos existentes serán actualizados (upsert) y los nuevos serán insertados. Las contraseñas de usuarios existentes no se modificarán.
+                Detecta automáticamente lo que haya en el archivo (usuarios, clientes, documentos, etc.). Los documentos existentes serán actualizados (upsert) y los nuevos serán insertados. Las contraseñas de usuarios existentes no se modificarán.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter style={{ marginTop: '1rem' }}>

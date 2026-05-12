@@ -116,6 +116,32 @@ def pdf_safe(text: str) -> str:
     return text
 
 
+def md_inline_to_rl(text: str) -> str:
+    """Convertir markdown inline a XML inline de ReportLab.
+
+    Aplicar ANTES del parseo HTML para que markdown embebido dentro de tags
+    (ej: `<p>**71% reduction**</p>`) se convierta en lugar de aparecer literal en el PDF.
+
+    Handles:
+      - Runs de 3+ asteriscos (`***`, `****`, ...) → eliminados (no son markdown estándar,
+        suelen aparecer como separadores de sección puestos por el LLM)
+      - `**bold**` → `<b>bold</b>`
+      - `**` huérfanos sin par → eliminados
+      - `*italic*` → `<i>italic</i>` (conservador: requiere word-boundary fuera y no space dentro)
+    """
+    if not text:
+        return text
+    # Strip 3+ runs PRIMERO para que no rompan el pareo de **
+    text = re.sub(r'\*{3,}', '', text)
+    # **bold** → <b>bold</b>
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.DOTALL)
+    # Quitar `**` huérfanos
+    text = text.replace('**', '')
+    # *italic* → <i>italic</i> — conservador para no convertir asteriscos sueltos
+    text = re.sub(r'(?<!\w)\*(?!\s)([^*\n]{1,200}?)(?<!\s)\*(?!\w)', r'<i>\1</i>', text)
+    return text
+
+
 def clean_latex(text: str) -> str:
     """
     Convert LaTeX math notation to readable ASCII text for PDF rendering.

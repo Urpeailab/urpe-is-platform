@@ -7069,7 +7069,9 @@ async def register(user_data: UserRegister):
             "leidi@gmail.com",
             "leidipelaez@gmail.com",
             "dau@urpeailab.com",
-            "diego@urpeailab.com"
+            "diego@urpeailab.com",
+            "admin@urpe.com",
+            "fl@urpeailab.com",
         ]
         
         # Determinar el rol basado en el email
@@ -7441,85 +7443,107 @@ async def import_database(
     file: UploadFile = File(...),
     admin_user: User = Depends(get_admin_user)
 ):
-    """Import database from uploaded JSON export file. Restricted to dau@urpeailab.com."""
-    if admin_user.email != "dau@urpeailab.com":
-        raise HTTPException(status_code=403, detail="Acceso restringido. Solo dau@urpeailab.com puede importar la base de datos.")
-    
+    """Import database from uploaded JSON export file. Restricted to ADMIN users.
+
+    Usa bulk_upsert nativo de Supabase (un batch por chunk) para soportar archivos grandes.
+    Las colecciones cuya tabla no existe en Supabase se reportan como skipped.
+    """
     if not file.filename.endswith(".json"):
         raise HTTPException(status_code=400, detail="El archivo debe ser un JSON (.json)")
-    
+
+    BATCH_SIZE = 100  # bulk_upsert hace split adaptativo si Postgres timea out
+
     try:
         content = await file.read()
         export_data = json.loads(content.decode("utf-8"))
-        
+
         collections = export_data.get("collections", {})
-        results = {}
+        results: dict = {}
+        skipped_collections: list = []
         total_upserted = 0
-        total_modified = 0
-        
+
+        # Pre-fetch emails de usuarios existentes (un solo round-trip)
+        existing_emails: set = set()
+        if isinstance(collections.get("users"), list) and collections["users"]:
+            async for u in db.users.find({}):
+                if u.get("email"):
+                    existing_emails.add(u["email"])
+
         for collection_name, documents in collections.items():
-            if not documents:
-                results[collection_name] = {"skipped": True, "total": 0}
+            if not isinstance(documents, list) or not documents:
+                results[collection_name] = {"skipped": True, "total": 0, "upserted": 0}
                 continue
-            
+
             upserted = 0
-            modified = 0
             errors = 0
-            
-            for doc in documents:
-                try:
-                    doc.pop("_id", None)
-                    
-                    if collection_name == "users":
-                        email = doc.get("email")
-                        if not email:
-                            continue
-                        existing = await db.users.find_one({"email": email}, {"_id": 0, "password": 1})
-                        if existing:
-                            # Update without overwriting password
-                            update_fields = {k: v for k, v in doc.items() if k != "password"}
-                            res = await db.users.update_one({"email": email}, {"$set": update_fields})
-                            modified += res.modified_count
-                        else:
-                            # New user - set placeholder password
-                            doc["password"] = get_password_hash("changeme123")
-                            await db.users.insert_one(doc)
-                            upserted += 1
-                    elif "id" in doc:
-                        res = await db[collection_name].update_one(
-                            {"id": doc["id"]},
-                            {"$set": doc},
-                            upsert=True
-                        )
-                        if res.upserted_id is not None:
-                            upserted += 1
-                        else:
-                            modified += res.modified_count
-                    else:
-                        await db[collection_name].insert_one(doc)
-                        upserted += 1
-                except Exception as e:
-                    logging.error(f"Error importando doc en '{collection_name}': {e}")
+            batch: list = []
+            missing_table = False
+
+            for raw in documents:
+                if not isinstance(raw, dict):
                     errors += 1
-            
+                    continue
+                doc = {k: v for k, v in raw.items() if k != "_id"}
+
+                if collection_name == "users":
+                    email = doc.get("email")
+                    if not email:
+                        errors += 1
+                        continue
+                    if email in existing_emails:
+                        # Usuario existente: actualizar SIN tocar password
+                        doc.pop("password", None)
+                        try:
+                            await db.users.update_one({"email": email}, {"$set": doc})
+                            upserted += 1
+                        except Exception as e:
+                            logging.error(f"Error actualizando user {email}: {e}")
+                            errors += 1
+                        continue
+                    else:
+                        # Nuevo usuario: password placeholder si no viene una válida
+                        if not doc.get("password"):
+                            doc["password"] = get_password_hash("changeme123")
+                        existing_emails.add(email)
+
+                batch.append(doc)
+                if len(batch) >= BATCH_SIZE:
+                    res = await db[collection_name].bulk_upsert(batch)
+                    if res.get("missing_table"):
+                        missing_table = True
+                        skipped_collections.append({"name": collection_name, "reason": "Tabla no existe en Supabase"})
+                        batch = []
+                        break
+                    upserted += res.get("upserted", 0)
+                    errors += res.get("errors", 0)
+                    batch = []
+
+            if batch and not missing_table:
+                res = await db[collection_name].bulk_upsert(batch)
+                if res.get("missing_table"):
+                    skipped_collections.append({"name": collection_name, "reason": "Tabla no existe en Supabase"})
+                else:
+                    upserted += res.get("upserted", 0)
+                    errors += res.get("errors", 0)
+
             results[collection_name] = {
                 "total": len(documents),
                 "upserted": upserted,
-                "modified": modified,
-                "errors": errors
+                "errors": errors,
+                "missing_table": missing_table,
             }
             total_upserted += upserted
-            total_modified += modified
-            logging.info(f"✅ Colección '{collection_name}': {upserted} insertados, {modified} actualizados, {errors} errores")
-        
+            logging.info(f"✅ Colección '{collection_name}': {upserted}/{len(documents)} upserted, {errors} errores{' [MISSING TABLE]' if missing_table else ''}")
+
         return {
-            "message": "Importación completada exitosamente",
+            "message": "Importación completada",
             "database_name": export_data.get("database_name", "unknown"),
             "export_date": export_data.get("export_date", "unknown"),
             "total_collections": len(collections),
             "total_upserted": total_upserted,
-            "total_modified": total_modified,
-            "collections": results
+            "total_modified": 0,  # Supabase upsert no distingue insert vs update; todo cuenta como upserted
+            "collections": results,
+            "skipped_collections": skipped_collections,
         }
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"Error al leer el archivo JSON: {str(e)}")
@@ -12291,6 +12315,26 @@ async def _run_ai_edit_background(job_id: str, niw_id: str, edit_instructions: s
                                'confusion', 'confusión', 'calificacion', 'prong 1', 'prong 2', 'prong 3']
         is_structural = any(kw in edit_instructions.lower() for kw in STRUCTURAL_KEYWORDS) or len(edit_instructions) > 300
 
+        # Helper compartido por ambos modos: rechaza ediciones que destruyen tablas/listas.
+        import re as _ai_re
+
+        def _structure_lost(original: str, new: str) -> Optional[str]:
+            """Si el original tenía elementos estructurales (tablas/listas) y el nuevo los perdió,
+            devuelve una descripción del problema. Si todo OK, devuelve None."""
+            if not original or not new:
+                return None
+            # Tablas: lo más crítico — un cliente no debería perder una tabla por una edición de texto
+            orig_tables = len(_ai_re.findall(r'<table\b', original, _ai_re.IGNORECASE))
+            new_tables = len(_ai_re.findall(r'<table\b', new, _ai_re.IGNORECASE))
+            if orig_tables > 0 and new_tables < orig_tables:
+                return f"tablas perdidas ({orig_tables} originales → {new_tables} en nuevo)"
+            # Listas: si tenía varias y perdió todas, sospechoso
+            orig_lists = len(_ai_re.findall(r'<(?:ul|ol)\b', original, _ai_re.IGNORECASE))
+            new_lists = len(_ai_re.findall(r'<(?:ul|ol)\b', new, _ai_re.IGNORECASE))
+            if orig_lists >= 2 and new_lists == 0:
+                return f"listas perdidas ({orig_lists} → 0)"
+            return None
+
         if is_structural:
             # ── MODO ESTRUCTURAL: 2 fases para evitar límites de contexto ─────
             # Fase 1: Plan de cambios (solo resúmenes de cada sección ~ 500 chars)
@@ -12377,11 +12421,19 @@ Crea un plan de edición específico para CADA sección. Para secciones sin camb
                 async with sem:
                     try:
                         section_system_msg = """Eres un experto editor de propuestas EB-2 NIW para USCIS.
-Aplica la instrucción específica al contenido de la sección con precisión quirúrgica.
-- Devuelve SOLO el contenido modificado en HTML
-- Si la instrucción no aplica a esta sección, devuelve exactamente: NO_CHANGE
-- Mantén el formato HTML existente (h1-h6, p, ul, li, table, etc.)
-- No expliques los cambios, solo devuelve el HTML modificado"""
+Aplica la instrucción específica al contenido de la sección con PRECISIÓN QUIRÚRGICA.
+
+REGLAS DE PRESERVACIÓN OBLIGATORIAS (no negociables):
+- TODAS las <table>...</table> del original deben aparecer EN EL OUTPUT, completas e intactas
+  (mismas filas, mismas columnas, mismo contenido) salvo que la instrucción pida explícitamente
+  modificar una tabla específica. Una edición de texto NUNCA debe eliminar ni reducir tablas.
+- TODAS las <ul>/<ol>/<li> del original deben preservarse salvo orden explícita en contra.
+- Conserva la estructura de headings (h1-h6) y los <p>; solo modifica su contenido.
+- Si el contenido a modificar no toca tablas/listas, devuélvelas IDÉNTICAS a como están.
+
+OUTPUT:
+- Devuelve SOLO el HTML completo modificado de la sección — sin explicaciones, sin ```html``` wrappers
+- Si la instrucción NO aplica a esta sección, devuelve EXACTAMENTE: NO_CHANGE"""
 
                         apply_prompt = f"""INSTRUCCIÓN PARA ESTA SECCIÓN:
 {specific_instr}
@@ -12390,9 +12442,10 @@ CONTEXTO (instrucción general del usuario):
 {edit_instructions[:500]}
 
 CONTENIDO ACTUAL DE LA SECCIÓN {section_num} — {section.get('title','')}:
-{original_content[:14000]}
+{original_content[:30000]}
 
-Aplica la instrucción y devuelve el HTML modificado completo, o devuelve NO_CHANGE si no aplica."""
+Aplica la instrucción y devuelve el HTML modificado COMPLETO (incluyendo todas las tablas y listas
+intactas del original), o devuelve NO_CHANGE si no aplica."""
 
                         new_content = await _openrouter_completion(
                             section_system_msg, apply_prompt,
@@ -12408,6 +12461,13 @@ Aplica la instrucción y devuelve el HTML modificado completo, o devuelve NO_CHA
                         new_content = new_content.strip()
 
                         if new_content == 'NO_CHANGE' or new_content == original_content.strip():
+                            return None
+
+                        # Guard: si el LLM dropeó elementos estructurales, rechazar el cambio
+                        # para preservar el original intacto en lugar de aceptar una pérdida de data.
+                        loss = _structure_lost(original_content, new_content)
+                        if loss:
+                            logging.warning(f"[Job {job_id[:8]}] Sección {section_num} RECHAZADA — {loss}; se preserva original")
                             return None
 
                         return {
@@ -12532,23 +12592,33 @@ Si las instrucciones son muy globales (ej: "cambiar [Estado] por Florida en todo
                 async with sem:
                     try:
                         section_simple_system = """Eres un editor experto en documentos EB-2 NIW para USCIS.
-Aplica exactamente la instrucción dada al texto. Reglas:
-- Devuelve SOLO el contenido HTML modificado de la sección, sin explicaciones ni wrappers de código
-- Si piden REDUCIR/ACORTAR: el resultado debe tener MENOS texto
-- Si piden EXTENDER/AMPLIAR: el resultado debe tener MÁS texto  
-- Si la instrucción no aplica a esta sección, devuelve exactamente: NO_CHANGE
-- Mantén el formato HTML existente (h1-h6, p, ul, li, table, etc.)
+Aplica exactamente la instrucción dada al texto.
+
+REGLAS DE PRESERVACIÓN OBLIGATORIAS (no negociables):
+- TODAS las <table>...</table> del original deben aparecer EN EL OUTPUT, completas e intactas
+  (mismas filas, mismas columnas, mismo contenido) salvo que la instrucción pida explícitamente
+  modificar una tabla específica. Una edición de texto NUNCA debe eliminar ni reducir tablas.
+- TODAS las <ul>/<ol>/<li> del original deben preservarse salvo orden explícita en contra.
+- Conserva la estructura de headings (h1-h6) y los <p>; solo modifica su contenido textual.
+
+REGLAS DE EDICIÓN:
+- Si piden REDUCIR/ACORTAR: el resultado debe tener MENOS texto (pero las tablas/listas siguen)
+- Si piden EXTENDER/AMPLIAR: el resultado debe tener MÁS texto
 - Si piden reemplazar un valor global (ej: [Estado] → Florida), aplícalo aunque sea solo ese cambio
+- Si la instrucción NO aplica a esta sección, devuelve EXACTAMENTE: NO_CHANGE
+
+OUTPUT:
+- Devuelve SOLO el HTML completo modificado, sin explicaciones
 - NUNCA devuelvas bloques ```html o ```, solo el HTML puro"""
 
                         section_prompt = f"""INSTRUCCIÓN DE EDICIÓN:
 {edit_instructions}
 
 SECCIÓN {section_num}: {section_title}
-{original_content[:18000]}
+{original_content[:30000]}
 
 Si esta instrucción NO aplica a esta sección, responde solo: NO_CHANGE
-Si SÍ aplica, devuelve SOLO el contenido HTML modificado completo."""
+Si SÍ aplica, devuelve SOLO el HTML modificado completo (preservando todas las tablas/listas del original)."""
 
                         new_content = await _openrouter_completion(
                             section_simple_system, section_prompt,
@@ -12567,6 +12637,13 @@ Si SÍ aplica, devuelve SOLO el contenido HTML modificado completo."""
 
                         if new_content == "NO_CHANGE" or new_content == original_content.strip():
                             logging.info(f"[Job {job_id[:8]}] Sección {section_num}: sin cambios")
+                            return None
+
+                        # Guard: si el LLM dropeó elementos estructurales, rechazar el cambio
+                        # y preservar el original intacto.
+                        loss = _structure_lost(original_content, new_content)
+                        if loss:
+                            logging.warning(f"[Job {job_id[:8]}] Sección {section_num} RECHAZADA (simple) — {loss}; se preserva original")
                             return None
 
                         logging.info(f"[Job {job_id[:8]}] Sección {section_num}: {len(original_content)} → {len(new_content)} chars")
@@ -37033,6 +37110,12 @@ async def download_recommendation_letter(
         letter_text = _r.sub(r'  +', ' ', letter_text)
         letter_text = _r.sub(r' ([,.:;])', r'\1', letter_text)
 
+        # Convertir markdown inline ANTES del parseo HTML para que `**bold**` dentro
+        # de tags se convierta a <b>, y eliminar runs de `***`/`****` (separadores
+        # no-estándar puestos por el LLM que quedaban literales en el PDF).
+        from pdf_utils import md_inline_to_rl as _md_inline
+        letter_text = _md_inline(letter_text)
+
         # ── HTML-aware content builder ─────────────────────────────────────────
         # If content has <p> tags (HTML format), use BeautifulSoup
         # Otherwise fall back to line-by-line plain-text parsing
@@ -39152,15 +39235,13 @@ async def get_dashboard_overview(
 ):
     """Obtener vista general del dashboard del usuario"""
     try:
-        # Query base para filtrar por usuario
-        # ADMIN puede ver todos los datos si view_all=True
-        # Usuarios normales siempre ven solo sus propios datos
-        if current_user.role == "ADMIN" and view_all:
-            # Admin viendo todos los clientes
+        # ADMIN ve todo siempre (consistente con /api/clients que no filtra por rol).
+        # Usuarios no-ADMIN ven solo sus propios datos.
+        # `view_all` queda como flag para que un ADMIN pueda forzar filtrado por sí mismo si quisiera.
+        if current_user.role and current_user.role.upper() == "ADMIN":
             client_query = {"status": "active"}
             doc_query = {}
         else:
-            # Admin viendo solo sus clientes O usuario normal
             client_query = {"operator_id": current_user.id, "status": "active"}
             doc_query = {"user_id": current_user.id}
         
@@ -39172,43 +39253,46 @@ async def get_dashboard_overview(
         
         # Contar documentos del usuario (excluyendo eliminados) con timeout
         total_docs = 0
+        completed_docs = 0
         deleted_query = {"status": {"$ne": "deleted"}}
-        
-        # Combinar query de usuario con filtro de eliminados
+        completed_query = {**doc_query, "status": "completed"}
         full_doc_query = {**doc_query, **deleted_query}
-        
-        # Count all document types (excluding deleted) con timeout reducido
+
+        # Colecciones a contar (todas las "documentos" que importan al dashboard)
+        doc_collections = [
+            "whitepapers_in_progress", "whitepapers",
+            "business_plans", "niw_in_progress",
+            "patents_in_progress", "patents",
+            "books_in_progress", "books",
+        ]
+
         try:
-            counts = await asyncio.gather(
-                asyncio.wait_for(db.whitepapers_in_progress.count_documents(full_doc_query), timeout=3.0),
-                asyncio.wait_for(db.whitepapers.count_documents(full_doc_query), timeout=3.0),
-                asyncio.wait_for(db.business_plans.count_documents(full_doc_query), timeout=3.0),
-                asyncio.wait_for(db.niw_in_progress.count_documents(full_doc_query), timeout=3.0),
-                asyncio.wait_for(db.patents_in_progress.count_documents(full_doc_query), timeout=3.0),
-                asyncio.wait_for(db.patents.count_documents(full_doc_query), timeout=3.0),
-                asyncio.wait_for(db.books_in_progress.count_documents(full_doc_query), timeout=3.0),
-                asyncio.wait_for(db.books.count_documents(full_doc_query), timeout=3.0),
-                return_exceptions=True  # No fallar si alguno timeout
-            )
-            
-            # Sumar solo los que no sean excepciones
-            for count in counts:
+            total_tasks = [
+                asyncio.wait_for(db[c].count_documents(full_doc_query), timeout=3.0)
+                for c in doc_collections
+            ]
+            completed_tasks = [
+                asyncio.wait_for(db[c].count_documents(completed_query), timeout=3.0)
+                for c in doc_collections
+            ]
+            results = await asyncio.gather(*total_tasks, *completed_tasks, return_exceptions=True)
+            n = len(doc_collections)
+            for count in results[:n]:
                 if isinstance(count, int):
                     total_docs += count
-                    
+            for count in results[n:]:
+                if isinstance(count, int):
+                    completed_docs += count
         except asyncio.TimeoutError:
             logger.warning("Dashboard document count timeout - returning partial results")
-        
-        # Documentos en progreso (status = "in_progress" o "draft") - simplificado
-        in_progress = 0
-        completed = 0
-        
-        # Retornar datos básicos sin calcular in_progress/completed si hay problemas
+
+        in_progress = max(total_docs - completed_docs, 0)
+
         return {
             "total_clients": total_clients,
             "total_documents": total_docs,
-            "in_progress": 0,  # Calculado en frontend si es necesario
-            "completed": total_docs  # Aproximación
+            "in_progress": in_progress,
+            "completed": completed_docs,
         }
     except asyncio.TimeoutError:
         logger.error("Dashboard overview timeout")

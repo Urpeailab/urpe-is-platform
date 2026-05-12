@@ -467,13 +467,13 @@ const Dashboard = () => {
               <MessageSquare className="mr-2" size={18} />
               Chat con Mónica
             </Button>
-            {user?.role === 'ADMIN' && (
+            {user?.role?.toUpperCase() === 'ADMIN' && (
               <Button onClick={() => navigate('/admin/users')} variant="outline" style={{ borderColor: '#E5E7EB', color: '#374151' }}>
                 <Users className="mr-2" size={18} />
                 Gestión de Usuarios
               </Button>
             )}
-            {user?.email === 'dau@urpeailab.com' && (
+            {user?.role?.toUpperCase() === 'ADMIN' && (
               <Button
                 onClick={() => navigate('/admin/prompts')}
                 data-testid="btn-prompt-manager"

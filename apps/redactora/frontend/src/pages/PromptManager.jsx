@@ -4,7 +4,8 @@ import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 
 const API = window.location.origin;
-const ADMIN_EMAIL = 'dau@urpeailab.com';
+const ADMIN_EMAILS = ['dau@urpeailab.com', 'admin@urpe.com'];
+const isPromptAdmin = (email) => !!email && ADMIN_EMAILS.includes(email);
 
 // ── Category badge colors ─────────────────────────────────────────────────────
 const CATEGORY_COLORS = {
@@ -109,7 +110,7 @@ export default function PromptManager() {
 
   // ── Auth Guard ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!user || user.email !== ADMIN_EMAIL) {
+    if (!isPromptAdmin(user?.email)) {
       navigate('/dashboard');
     }
   }, [user, navigate]);
@@ -613,7 +614,7 @@ export default function PromptManager() {
   const hasChanges = editorContent !== originalContent;
   const modifiedCount = prompts.filter(p => p.is_modified).length;
 
-  if (!user || user.email !== ADMIN_EMAIL) return null;
+  if (!isPromptAdmin(user?.email)) return null;
 
   return (
     <div style={{

@@ -661,7 +661,7 @@ WRITING_GUIDELINES = """
 ## WRITING GUIDELINES
 
 Tone: Professional, analytical, evidence-based. Like a policy proposal, NOT a sales pitch.
-Voice: Third person for petitioner. Objective and authoritative for data.
+Voice: First person for the petitioner ("I", "my", "me"). The petitioner is writing this plan in their own voice. Objective and authoritative when reporting external data and statistics, but always returning to first-person narrative when describing the endeavor, qualifications, plan, or outcomes. NEVER use "the petitioner", "Mr./Ms. [Name]", or third-person pronouns ("she/he/they") to refer to the writer.
 Language: Professional but accessible. Define technical terms briefly.
 Format: Use HTML tags throughout (<h2>, <h3>, <h4>, <p>, <ul>, <li>, <strong>, <table>, <tr>, <th>, <td>)
 

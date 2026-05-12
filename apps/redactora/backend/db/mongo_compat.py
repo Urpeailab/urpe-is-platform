@@ -38,6 +38,36 @@ logger = logging.getLogger(__name__)
 
 TABLE_PREFIX = "redactora_"
 
+# Errores transitorios de conexión a Supabase que vale la pena reintentar
+_TRANSIENT_HINTS = (
+    "server disconnected",
+    "connection reset",
+    "connection aborted",
+    "remotedisconnected",
+    "read timed out",
+    "timeout",
+    "temporarily unavailable",
+    "upstream connect error",
+    "connection termination",
+)
+
+
+async def _execute_with_retry(fn, *, max_attempts: int = 3, base_delay: float = 0.3):
+    """Ejecuta una operación Supabase en thread con retry exponencial ante errores transitorios."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return await asyncio.to_thread(fn)
+        except Exception as e:
+            msg = str(e).lower()
+            is_transient = any(h in msg for h in _TRANSIENT_HINTS)
+            if not is_transient or attempt >= max_attempts:
+                raise
+            delay = base_delay * (2 ** (attempt - 1))
+            logger.warning(f"supabase transient error (attempt {attempt}/{max_attempts}, retrying in {delay:.1f}s): {str(e)[:200]}")
+            await asyncio.sleep(delay)
+
 # Logical-to-logical aliases (Mongo collection name → canonical name).
 # Lets old code keep using `db.niw_in_progress` while the physical table is
 # `redactora_business_plans_in_progress`.
@@ -138,10 +168,13 @@ def _physical_table(name: str) -> str:
 
 
 def _json_safe(v: Any) -> Any:
-    """Recursively coerce values to JSON-serializable types (datetime → ISO string)."""
+    """Recursively coerce values to JSON-serializable types (datetime → ISO string).
+    Strippea NUL bytes (\\u0000) de strings — Postgres TEXT/JSONB no los acepta (error 22P05)."""
     from datetime import datetime, date
     if isinstance(v, datetime) or isinstance(v, date):
         return v.isoformat()
+    if isinstance(v, str):
+        return v.replace("\x00", "") if "\x00" in v else v
     if isinstance(v, dict):
         return {k: _json_safe(x) for k, x in v.items()}
     if isinstance(v, list):
@@ -438,7 +471,7 @@ class CompatCollection:
             import uuid as _uuid
             doc["id"] = str(_uuid.uuid4())
         row = _split_surface_data(self.name, doc)
-        await asyncio.to_thread(lambda: self._sb.table(self.table).insert(row).execute())
+        await _execute_with_retry(lambda: self._sb.table(self.table).insert(row).execute())
         return InsertOneResult(inserted_id=doc["id"])
 
     async def insert_many(self, docs: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
@@ -451,8 +484,61 @@ class CompatCollection:
             ids.append(d["id"])
             rows.append(_split_surface_data(self.name, d))
         if rows:
-            await asyncio.to_thread(lambda: self._sb.table(self.table).insert(rows).execute())
+            await _execute_with_retry(lambda: self._sb.table(self.table).insert(rows).execute())
         return {"inserted_ids": ids}
+
+    async def bulk_upsert(self, docs: Iterable[Dict[str, Any]], on_conflict: str = "id") -> Dict[str, Any]:
+        """Bulk upsert via Supabase native upsert con split adaptativo.
+
+        Returns {"upserted": N, "errors": M, "missing_table": bool}.
+        En timeout de Postgres (57014) o errores de tamaño, splittea el batch en mitades y reintenta.
+        Si un doc individual falla, se cuenta como error y se sigue.
+        """
+        import uuid as _uuid
+        rows: List[Dict[str, Any]] = []
+        for d in docs:
+            if "id" not in d or not d["id"]:
+                d["id"] = str(_uuid.uuid4())
+            rows.append(_split_surface_data(self.name, d))
+        if not rows:
+            return {"upserted": 0, "errors": 0}
+        return await self._upsert_recursive(rows, on_conflict)
+
+    async def _upsert_recursive(self, rows: List[Dict[str, Any]], on_conflict: str) -> Dict[str, Any]:
+        """Intenta upsert; si falla por timeout/tamaño splittea y reintenta. Doc-único error → log+skip."""
+        if not rows:
+            return {"upserted": 0, "errors": 0}
+        try:
+            await _execute_with_retry(
+                lambda: self._sb.table(self.table).upsert(rows, on_conflict=on_conflict).execute()
+            )
+            return {"upserted": len(rows), "errors": 0}
+        except Exception as e:
+            msg = str(e)
+            if "does not exist" in msg or "schema cache" in msg or "PGRST205" in msg:
+                return {"upserted": 0, "errors": 0, "missing_table": True, "error": msg[:200]}
+            # Errores recuperables splitteando: timeout, payload too large, etc.
+            recoverable = ("57014" in msg or "statement timeout" in msg.lower()
+                           or "request entity too large" in msg.lower()
+                           or "payload" in msg.lower())
+            if len(rows) > 1 and recoverable:
+                mid = len(rows) // 2
+                left = await self._upsert_recursive(rows[:mid], on_conflict)
+                right = await self._upsert_recursive(rows[mid:], on_conflict)
+                combined = {
+                    "upserted": left.get("upserted", 0) + right.get("upserted", 0),
+                    "errors": left.get("errors", 0) + right.get("errors", 0),
+                }
+                if left.get("missing_table") or right.get("missing_table"):
+                    combined["missing_table"] = True
+                return combined
+            # Un solo doc que no pasa → log y skip
+            if len(rows) == 1:
+                logger.error(f"upsert single-row failed on {self.table}: {msg[:300]}")
+                return {"upserted": 0, "errors": 1, "last_error": msg[:200]}
+            # Error no recuperable en batch grande
+            logger.error(f"upsert batch failed (non-recoverable) on {self.table}: {msg[:300]}")
+            return {"upserted": 0, "errors": len(rows), "last_error": msg[:200]}
 
     async def update_one(self, filt: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> UpdateResult:
         current_rows = await self._fetch_all(filt, limit=1)
@@ -467,7 +553,7 @@ class CompatCollection:
             return UpdateResult(matched_count=0, modified_count=0)
         current = current_rows[0]
         new_row = _apply_update(self.name, current, update)
-        await asyncio.to_thread(
+        await _execute_with_retry(
             lambda: _apply_filter(self._sb.table(self.table).update(new_row), filt, self.name).execute()
         )
         return UpdateResult(matched_count=1, modified_count=1)
@@ -477,7 +563,7 @@ class CompatCollection:
         n = 0
         for r in rows:
             new_row = _apply_update(self.name, r, update)
-            await asyncio.to_thread(
+            await _execute_with_retry(
                 lambda nr=new_row, rid=r["id"]: self._sb.table(self.table).update(nr).eq("id", rid).execute()
             )
             n += 1
@@ -488,13 +574,13 @@ class CompatCollection:
         if not rows:
             return DeleteResult(deleted_count=0)
         rid = rows[0]["id"]
-        await asyncio.to_thread(lambda: self._sb.table(self.table).delete().eq("id", rid).execute())
+        await _execute_with_retry(lambda: self._sb.table(self.table).delete().eq("id", rid).execute())
         return DeleteResult(deleted_count=1)
 
     async def delete_many(self, filt: Dict[str, Any]) -> DeleteResult:
         rows = await self._fetch_all(filt)
         for r in rows:
-            await asyncio.to_thread(lambda rid=r["id"]: self._sb.table(self.table).delete().eq("id", rid).execute())
+            await _execute_with_retry(lambda rid=r["id"]: self._sb.table(self.table).delete().eq("id", rid).execute())
         return DeleteResult(deleted_count=len(rows))
 
     # --- internal ---
@@ -506,7 +592,7 @@ class CompatCollection:
             if limit:
                 q = q.limit(limit)
             return q.execute()
-        result = await asyncio.to_thread(_exec)
+        result = await _execute_with_retry(_exec)
         return result.data or []
 
     # --- unsupported ---

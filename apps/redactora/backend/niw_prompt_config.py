@@ -293,7 +293,7 @@ NEVER deliver a document that does not pass this verification.
 - **Length:** 25-35 pages
 - **Format:** Numbered headings (1.0, 1.1, 1.1.1)
 - **Tables:** For financial data, comparisons, and metrics
-- **Perspective:** Third person ("Mr./Ms. [Last Name]")
+- **Perspective:** First person — the petitioner is writing in their own voice. Use "I", "my", "me", "myself" throughout. Avoid third-person references such as "the petitioner", "Mr./Ms. [Last Name]", "she/he will", "the applicant's". When the prompt instructions mention "the petitioner", you must rewrite that section as if the petitioner is speaking ("I am applying...", "My endeavor will...", "My qualifications include..."). The narrative voice MUST be consistently first-person across all sections.
 - **Language:** Formal and technical, without colloquial jargon
 
 ═══════════════════════════════════════════════════════════════════════════════

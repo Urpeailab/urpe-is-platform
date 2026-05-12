@@ -218,17 +218,11 @@ def _generate_expert_letter_pdf(
     letter_text = re.sub(r'<b>([^<]*)<b>', r'<b>\1</b>', letter_text)
     letter_text = re.sub(r'<i>([^<]*)<i>', r'<i>\1</i>', letter_text)
 
-    def convert_bold(text: str) -> str:
-        text = _pdf_safe(text)
-        while '**' in text:
-            parts = text.split('**', 2)
-            if len(parts) >= 3:
-                text = parts[0] + '<b>' + parts[1] + '</b>' + parts[2]
-            else:
-                break
-        return text
-
-    letter_text = convert_bold(letter_text)
+    # Convertir markdown inline (**bold**, *italic*, runs de 3+ asteriscos) a XML
+    # inline de ReportLab. Aplica también dentro de tags HTML como <p>**X**</p>.
+    from pdf_utils import md_inline_to_rl
+    letter_text = _pdf_safe(letter_text)
+    letter_text = md_inline_to_rl(letter_text)
 
     from reportlab.lib.units import inch as _inch
     doc = SimpleDocTemplate(

@@ -272,30 +272,34 @@ const ViewBusinessPlan = () => {
       const { job_id } = startResponse.data;
       if (!job_id) throw new Error('No se obtuvo job_id del servidor');
       
-      // 2. Polling hasta completar (cada 4 segundos, máx. 8 minutos para ediciones estructurales)
-      const MAX_POLLS = 120; // 120 × 4s = 8 minutos
+      // 2. Polling hasta completar.
+      // Cap: 20 min = 300 × 4s. Backend tarda ~(N_secciones/3) × 180s + overhead;
+      // un plan con 15+ secciones puede llegar a 12-15 min.
+      const MAX_POLLS = 300;
       let polls = 0;
+      let lastJob = null;
       while (polls < MAX_POLLS) {
         await new Promise(resolve => setTimeout(resolve, 4000));
         polls++;
-        
+
         const statusResponse = await axios.get(
           `${API}/business-plans/ai-edit-job/${job_id}`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         const job = statusResponse.data;
-        
+        lastJob = job;
+
         // Actualizar mensaje de progreso con tiempo estimado
         const elapsed = Math.round(polls * 4);
         const progressText = job.progress_message || 'Procesando...';
         setAiEditProgressMsg(`${progressText} (${elapsed}s)`);
-        
+
         if (job.status === 'completed') {
           const result = job.result;
           setAiEditResults(result);
           setShowAIEditModal(false);
           setShowAIEditResults(true);
-          
+
           if (result?.total_sections_modified > 0) {
             await loadPlan();
             toast.success(`✅ ${result.total_sections_modified} secciones modificadas exitosamente`);
@@ -317,9 +321,20 @@ const ViewBusinessPlan = () => {
         }
         // status === 'processing' o 'pending' → seguir esperando
       }
-      
+
       if (polls >= MAX_POLLS) {
-        throw new Error('La edición tardó más de 8 minutos. El proceso puede continuar en el servidor — espera unos minutos y recarga el documento.');
+        // El polling agotó su tiempo, pero el backend puede seguir corriendo.
+        // Recargamos el documento — si el job terminó después de que paramos,
+        // los cambios ya están persistidos y el usuario los ve sin tener que recargar manualmente.
+        toast.info('⏳ La edición tomó más tiempo del esperado. Verificando si los cambios se aplicaron...', { duration: 6000 });
+        try {
+          await loadPlan();
+        } catch (_) { /* ignore */ }
+        // Mensaje informativo (no error fatal) — el último estado del job se conserva en lastJob
+        const lastStatus = lastJob?.progress_message || 'procesando';
+        toast.warning(`La edición sigue en curso en el servidor (último estado: ${lastStatus}). Recargá el documento en unos minutos si no ves los cambios.`, { duration: 8000 });
+        setShowAIEditModal(false);
+        return; // No tirar excepción — el job sigue vivo en backend
       }
     } catch (error) {
       console.error('Error en edición con IA:', error);

@@ -691,6 +691,11 @@ async def download_intent_letter(
     content = re.sub(r'  +', ' ', content)
     content = re.sub(r' ([,.:;])', r'\1', content)
 
+    # Convertir markdown inline (**bold**, *italic*, ****) → XML inline de ReportLab
+    # ANTES del parseo HTML para que se convierta aunque esté dentro de <p>/<strong>/etc.
+    from pdf_utils import md_inline_to_rl
+    content = md_inline_to_rl(content)
+
     petitioner = letter_doc.get("petitioner_name", "Petitioner")
     project = letter_doc.get("project_title", "EB-2 NIW Petition")
     lang_label = "Español" if language == "es" else "English"
