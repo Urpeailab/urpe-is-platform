@@ -1564,6 +1564,107 @@ async def get_user_magic_links(
         )
 
 
+@api_router.delete("/admin/magic-links/{token}")
+async def delete_magic_link(
+    token: str,
+    staff_payload: dict = Depends(verify_staff_token),
+):
+    """Revoca un magic link borrando la fila — el cliente ya no puede usarlo."""
+    try:
+        magic_link = select("magic_links", filters={"token": token}, single=True)
+        if not magic_link:
+            raise HTTPException(status_code=404, detail="Magic link no encontrado")
+
+        delete("magic_links", {"token": token})
+        logger.info(
+            "🗑️ Magic link revocado — token=%s revoked_by=%s",
+            token[:8] + '…', staff_payload.get('email')
+        )
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"delete_magic_link error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error eliminando magic link: {str(e)}")
+
+
+@api_router.post("/admin/magic-links/{token}/send-email")
+async def send_magic_link_email(
+    token: str,
+    staff_payload: dict = Depends(verify_staff_token),
+):
+    """
+    Send a magic link by email to the client that owns it. Looks up the link
+    by token, the client via magic_links.client_id (fallback: client_id NULL →
+    look up by phone), and dispatches a styled email via Resend.
+    """
+    try:
+        from services.case_notifications import _send_email, _email_wrapper
+
+        magic_link = select("magic_links", filters={"token": token}, single=True)
+        if not magic_link:
+            raise HTTPException(status_code=404, detail="Magic link no encontrado")
+
+        # Resolve the client (prefer FK; fallback to phone match)
+        client = None
+        client_id = magic_link.get('client_id') or magic_link.get('clientId')
+        if client_id:
+            client = select("clients", filters={"id": client_id}, single=True)
+        if not client and magic_link.get('phone'):
+            client = select("clients", filters={"phone": magic_link['phone']}, single=True)
+
+        if not client:
+            raise HTTPException(status_code=404, detail="Cliente del magic link no encontrado")
+
+        to_email = client.get('email')
+        if not to_email:
+            raise HTTPException(
+                status_code=400,
+                detail="El cliente no tiene email registrado. Agrégalo antes de enviar el link."
+            )
+
+        # Build the URL using the same logic the GET uses
+        frontend_url = os.getenv('FRONTEND_URL')
+        if not frontend_url:
+            backend_url = os.getenv('REACT_APP_BACKEND_URL', 'https://classic-cases-hub.preview.emergentagent.com')
+            frontend_url = backend_url.replace('/api', '')
+        magic_link_url = f"{frontend_url}/welcome/{token}"
+
+        client_name = client.get('name') or 'Cliente'
+        body = (
+            "<p>Te enviamos tu enlace personal de acceso al portal URPE. "
+            "Con este link puedes entrar directamente, sin necesidad de contraseña.</p>"
+            "<p style=\"margin-top:18px;font-size:13px;color:#94A3B8;\">"
+            "Este enlace no caduca y puede usarse múltiples veces. Guárdalo en un lugar seguro."
+            "</p>"
+        )
+        html = _email_wrapper(
+            client_name=client_name,
+            title="Tu acceso al portal URPE",
+            body=body,
+            cta_text="Entrar al portal",
+            cta_url=magic_link_url,
+        )
+
+        _send_email(to_email, "Tu acceso al portal URPE", html)
+
+        logger.info(
+            "📧 Magic link email sent — token=%s client=%s sent_by=%s",
+            token[:8] + '…', to_email, staff_payload.get('email')
+        )
+
+        return {
+            'success': True,
+            'sentTo': to_email,
+            'magicLinkUrl': magic_link_url,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"send_magic_link_email error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error enviando email: {str(e)}")
+
+
 @api_router.post("/admin/users/{user_id}/generate-magic-link")
 async def admin_generate_magic_link(
     user_id: str,
@@ -1619,12 +1720,22 @@ async def admin_generate_magic_link(
             backend_url = os.getenv('REACT_APP_BACKEND_URL', 'http://localhost:8001')
             frontend_url = backend_url.replace('/api', '')
 
-        # Create new magic link (expires_at required by schema — use far future since links don't expire)
+        # Create new magic link. NOTA: el endpoint /auth/validate-magic-link
+        # busca el cliente por magic_links.phone, así que es obligatorio guardarlo.
+        # Si el cliente no tiene phone, el link nunca podrá validar.
+        client_phone = user.get('phone')
+        if not client_phone:
+            raise HTTPException(
+                status_code=400,
+                detail="El cliente no tiene teléfono registrado. Agrégalo antes de generar un link de acceso."
+            )
+
         now_ts = datetime.now(timezone.utc).isoformat()
         far_future = "2099-12-31T23:59:59+00:00"
         insert("magic_links", {
             'token': magic_token,
             'client_id': user_id,
+            'phone': client_phone,
             'expires_at': far_future,
             'used': False,
         })
@@ -12542,6 +12653,10 @@ payment_auth_router = setup_payment_auth_router(db)
 from services.classic_cases_endpoints import setup_classic_cases_router
 classic_cases_router = setup_classic_cases_router(db, verify_staff_token)
 
+# Visa Cases Migration (import from legacy instance)
+from services.visa_cases_migration import setup_visa_cases_migration_router
+visa_cases_migration_router = setup_visa_cases_migration_router(verify_staff_token)
+
 # Setup manual payments endpoints
 from manual_payments_endpoints import setup_manual_payments_router
 manual_payments_router = setup_manual_payments_router(db, verify_staff_token)
@@ -12890,6 +13005,7 @@ app.include_router(appointments_router, prefix="/api")
 app.include_router(uscis_tracker_router, prefix="/api")
 app.include_router(payment_auth_router, prefix="/api")
 app.include_router(classic_cases_router, prefix="/api")
+app.include_router(visa_cases_migration_router, prefix="/api")
 app.include_router(manual_payments_router, prefix="/api")
 app.include_router(webinars_router, prefix="/api")
 app.include_router(legal_library_router, prefix="/api")

@@ -5,7 +5,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
-import { X, Upload, Loader2, File, AlertCircle } from "lucide-react";
+import { X, Upload, Loader2, File, AlertCircle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -18,8 +18,8 @@ export const DeliverableUploadModal = ({
 	onUploadComplete,
 }) => {
 	const [uploading, setUploading] = useState(false);
-	const [file, setFile] = useState(null);
-	const [fileUrl, setFileUrl] = useState("");
+	const [files, setFiles] = useState([]); // multi-file: list of File objects
+	const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
 	const [notes, setNotes] = useState("");
 	const [noteVisibleToClient, setNoteVisibleToClient] = useState(false);
 	const [dragActive, setDragActive] = useState(false);
@@ -48,46 +48,51 @@ export const DeliverableUploadModal = ({
 		e.stopPropagation();
 		setDragActive(false);
 
-		if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-			handleFileSelect(e.dataTransfer.files[0]);
+		if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+			handleFilesSelect(e.dataTransfer.files);
 		}
 	};
 
-	const handleFileSelect = (selectedFile) => {
-		if (selectedFile) {
-			setFile(selectedFile);
-			// No establecemos fileUrl aquí - se subirá cuando se envíe el formulario
-			setFileUrl("");
-		}
+	const handleFilesSelect = (selectedFiles) => {
+		if (!selectedFiles || selectedFiles.length === 0) return;
+		const arr = Array.from(selectedFiles);
+		setFiles((prev) => [...prev, ...arr]);
 	};
 
 	const handleFileInput = (e) => {
-		if (e.target.files && e.target.files[0]) {
-			handleFileSelect(e.target.files[0]);
+		if (e.target.files && e.target.files.length > 0) {
+			handleFilesSelect(e.target.files);
+			// Reset input so re-selecting the same file triggers onChange
+			e.target.value = "";
 		}
+	};
+
+	const removeFileAt = (idx) => {
+		setFiles((prev) => prev.filter((_, i) => i !== idx));
 	};
 
 	const handleSubmit = async (e) => {
 		e.preventDefault();
 
-		if (!file && !fileUrl) {
-			toast.error("Por favor selecciona un archivo");
+		if (files.length === 0) {
+			toast.error("Por favor selecciona al menos un archivo");
 			return;
 		}
 
-		try {
-			setUploading(true);
-			const token = localStorage.getItem("admin_token");
+		const token = localStorage.getItem("admin_token");
+		setUploading(true);
+		setUploadProgress({ current: 0, total: files.length });
 
-			let finalFileUrl = fileUrl;
-			let fileName = file?.name || "document.pdf";
-			let fileSize = file?.size || 0;
+		let success = 0;
+		const failures = [];
 
-			// Si hay un archivo, primero subirlo al servidor
-			if (file) {
+		for (let i = 0; i < files.length; i++) {
+			const f = files[i];
+			setUploadProgress({ current: i + 1, total: files.length });
+			try {
+				// 1) Upload binary
 				const formData = new FormData();
-				formData.append("file", file);
-
+				formData.append("file", f);
 				const uploadResponse = await axios.post(
 					`${BACKEND_URL}/api/admin/deliverables/upload-file`,
 					formData,
@@ -99,51 +104,67 @@ export const DeliverableUploadModal = ({
 					},
 				);
 
-				finalFileUrl = uploadResponse.data.fileUrl;
-				fileName = uploadResponse.data.fileName;
-				fileSize = uploadResponse.data.fileSize;
+				// 2) Attach to deliverable. Notes apply to each file (server stores
+				// per-file). Email notification fires ONLY on the last file to avoid spam.
+				const isLast = i === files.length - 1;
+				await axios.post(
+					`${BACKEND_URL}/api/admin/deliverables/upload`,
+					{
+						caseId,
+						stageNumber: deliverable.stageNumber,
+						deliverableId: deliverable._id || deliverable.id,
+						fileName: uploadResponse.data.fileName,
+						fileUrl: uploadResponse.data.fileUrl,
+						fileSize: uploadResponse.data.fileSize,
+						notes,
+						noteVisibleToClient,
+						notifyClient: notifyClient && isLast,
+					},
+					{ headers: { Authorization: `Bearer ${token}` } },
+				);
+
+				success++;
+			} catch (err) {
+				console.error(`Error uploading ${f.name}:`, err);
+				failures.push({
+					name: f.name,
+					detail: err?.response?.data?.detail || err?.message || "Error desconocido",
+				});
 			}
+		}
 
-			// Ahora guardar la información del entregable
-			const requestData = {
-				caseId: caseId,
-				stageNumber: deliverable.stageNumber,
-				deliverableId: deliverable._id || deliverable.id,
-				fileName: fileName,
-				fileUrl: finalFileUrl,
-				fileSize: fileSize,
-				notes: notes,
-				noteVisibleToClient: noteVisibleToClient,
-				notifyClient: notifyClient,
-			};
+		setUploading(false);
+		setUploadProgress({ current: 0, total: 0 });
 
-			await axios.post(
-				`${BACKEND_URL}/api/admin/deliverables/upload`,
-				requestData,
-				{
-					headers: { Authorization: `Bearer ${token}` },
-				},
+		if (failures.length === 0) {
+			toast.success(
+				files.length === 1
+					? "Entregable subido exitosamente"
+					: `${success} archivos subidos exitosamente`,
 			);
-
-			toast.success("Entregable subido exitosamente");
 			onUploadComplete();
 			resetForm();
-		} catch (error) {
-			console.error("Error uploading deliverable:", error);
-			toast.error(
-				error.response?.data?.detail || "Error al subir el entregable",
+		} else if (success > 0) {
+			toast.warning(
+				`${success} subidos, ${failures.length} fallidos: ${failures.map((f) => f.name).join(", ")}`,
 			);
-		} finally {
-			setUploading(false);
+			onUploadComplete();
+			// Mantener en la UI solo los archivos que fallaron, para reintentar
+			const failedNames = new Set(failures.map((f) => f.name));
+			setFiles((prev) => prev.filter((f) => failedNames.has(f.name)));
+		} else {
+			toast.error(
+				`No se pudo subir ningún archivo. Primer error: ${failures[0].detail}`,
+			);
 		}
 	};
 
 	const resetForm = () => {
-		setFile(null);
-		setFileUrl("");
+		setFiles([]);
 		setNotes("");
 		setNoteVisibleToClient(false);
 		setNotifyClient(true);
+		setUploadProgress({ current: 0, total: 0 });
 	};
 
 	if (!isOpen) return null;
@@ -185,9 +206,16 @@ export const DeliverableUploadModal = ({
 
 						{/* File Upload Area */}
 						<div className="space-y-3">
-							<Label>Archivo del Entregable *</Label>
+							<Label>
+								Archivos del Entregable *
+								{files.length > 0 && (
+									<span className="ml-2 text-xs text-gray-500 font-normal">
+										({files.length} seleccionado{files.length !== 1 ? "s" : ""})
+									</span>
+								)}
+							</Label>
 
-							{/* Drag & Drop Area */}
+							{/* Drag & Drop Area (always shown — para añadir más archivos) */}
 							<div
 								className={`border-2 border-dashed rounded-xl p-5 text-center transition-colors ${
 									dragActive
@@ -199,55 +227,68 @@ export const DeliverableUploadModal = ({
 								onDragOver={handleDrag}
 								onDrop={handleDrop}
 							>
-								{file ? (
-									<div className="space-y-1">
-										<File className="h-8 w-8 mx-auto text-success" />
-										<p className="text-xs font-medium text-success">
-											✓ Archivo seleccionado:
-										</p>
-										<p className="text-sm font-semibold text-gray-900">
-											{file.name}
-										</p>
-										<p className="text-xs text-gray-500">
-											{(file.size / 1024 / 1024).toFixed(2)} MB
-										</p>
-										<Button
-											type="button"
-											size="sm"
-											onClick={() => setFile(null)}
-											className="mt-1 bg-gray-200 hover:bg-gray-300 text-gray-900 border border-gray-300"
-										>
-											Cambiar archivo
-										</Button>
-									</div>
-								) : (
-									<div>
-										<Upload
-											className={`h-8 w-8 mx-auto mb-2 ${dragActive ? "text-yellow-500" : "text-gray-400"}`}
-										/>
-										<p className="text-sm text-gray-600 mb-1">
-											Arrastra y suelta tu archivo aquí
-										</p>
-										<p className="text-xs text-gray-500 mb-2">o</p>
-										<label className="inline-block">
-											<input
-												type="file"
-												accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.webp,.mp4,.mov,.avi,.mkv,.webm"
-												onChange={handleFileInput}
-												className="hidden"
-											/>
-											<span className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg cursor-pointer inline-flex items-center space-x-2 transition-colors font-medium text-sm">
-												<Upload className="h-4 w-4" />
-												<span>Seleccionar Archivo</span>
-											</span>
-										</label>
-										<p className="text-[11px] text-gray-500 mt-2">
-											PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX · JPG, PNG, GIF, WEBP
-											· MP4, MOV, AVI, MKV
-										</p>
-									</div>
-								)}
+								<Upload
+									className={`h-8 w-8 mx-auto mb-2 ${dragActive ? "text-yellow-500" : "text-gray-400"}`}
+								/>
+								<p className="text-sm text-gray-600 mb-1">
+									{files.length === 0
+										? "Arrastra y suelta tus archivos aquí"
+										: "Arrastra más archivos para agregar"}
+								</p>
+								<p className="text-xs text-gray-500 mb-2">o</p>
+								<label className="inline-block">
+									<input
+										type="file"
+										multiple
+										accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.webp,.mp4,.mov,.avi,.mkv,.webm"
+										onChange={handleFileInput}
+										className="hidden"
+									/>
+									<span className="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white rounded-lg cursor-pointer inline-flex items-center space-x-2 transition-colors font-medium text-sm">
+										<Upload className="h-4 w-4" />
+										<span>
+											{files.length === 0
+												? "Seleccionar Archivos"
+												: "Agregar más"}
+										</span>
+									</span>
+								</label>
+								<p className="text-[11px] text-gray-500 mt-2">
+									PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX · JPG, PNG, GIF, WEBP
+									· MP4, MOV, AVI, MKV
+								</p>
 							</div>
+
+							{/* Lista de archivos seleccionados */}
+							{files.length > 0 && (
+								<div className="border border-gray-200 rounded-xl divide-y divide-gray-100 bg-white max-h-56 overflow-y-auto">
+									{files.map((f, idx) => (
+										<div
+											key={`${f.name}-${idx}`}
+											className="flex items-center gap-3 px-3 py-2"
+										>
+											<File className="h-5 w-5 text-gray-400 flex-shrink-0" />
+											<div className="min-w-0 flex-1">
+												<p className="text-sm font-medium text-gray-900 truncate">
+													{f.name}
+												</p>
+												<p className="text-[11px] text-gray-500">
+													{(f.size / 1024 / 1024).toFixed(2)} MB
+												</p>
+											</div>
+											<button
+												type="button"
+												onClick={() => removeFileAt(idx)}
+												disabled={uploading}
+												className="text-gray-400 hover:text-red-600 disabled:opacity-40 disabled:cursor-not-allowed p-1 rounded transition-colors flex-shrink-0"
+												title="Quitar de la lista"
+											>
+												<Trash2 className="h-4 w-4" />
+											</button>
+										</div>
+									))}
+								</div>
+							)}
 
 							{/* Notes */}
 							<div className="space-y-1.5">
@@ -360,17 +401,19 @@ export const DeliverableUploadModal = ({
 						<Button
 							type="submit"
 							className="bg-yellow-500 hover:bg-yellow-600 text-gray-900 font-semibold shadow-sm"
-							disabled={uploading || (!file && !fileUrl)}
+							disabled={uploading || files.length === 0}
 						>
 							{uploading ? (
 								<>
 									<Loader2 className="mr-2 h-4 w-4 animate-spin" />
-									Subiendo...
+									Subiendo {uploadProgress.current}/{uploadProgress.total}...
 								</>
 							) : (
 								<>
 									<Upload className="mr-2 h-4 w-4" />
-									Subir Entregable
+									{files.length > 1
+										? `Subir ${files.length} archivos`
+										: "Subir Entregable"}
 								</>
 							)}
 						</Button>

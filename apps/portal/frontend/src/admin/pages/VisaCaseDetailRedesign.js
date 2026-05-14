@@ -19,7 +19,7 @@ import {
   ChevronsUpDown, Check, Link as LinkIcon, Copy, AlertTriangle,
   MoveRight, ArrowRight, History, Eye, LayoutGrid, CreditCard,
   FolderOpen, Settings, ChevronRight, RefreshCw, Lock, ArrowRightLeft,
-  ExternalLink
+  ExternalLink, Send
 } from 'lucide-react';
 import { MessageSquare } from 'lucide-react';
 import { toast } from 'sonner';
@@ -1453,6 +1453,58 @@ export const VisaCaseDetailRedesign = () => {
     }
   };
 
+  // Send / Delete magic link handlers
+  const [sendingMagicLinks, setSendingMagicLinks] = useState({});
+  const [deletingMagicLinks, setDeletingMagicLinks] = useState({});
+
+  const sendMagicLinkEmail = async (magicToken) => {
+    if (!magicToken || sendingMagicLinks[magicToken]) return;
+    setSendingMagicLinks((prev) => ({ ...prev, [magicToken]: true }));
+    try {
+      const { data } = await axios.post(
+        `${BACKEND_URL}/api/admin/magic-links/${magicToken}/send-email`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success(`Link enviado a ${data.sentTo}`);
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'No se pudo enviar el link por correo';
+      toast.error(msg);
+    } finally {
+      setSendingMagicLinks((prev) => {
+        const next = { ...prev };
+        delete next[magicToken];
+        return next;
+      });
+    }
+  };
+
+  const deleteMagicLink = async (magicToken) => {
+    if (!magicToken || deletingMagicLinks[magicToken]) return;
+    if (!window.confirm('¿Eliminar este link de acceso? El cliente ya no podrá entrar con este link.')) {
+      return;
+    }
+    setDeletingMagicLinks((prev) => ({ ...prev, [magicToken]: true }));
+    try {
+      await axios.delete(
+        `${BACKEND_URL}/api/admin/magic-links/${magicToken}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      // Optimistic update: drop from local state immediately
+      setMagicLinks((prev) => (prev || []).filter((l) => l.magicToken !== magicToken));
+      toast.success('Link eliminado');
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'No se pudo eliminar el link';
+      toast.error(msg);
+    } finally {
+      setDeletingMagicLinks((prev) => {
+        const next = { ...prev };
+        delete next[magicToken];
+        return next;
+      });
+    }
+  };
+
   // Fetch magic links
   const fetchMagicLinks = useCallback(async () => {
     try {
@@ -2325,8 +2377,39 @@ export const VisaCaseDetailRedesign = () => {
                                   onClick={() => copyToClipboard(link.magicLinkUrl)}
                                   className="border-purple-300 text-purple-700 hover:bg-purple-100 flex-shrink-0"
                                   data-testid={`copy-link-${index}`}
+                                  title="Copiar al portapapeles"
                                 >
                                   <Copy className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => sendMagicLinkEmail(link.magicToken)}
+                                  disabled={!!sendingMagicLinks[link.magicToken]}
+                                  className="border-purple-300 text-purple-700 hover:bg-purple-100 flex-shrink-0"
+                                  data-testid={`send-link-email-${index}`}
+                                  title="Enviar por correo al cliente"
+                                >
+                                  {sendingMagicLinks[link.magicToken] ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Send className="h-4 w-4" />
+                                  )}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => deleteMagicLink(link.magicToken)}
+                                  disabled={!!deletingMagicLinks[link.magicToken]}
+                                  className="border-red-300 text-red-600 hover:bg-red-50 flex-shrink-0"
+                                  data-testid={`delete-link-${index}`}
+                                  title="Eliminar este link de acceso (revoca acceso del cliente)"
+                                >
+                                  {deletingMagicLinks[link.magicToken] ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
                                 </Button>
                               </div>
                             </div>
