@@ -246,15 +246,25 @@ def setup_classic_cases_router(db, verify_staff_token):
         return p_coord, p_armador, p_total
 
     async def _log_timeline(case_id, action, performed_by, details=None):
-        entry = {
+        """Append a timeline entry to classic_cases.data.timeline JSONB array."""
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
+        cur = sb.table("classic_cases").select("data").eq("id", case_id).limit(1).execute()
+        if not cur.data:
+            return
+        d = cur.data[0].get("data") or {}
+        if not isinstance(d, dict):
+            d = {}
+        entries = d.get("timeline") or []
+        entries.insert(0, {
             "caseId": case_id,
             "action": action,
             "performedBy": performed_by,
             "details": details or {},
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        result = await db.classic_case_timeline.insert_one(entry)
-        # Don't return the entry with _id to avoid serialization issues
+        })
+        d["timeline"] = entries[:500]
+        sb.table("classic_cases").update({"data": d}).eq("id", case_id).execute()
 
     # ========== CRUD ==========
 
@@ -431,31 +441,60 @@ def setup_classic_cases_router(db, verify_staff_token):
     @router.get("/admin/{case_id}")
     async def get_classic_case(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
         """Get full classic case detail including deliverables."""
-        case = await db.classic_cases.find_one({"id": case_id}, {"_id": 0})
-        if not case:
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
+        res = sb.table("classic_cases").select("*").eq("id", case_id).limit(1).execute()
+        if not res.data:
             raise HTTPException(status_code=404, detail="Caso no encontrado")
+        row = res.data[0]
+        data = row.get("data") or {}
+        if not isinstance(data, dict):
+            data = {}
+        case = dict(data)
+        case["id"] = row.get("id")
+        case["clientId"] = row.get("client_id")
+        case["caseType"] = row.get("case_type")
+        case["status"] = row.get("status") or data.get("status")
+        case["coordinatorId"] = row.get("assigned_to") or data.get("coordinatorId")
+        case["createdAt"] = row.get("created_at")
+        case["updatedAt"] = row.get("updated_at")
 
-        # Add coordinator name
         if case.get("coordinatorId"):
-            coord = await db.staff.find_one({"_id": case["coordinatorId"]}, {"name": 1})
-            case["coordinatorName"] = coord.get("name", "") if coord else ""
+            coord_res = sb.table("staff").select("name").eq("id", case["coordinatorId"]).limit(1).execute()
+            case["coordinatorName"] = (coord_res.data[0].get("name") if coord_res.data else "") or ""
+        else:
+            case["coordinatorName"] = ""
 
-        # Get timeline
-        timeline = await db.classic_case_timeline.find({"caseId": case_id}, {"_id": 0}).sort("timestamp", -1).limit(50).to_list(50)
-        case["timeline"] = timeline
+        case["timeline"] = data.get("timeline") or []
 
         return {"success": True, "case": case}
 
     @router.put("/admin/{case_id}")
     async def update_classic_case(case_id: str, data: ClassicCaseUpdate, staff_payload: dict = Depends(verify_staff_token)):
-        """Update case basic info."""
-        update = {"updatedAt": datetime.now(timezone.utc).isoformat()}
+        """Update case basic info (writes legacy fields into the `data` JSONB)."""
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
+        cur = sb.table("classic_cases").select("data, assigned_to").eq("id", case_id).limit(1).execute()
+        if not cur.data:
+            raise HTTPException(status_code=404, detail="Caso no encontrado")
+        merged_data = cur.data[0].get("data") or {}
+        if not isinstance(merged_data, dict):
+            merged_data = {}
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        merged_data["updatedAt"] = now_iso
+        new_coord = None
         for field in ["name", "email", "phone", "coordinatorId", "processingType", "driveFolderUrl", "seniorityDate", "ioeNumber", "trackingNumber", "shippingCompany"]:
             val = getattr(data, field, None)
             if val is not None:
-                update[field] = val
+                merged_data[field] = val
+                if field == "coordinatorId":
+                    new_coord = val
 
-        await db.classic_cases.update_one({"id": case_id}, {"$set": update})
+        update_payload = {"data": merged_data, "updated_at": now_iso}
+        if new_coord is not None:
+            update_payload["assigned_to"] = new_coord
+        sb.table("classic_cases").update(update_payload).eq("id", case_id).execute()
         return {"success": True, "message": "Caso actualizado"}
 
     @router.delete("/admin/{case_id}")
@@ -464,10 +503,11 @@ def setup_classic_cases_router(db, verify_staff_token):
         role = staff_payload.get("role", "")
         if role not in ("admin", "super_admin"):
             raise HTTPException(status_code=403, detail="Solo admin puede eliminar casos")
-        result = await db.classic_cases.delete_one({"id": case_id})
-        if result.deleted_count == 0:
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
+        res = sb.table("classic_cases").delete().eq("id", case_id).execute()
+        if not res.data:
             raise HTTPException(status_code=404, detail="Caso no encontrado")
-        await db.classic_case_timeline.delete_many({"caseId": case_id})
         return {"success": True, "message": "Caso eliminado"}
 
     # ========== DOCUMENT SCANNING (AI extraction without status change) ==========
@@ -1533,10 +1573,26 @@ def setup_classic_cases_router(db, verify_staff_token):
 
     # ========== COLLABORATIVE NOTES ==========
 
+    def _load_case_data(case_id: str):
+        from db.supabase_client import get_supabase
+        sb = get_supabase()
+        res = sb.table("classic_cases").select("data,client_id").eq("id", case_id).limit(1).execute()
+        if not res.data:
+            return sb, None, None
+        row = res.data[0]
+        d = row.get("data") or {}
+        if not isinstance(d, dict):
+            d = {}
+        return sb, row, d
+
     @router.get("/admin/{case_id}/notes")
     async def get_case_notes(case_id: str, staff_payload: dict = Depends(verify_staff_token)):
-        """Get all notes for a case."""
-        notes = await db.classic_case_notes.find({"caseId": case_id}, {"_id": 0}).sort("createdAt", -1).to_list(200)
+        """Get all collaborative notes for a case (stored in data.collaborativeNotes JSONB)."""
+        sb, row, d = _load_case_data(case_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Caso no encontrado")
+        notes = list(d.get("collaborativeNotes") or [])
+        notes.sort(key=lambda n: n.get("createdAt") or "", reverse=True)
         return {"success": True, "notes": notes}
 
     @router.post("/admin/{case_id}/notes")
@@ -1548,6 +1604,10 @@ def setup_classic_cases_router(db, verify_staff_token):
     ):
         """Add a note to a case. Supports @mentions (email) — notifies mentioned users."""
         import re
+
+        sb, row, d = _load_case_data(case_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Caso no encontrado")
 
         note_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
@@ -1566,10 +1626,10 @@ def setup_classic_cases_router(db, verify_staff_token):
             "updatedAt": now,
         }
 
-        await db.classic_case_notes.insert_one(note)
-
-        # Actualizar updatedAt del caso para reflejar actividad reciente (afecta días de inactividad)
-        await db.classic_cases.update_one({"id": case_id}, {"$set": {"updatedAt": now}})
+        notes = list(d.get("collaborativeNotes") or [])
+        notes.append(note)
+        d["collaborativeNotes"] = notes
+        sb.table("classic_cases").update({"data": d, "updated_at": now}).eq("id", case_id).execute()
 
         performer = {"name": staff_payload.get("name", ""), "email": staff_payload.get("email", "")}
         await _log_timeline(case_id, "Nota agregada", performer, {"preview": text[:80]})
@@ -1577,13 +1637,12 @@ def setup_classic_cases_router(db, verify_staff_token):
         # Process @mentions
         mentions = re.findall(r'@([\w.+-]+@[\w-]+\.[\w.]+)', text)
         if mentions:
-            case = await db.classic_cases.find_one({"id": case_id}, {"name": 1})
-            client_name = case.get("name", "") if case else ""
+            client_name = d.get("name") or ""
             try:
                 from services.case_notifications import _send_email, _email_wrapper
                 for email in set(mentions):
-                    staff_member = await db.staff.find_one({"email": email}, {"name": 1})
-                    name = staff_member.get("name", email) if staff_member else email
+                    staff_res = sb.table("staff").select("name").eq("email", email).limit(1).execute()
+                    name = (staff_res.data[0].get("name") if staff_res.data else email) or email
                     body = (
                         f"<p><strong>{staff_payload.get('name', 'Alguien')}</strong> te menciono en una nota del caso <strong>{client_name}</strong>:</p>"
                         f"<div style='background:#F3F4F6;border-left:4px solid #C9A96A;padding:12px 16px;border-radius:8px;margin:12px 0;'>"
@@ -1594,7 +1653,6 @@ def setup_classic_cases_router(db, verify_staff_token):
             except Exception as e:
                 logger.error(f"Mention email error: {e}")
 
-        note.pop("_id", None)
         return {"success": True, "note": note}
 
     @router.put("/admin/{case_id}/notes/{note_id}")
@@ -1604,34 +1662,50 @@ def setup_classic_cases_router(db, verify_staff_token):
         staff_payload: dict = Depends(verify_staff_token)
     ):
         """Edit a note. Author can edit (marked as edited). Admin/president edit without mark."""
-        note = await db.classic_case_notes.find_one({"id": note_id, "caseId": case_id})
-        if not note:
+        sb, row, d = _load_case_data(case_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Caso no encontrado")
+
+        notes = list(d.get("collaborativeNotes") or [])
+        idx = next((i for i, n in enumerate(notes) if n.get("id") == note_id), -1)
+        if idx < 0:
             raise HTTPException(status_code=404, detail="Nota no encontrada")
+        note = notes[idx]
 
         role = staff_payload.get("role", "")
         is_author = note.get("authorId") == staff_payload.get("id")
         is_admin = role in ("admin", "super_admin")
-
         if not is_author and not is_admin:
             raise HTTPException(status_code=403, detail="Solo el autor o admin puede editar")
 
-        update = {"text": text.strip(), "updatedAt": datetime.now(timezone.utc).isoformat()}
+        note["text"] = text.strip()
+        note["updatedAt"] = datetime.now(timezone.utc).isoformat()
         if is_author and not is_admin:
-            update["edited"] = True
-
-        await db.classic_case_notes.update_one({"id": note_id}, {"$set": update})
+            note["edited"] = True
+        notes[idx] = note
+        d["collaborativeNotes"] = notes
+        sb.table("classic_cases").update({"data": d}).eq("id", case_id).execute()
         return {"success": True}
 
     @router.delete("/admin/{case_id}/notes/{note_id}")
     async def delete_case_note(case_id: str, note_id: str, staff_payload: dict = Depends(verify_staff_token)):
         """Delete a note."""
+        sb, row, d = _load_case_data(case_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Caso no encontrado")
+
+        notes = list(d.get("collaborativeNotes") or [])
+        target = next((n for n in notes if n.get("id") == note_id), None)
+        if not target:
+            return {"success": True}
+
         role = staff_payload.get("role", "")
         if role not in ("admin", "super_admin"):
-            note = await db.classic_case_notes.find_one({"id": note_id})
-            if not note or note.get("authorId") != staff_payload.get("id"):
+            if target.get("authorId") != staff_payload.get("id"):
                 raise HTTPException(status_code=403, detail="Solo el autor o admin puede eliminar")
 
-        await db.classic_case_notes.delete_one({"id": note_id, "caseId": case_id})
+        d["collaborativeNotes"] = [n for n in notes if n.get("id") != note_id]
+        sb.table("classic_cases").update({"data": d}).eq("id", case_id).execute()
         return {"success": True}
 
     # ========== CLIENT CONTACT LOG ==========

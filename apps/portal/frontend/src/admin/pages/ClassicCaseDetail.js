@@ -839,8 +839,18 @@ const ClassicCaseDetail = () => {
           {deliverables.map((cat, catIdx) => {
             const isOpen = expandedCats[catIdx];
             const catItems = cat.items || [];
-            const coordDone = catItems.filter(i => i.completed_coordinator).length;
-            const armDone = catItems.filter(i => i.completed_armador).length;
+            let total = 0, coordDone = 0, armDone = 0;
+            catItems.forEach(i => {
+              total++;
+              if (i.completed_coordinator) coordDone++;
+              if (i.completed_armador) armDone++;
+              (i.sub_items || []).forEach(si => {
+                total++;
+                if (si.completed_coordinator) coordDone++;
+                if (si.completed_armador) armDone++;
+              });
+            });
+            const fullyDone = total > 0 && coordDone === total && armDone === total;
             return (
               <div key={catIdx} className="rounded-xl overflow-hidden border border-gray-200 shadow-sm">
                 {/* Category header */}
@@ -848,17 +858,17 @@ const ClassicCaseDetail = () => {
                   className="w-full text-left px-5 py-4 flex items-center justify-between" style={{ background: '#0F172A' }}>
                   <div className="flex items-center gap-3">
                     <div className={`h-6 w-6 rounded-full border-2 flex items-center justify-center ${
-                      coordDone === catItems.length && armDone === catItems.length && catItems.length > 0 ? 'bg-emerald-500 border-emerald-500' : 'border-gray-500'
+                      fullyDone ? 'bg-emerald-500 border-emerald-500' : 'border-gray-500'
                     }`}>
-                      {coordDone === catItems.length && armDone === catItems.length && catItems.length > 0 && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
+                      {fullyDone && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
                     </div>
                     <span className="font-bold text-white">{cat.category}</span>
                   </div>
                   <div className="flex items-center gap-4">
                     <span className="text-xs font-medium" style={{ color: '#C9A96A' }}>{catItems.length} items</span>
                     <div className="flex gap-1 w-24">
-                      <div className="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full" style={{ width: `${catItems.length ? (coordDone / catItems.length) * 100 : 0}%` }} /></div>
-                      <div className="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden"><div className="h-full rounded-full" style={{ width: `${catItems.length ? (armDone / catItems.length) * 100 : 0}%`, background: '#C9A96A' }} /></div>
+                      <div className="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full" style={{ width: `${total ? (coordDone / total) * 100 : 0}%` }} /></div>
+                      <div className="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden"><div className="h-full rounded-full" style={{ width: `${total ? (armDone / total) * 100 : 0}%`, background: '#C9A96A' }} /></div>
                     </div>
                     {isOpen ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
                   </div>

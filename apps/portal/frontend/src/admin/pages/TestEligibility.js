@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import axios from 'axios';
 import { 
   FlaskConical, 
@@ -585,9 +586,13 @@ export const TestEligibility = () => {
         </CardContent>
       </Card>
 
-      {/* Report Detail Modal - Dark Theme Design */}
-      {selectedReport && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      {/* Report Detail Modal - Dark Theme Design (portaled to body to escape AdminLayout's stacking context) */}
+      {selectedReport && createPortal(
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center p-4"
+          style={{ zIndex: 9999 }}
+          onClick={(e) => { if (e.target === e.currentTarget) setSelectedReport(null); }}
+        >
           <div className="w-full max-w-4xl bg-[#0f172a] rounded-2xl max-h-[90vh] overflow-hidden flex flex-col shadow-2xl border border-gray-700">
             {/* Header */}
             <div className="flex items-center justify-between p-6 border-b border-gray-700">
@@ -851,7 +856,8 @@ export const TestEligibility = () => {
               })()}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

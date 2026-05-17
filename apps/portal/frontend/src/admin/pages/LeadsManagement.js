@@ -63,6 +63,9 @@ export const LeadsManagement = () => {
     converted: 0,
     rejected: 0
   });
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkStatus, setBulkStatus] = useState('');
+  const [bulkUpdating, setBulkUpdating] = useState(false);
 
   // Debounce search input
   useEffect(() => {
@@ -102,9 +105,10 @@ export const LeadsManagement = () => {
     fetchLeads();
   }, [fetchLeads]);
 
-  // Reset to first page when any filter changes
+  // Reset to first page and clear selection when any filter changes
   useEffect(() => {
     setPage(1);
+    setSelectedIds(new Set());
   }, [statusFilter, debouncedSearchTerm, dateFrom, dateTo]);
 
   const handleStatusChange = async (leadId, newStatus) => {
@@ -112,15 +116,65 @@ export const LeadsManagement = () => {
       const response = await fetch(`${API_URL}/api/leads/${leadId}/status?status=${newStatus}`, {
         method: 'PATCH'
       });
-      
+
       if (!response.ok) throw new Error('Error updating status');
-      
+
       toast.success('Estado actualizado');
       fetchLeads();
-      
+
     } catch (error) {
       console.error('Error:', error);
       toast.error('Error al actualizar el estado');
+    }
+  };
+
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllPage = () => {
+    setSelectedIds(prev => {
+      const pageIds = leads.map(l => l.id);
+      const allSelected = pageIds.length > 0 && pageIds.every(id => prev.has(id));
+      const next = new Set(prev);
+      if (allSelected) {
+        pageIds.forEach(id => next.delete(id));
+      } else {
+        pageIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const handleBulkStatusChange = async () => {
+    if (!bulkStatus || selectedIds.size === 0) return;
+    setBulkUpdating(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const results = await Promise.allSettled(
+        ids.map(id =>
+          fetch(`${API_URL}/api/leads/${id}/status?status=${bulkStatus}`, { method: 'PATCH' })
+            .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); })
+        )
+      );
+      const failed = results.filter(r => r.status === 'rejected').length;
+      const ok = results.length - failed;
+      if (ok > 0) toast.success(`${ok} lead(s) actualizados`);
+      if (failed > 0) toast.error(`${failed} fallaron al actualizar`);
+      clearSelection();
+      setBulkStatus('');
+      fetchLeads();
+    } catch (error) {
+      console.error('Bulk update error:', error);
+      toast.error('Error al actualizar en masa');
+    } finally {
+      setBulkUpdating(false);
     }
   };
 
@@ -376,6 +430,51 @@ export const LeadsManagement = () => {
         )}
       </div>
 
+      {/* Bulk Action Bar */}
+      {selectedIds.size > 0 && (
+        <div className="bg-yellow-50 border border-yellow-300 rounded-xl px-4 py-3 flex flex-wrap items-center gap-3 shadow-sm">
+          <span className="text-sm font-semibold text-yellow-900">
+            {selectedIds.size} seleccionado(s)
+          </span>
+          <Select value={bulkStatus} onValueChange={setBulkStatus}>
+            <SelectTrigger
+              className="w-[180px] h-9 bg-white border-yellow-300 text-gray-900"
+              data-testid="bulk-status-select"
+            >
+              <SelectValue placeholder="Cambiar estado a..." />
+            </SelectTrigger>
+            <SelectContent className="bg-white">
+              <SelectItem value="new" className="text-gray-900">Nuevo</SelectItem>
+              <SelectItem value="contacted" className="text-gray-900">Contactado</SelectItem>
+              <SelectItem value="converted" className="text-gray-900">Convertido</SelectItem>
+              <SelectItem value="rejected" className="text-gray-900">Rechazado</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            size="sm"
+            onClick={handleBulkStatusChange}
+            disabled={!bulkStatus || bulkUpdating}
+            className="bg-yellow-500 hover:bg-yellow-600 text-black font-semibold"
+            data-testid="apply-bulk-status-btn"
+          >
+            {bulkUpdating ? (
+              <><RefreshCw className="h-4 w-4 mr-1 animate-spin" /> Aplicando...</>
+            ) : (
+              <>Aplicar a {selectedIds.size}</>
+            )}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={clearSelection}
+            disabled={bulkUpdating}
+            className="border-yellow-400 text-yellow-900"
+          >
+            Deseleccionar
+          </Button>
+        </div>
+      )}
+
       {/* Leads Table */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         {loading ? (
@@ -392,6 +491,16 @@ export const LeadsManagement = () => {
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
+                  <th className="px-4 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      aria-label="Seleccionar todos en esta página"
+                      checked={leads.length > 0 && leads.every(l => selectedIds.has(l.id))}
+                      onChange={toggleSelectAllPage}
+                      className="h-4 w-4 rounded border-gray-300 cursor-pointer accent-yellow-500"
+                      data-testid="select-all-leads"
+                    />
+                  </th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Nombre</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Contacto</th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">Fecha</th>
@@ -401,7 +510,20 @@ export const LeadsManagement = () => {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {leads.map((lead) => (
-                  <tr key={lead.id} className="hover:bg-gray-50 transition-colors" data-testid={`lead-row-${lead.id}`}>
+                  <tr
+                    key={lead.id}
+                    className={`hover:bg-gray-50 transition-colors ${selectedIds.has(lead.id) ? 'bg-yellow-50' : ''}`}
+                    data-testid={`lead-row-${lead.id}`}
+                  >
+                    <td className="px-4 py-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(lead.id)}
+                        onChange={() => toggleSelect(lead.id)}
+                        className="h-4 w-4 rounded border-gray-300 cursor-pointer accent-yellow-500"
+                        data-testid={`select-lead-${lead.id}`}
+                      />
+                    </td>
                     <td className="px-4 py-4">
                       <p className="font-medium text-gray-900">{lead.name}</p>
                     </td>

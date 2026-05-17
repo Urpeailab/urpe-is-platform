@@ -55,6 +55,7 @@ const API_URL = process.env.REACT_APP_BACKEND_URL;
 export const DeliverableDocumentManagement = () => {
   const [deliverableStages, setDeliverableStages] = useState([]);
   const [documentStages, setDocumentStages] = useState([]);
+  const [masterStages, setMasterStages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
@@ -84,19 +85,25 @@ export const DeliverableDocumentManagement = () => {
       const token = localStorage.getItem('admin_token');
       const headers = { Authorization: `Bearer ${token}` };
       
-      const [delRes, docRes] = await Promise.all([
+      const [delRes, docRes, stagesRes] = await Promise.all([
         fetch(`${API_URL}/api/admin/deliverable-templates`, { headers }),
-        fetch(`${API_URL}/api/admin/document-templates`, { headers })
+        fetch(`${API_URL}/api/admin/document-templates`, { headers }),
+        fetch(`${API_URL}/api/admin/stage-templates`, { headers })
       ]);
-      
+
       if (delRes.ok) {
         const delData = await delRes.json();
         setDeliverableStages(delData.stages || []);
       }
-      
+
       if (docRes.ok) {
         const docData = await docRes.json();
         setDocumentStages(docData.stages || []);
+      }
+
+      if (stagesRes.ok) {
+        const stagesData = await stagesRes.json();
+        setMasterStages(stagesData.stages || []);
       }
     } catch (error) {
       console.error('Error:', error);
@@ -354,11 +361,16 @@ export const DeliverableDocumentManagement = () => {
     }
   };
 
-  const allStageNumbers = [...new Set([
-    ...deliverableStages.map(s => s.stageNumber),
-    ...documentStages.map(s => s.stageNumber),
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
-  ])].sort((a, b) => a - b);
+  // Source of truth: master stage list from /admin/stage-templates.
+  // Fall back to the union of stages observed in deliverables/documents
+  // if the master list hasn't loaded yet (no hardcoded 1..11).
+  const allStageNumbers = (masterStages.length > 0
+    ? masterStages.map(s => s.stageNumber)
+    : [...new Set([
+        ...deliverableStages.map(s => s.stageNumber),
+        ...documentStages.map(s => s.stageNumber),
+      ])]
+  ).sort((a, b) => a - b);
 
   const renderItemList = (items, type, stageNumber) => (
     <div className="space-y-2">
@@ -474,10 +486,10 @@ export const DeliverableDocumentManagement = () => {
               <Label className="text-sm font-medium text-gray-700 whitespace-nowrap">Etapa:</Label>
               <Select value={createModal.stageNumber?.toString() || ''} onValueChange={(val) => setCreateModal({ ...createModal, stageNumber: parseInt(val) })}>
                 <SelectTrigger className="w-32">
-                  <SelectValue placeholder="Elegir" />
+                  <SelectValue placeholder={allStageNumbers.length === 0 ? 'Sin etapas' : 'Elegir'} />
                 </SelectTrigger>
                 <SelectContent>
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map(num => (
+                  {allStageNumbers.map(num => (
                     <SelectItem key={num} value={num.toString()}>Etapa {num}</SelectItem>
                   ))}
                 </SelectContent>

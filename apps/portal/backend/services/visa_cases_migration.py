@@ -165,6 +165,27 @@ class IdResolver:
             return self.resolve_staff(obj.get('id'))
         return None
 
+    def resolve_staff_meta(self, email: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Resuelve un staff por email y devuelve {id, name, email}.
+        Útil para inflar author info en notas/timeline migrados."""
+        if not email or not isinstance(email, str):
+            return None
+        norm = email.strip().lower()
+        key = ('staff_meta', norm)
+        if key in self.cache:
+            return self.cache[key]  # type: ignore[return-value]
+        try:
+            r = self.sb.table('staff').select('id,name,email').ilike('email', norm).limit(1).execute()
+            if r.data:
+                row = r.data[0]
+                meta = {'id': str(row['id']), 'name': row.get('name') or norm, 'email': row.get('email') or norm}
+                self.cache[key] = meta  # type: ignore[assignment]
+                return meta
+        except Exception as e:
+            logger.warning("Staff meta lookup failed (%s): %s", email, e)
+        self.cache[key] = None
+        return None
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Entity importers
@@ -857,12 +878,332 @@ def _import_case_bundle(sb, resolver: IdResolver, bundle: dict, dry_run: bool) -
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Classic Cases (Gestión Clásica) import
+# ─────────────────────────────────────────────────────────────────────
+
+# Namespace fijo para generar UUIDs determinísticos de classic_cases
+_CLASSIC_NS = _uuid.UUID('22222222-3333-4444-5555-666666666666')
+
+
+def _det_classic_id(email: str) -> str:
+    """UUIDv5 determinístico de classic_case derivado del email del cliente.
+    Permite que re-correr la migración no duplique filas — el mismo email
+    produce el mismo case_id siempre."""
+    return str(_uuid.uuid5(_CLASSIC_NS, f"classic|{(email or '').strip().lower()}"))
+
+
+def _import_classic_client(sb, src: dict, dry_run: bool) -> Optional[str]:
+    """
+    Upsert de un cliente para Gestión Clásica.
+    Match por email (case-insensitive). Si no existe en destino, lo crea.
+    Devuelve el UUID destino.
+    """
+    raw_email = src.get('email')
+    email = raw_email.strip().lower() if isinstance(raw_email, str) and raw_email.strip() else None
+    name = (src.get('name') or 'Cliente Sin Nombre').strip() or 'Cliente Sin Nombre'
+    phone = src.get('phone')
+
+    dest_id = None
+    if email:
+        try:
+            r = sb.table('clients').select('id').ilike('email', email).limit(1).execute()
+            if r.data:
+                dest_id = str(r.data[0]['id'])
+        except Exception as e:
+            logger.warning("classic client email lookup failed (%s): %s", email, e)
+
+    if not dest_id:
+        dest_id = str(_uuid.uuid4())
+
+    payload = _clean({
+        'id': dest_id,
+        'name': name,
+        'email': email,
+        'phone': phone,
+        'created_at': src.get('created_at'),
+    })
+    if not dry_run:
+        sb.table('clients').upsert(payload, on_conflict='id').execute()
+    return dest_id
+
+
+def _normalize_classic_notes(case_id: str, src_notes, resolver: 'IdResolver'):
+    """Convierte las notas colaborativas del source (snake_case) al shape
+    camelCase que consume el frontend (`note.text`, `note.authorName`,
+    `note.requiresAttention`, `note.createdAt`, etc.)."""
+    if not isinstance(src_notes, list):
+        return []
+    out = []
+    for n in src_notes:
+        if not isinstance(n, dict):
+            continue
+        author_email = n.get('created_by_email') or ''
+        meta = resolver.resolve_staff_meta(author_email) if author_email else None
+        author_id = (meta and meta.get('id')) or n.get('created_by')
+        author_name = (meta and meta.get('name')) or author_email or 'Sistema'
+        out.append({
+            'id': n.get('id') or str(_uuid.uuid5(_CLASSIC_NS, f"note|{case_id}|{n.get('created_at')}|{author_email}")),
+            'caseId': case_id,
+            'text': n.get('content') or '',
+            'authorId': author_id,
+            'authorName': author_name,
+            'authorEmail': author_email,
+            'authorRole': n.get('created_by_role'),
+            'requiresAttention': bool(n.get('requires_coordinator_attention')),
+            'edited': bool(n.get('edited')),
+            'readBy': n.get('seen_by') or [],
+            'createdAt': n.get('created_at'),
+            'updatedAt': n.get('edited_at') or n.get('created_at'),
+        })
+    return out
+
+
+def _normalize_classic_timeline(case_id: str, src_timeline, resolver: 'IdResolver'):
+    """Convierte el timeline del source al shape consumido por
+    `data.timeline` (lo que el GET del caso devuelve)."""
+    if not isinstance(src_timeline, list):
+        return []
+    out = []
+    for t in src_timeline:
+        if not isinstance(t, dict):
+            continue
+        user_email = t.get('user_email') or ''
+        meta = resolver.resolve_staff_meta(user_email) if user_email else None
+        performer = {
+            'name': (meta and meta.get('name')) or user_email or '',
+            'email': user_email,
+            'id': (meta and meta.get('id')),
+        }
+        action = t.get('description') or t.get('event_type') or ''
+        details = t.get('details') or {}
+        if t.get('event_type') and isinstance(details, dict):
+            details.setdefault('eventType', t.get('event_type'))
+        out.append({
+            'id': t.get('id') or str(_uuid.uuid5(_CLASSIC_NS, f"tl|{case_id}|{t.get('timestamp')}|{action[:60]}")),
+            'caseId': case_id,
+            'action': action,
+            'eventType': t.get('event_type'),
+            'timestamp': t.get('timestamp'),
+            'performedBy': performer,
+            'details': details,
+        })
+    # Frontend itera tal cual — entregamos en orden cronológico inverso
+    out.sort(key=lambda e: e.get('timestamp') or '', reverse=True)
+    return out
+
+
+def _normalize_classic_contacts(case_id: str, src_contacts, resolver: 'IdResolver'):
+    """Convierte contact_logs al shape consumido por el endpoint de contactos
+    (`{id, medium, summary, registeredBy, emotionalState, createdAt, ...}`)."""
+    if not isinstance(src_contacts, list):
+        return []
+    out = []
+    for c in src_contacts:
+        if not isinstance(c, dict):
+            continue
+        user_email = c.get('created_by_email') or c.get('user_email') or ''
+        meta = resolver.resolve_staff_meta(user_email) if user_email else None
+        out.append({
+            'id': c.get('id') or str(_uuid.uuid4()),
+            'caseId': case_id,
+            'medium': c.get('medium'),
+            'summary': c.get('summary') or c.get('description') or '',
+            'emotionalState': c.get('emotional_state') or c.get('emotionalState'),
+            'needsFollowUp': bool(c.get('needs_follow_up') or c.get('needsFollowUp')),
+            'followUpNote': c.get('follow_up_note') or c.get('followUpNote'),
+            'registeredBy': (meta and meta.get('name')) or user_email or '',
+            'registeredByEmail': user_email,
+            'createdAt': c.get('created_at') or c.get('createdAt'),
+        })
+    return out
+
+
+def _normalize_classic_deliverables(case_id: str, deliverables):
+    """Asigna IDs deterministas a items y sub_items que no los traen.
+    Mantiene todos los demás campos intactos (status, status_date, notes,
+    completed_*, sub_items, etc.). Re-correr la migración produce los mismos
+    IDs porque se derivan del case_id + posición."""
+    if not isinstance(deliverables, list):
+        return []
+    out = []
+    for i, cat in enumerate(deliverables):
+        if not isinstance(cat, dict):
+            continue
+        new_cat = dict(cat)
+        items = cat.get('items') or []
+        new_items = []
+        for j, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            new_item = dict(item)
+            if not new_item.get('id'):
+                new_item['id'] = str(_uuid.uuid5(_CLASSIC_NS, f"item|{case_id}|{i}|{j}"))
+            subs = item.get('sub_items') or []
+            new_subs = []
+            for k, s in enumerate(subs):
+                if isinstance(s, dict):
+                    ns = dict(s)
+                elif isinstance(s, str):
+                    ns = {"text": s, "completed": False, "completed_coordinator": False, "completed_armador": False}
+                else:
+                    continue
+                if not ns.get('id'):
+                    ns['id'] = str(_uuid.uuid5(_CLASSIC_NS, f"sub|{case_id}|{i}|{j}|{k}"))
+                new_subs.append(ns)
+            new_item['sub_items'] = new_subs
+            new_items.append(new_item)
+        new_cat['items'] = new_items
+        out.append(new_cat)
+    return out
+
+
+def _import_classic_case(sb, src: dict, client_uuid: str, coord_uuid: Optional[str], dry_run: bool, resolver: Optional['IdResolver'] = None) -> Optional[str]:
+    """
+    Upsert de una fila en classic_cases. Toda la data específica vive en `data`
+    JSONB (camelCase) — el endpoint de read flatten la JSONB y la mezcla con
+    las columnas top-level (id, client_id, status, case_type, assigned_to).
+
+    UUID determinístico por email para idempotencia. Si no hay email, usa
+    un UUID aleatorio (cada re-run creará una fila nueva — el usuario debe
+    proveer emails o dedupe manual).
+    """
+    raw_email = src.get('email')
+    email = raw_email.strip().lower() if isinstance(raw_email, str) and raw_email.strip() else None
+    case_id = _det_classic_id(email) if email else str(_uuid.uuid4())
+
+    # camelCase la data del source (los reads del frontend usan camelCase)
+    data = {
+        'name': src.get('name'),
+        'email': src.get('email'),
+        'phone': src.get('phone'),
+        'seniorityDate': src.get('seniority_date'),
+        'coordinatorEmail': src.get('coordinator_email'),
+        'coordinatorId': coord_uuid,
+        'processingType': src.get('processing_type'),
+        'filingDate': src.get('filing_date'),
+        'trackingNumber': src.get('tracking_number'),
+        'shippingCompany': src.get('shipping_company'),
+        'ioeNumber': src.get('ioe_number'),
+        'devolucionSummary': src.get('devolucion_summary'),
+        'rfeDeadline': src.get('rfe_deadline'),
+        'rfeAnalysis': src.get('rfe_analysis'),
+        'rfeStrategy': src.get('rfe_strategy'),
+        'workStatus': src.get('work_status'),
+        'lastContactAt': src.get('last_contact_at'),
+        'driveFolderUrl': src.get('drive_folder_url'),
+        'progress': src.get('progress'),
+        'progressCoordinator': src.get('progress_coordinator'),
+        'progressArmador': src.get('progress_armador'),
+        'deliverables': _normalize_classic_deliverables(case_id, src.get('deliverables') or []),
+        'collaborativeNotes': _normalize_classic_notes(case_id, src.get('notes') or [], resolver) if resolver else [],
+        'timeline': _normalize_classic_timeline(case_id, src.get('timeline') or [], resolver) if resolver else [],
+        'contactLogs': _normalize_classic_contacts(case_id, src.get('contact_logs') or [], resolver) if resolver else [],
+    }
+    # Drop Nones para que la JSONB quede limpia
+    data = {k: v for k, v in data.items() if v not in (None, "")}
+
+    payload = _clean({
+        'id': case_id,
+        'client_id': client_uuid,
+        'case_type': src.get('processing_type') or 'classic',
+        'status': src.get('status'),
+        'assigned_to': coord_uuid,
+        'data': data,
+        'created_at': src.get('created_at'),
+    })
+    if not dry_run:
+        sb.table('classic_cases').upsert(payload, on_conflict='id').execute()
+    return case_id
+
+
+# ─────────────────────────────────────────────────────────────────────
 # FastAPI router
 # ─────────────────────────────────────────────────────────────────────
 
 class VisaCaseImportPayload(BaseModel):
     cases: List[Dict[str, Any]]
     pagination: Optional[Dict[str, Any]] = None
+
+
+class ClassicCasesImportPayload(BaseModel):
+    total: Optional[int] = None
+    clients: List[Dict[str, Any]]
+
+
+class LeadsImportPayload(BaseModel):
+    """Body para migrar leads. Acepta el shape exacto del endpoint origen:
+    {leads: [...], pagination?, counts?}."""
+    leads: List[Dict[str, Any]]
+    pagination: Optional[Dict[str, Any]] = None
+    counts: Optional[Dict[str, Any]] = None
+
+
+# Namespace fijo para generar UUIDs determinísticos de leads
+_LEADS_NS = _uuid.UUID('33333333-4444-5555-6666-777777777777')
+
+_LEAD_VALID_STATUSES = {"new", "contacted", "converted", "rejected", "qualified", "lost"}
+
+# Campos que viven como columnas top-level en la tabla `leads`
+_LEAD_FLAT_KEYS = {'id', 'name', 'email', 'phone', 'source', 'status',
+                   'assigned_to', 'visa_type', 'created_at', 'updated_at',
+                   'createdAt', 'updatedAt'}
+
+
+def _det_lead_id(email: Optional[str], src_id: Optional[str]) -> str:
+    """Si el source trae un UUID, se respeta para idempotencia 1:1. Si no,
+    se deriva del email (case-insensitive). Si no hay ninguno, UUID nuevo."""
+    if src_id and is_uuid(src_id):
+        return src_id
+    if email:
+        return str(_uuid.uuid5(_LEADS_NS, f"lead|{email.strip().lower()}"))
+    if src_id:
+        return str(_uuid.uuid5(_LEADS_NS, f"lead-id|{src_id}"))
+    return str(_uuid.uuid4())
+
+
+def _import_lead(sb, src: dict, dry_run: bool) -> Optional[str]:
+    """Upsert de una fila en `leads`.
+
+    Columnas top-level: name, email, phone, source, status, created_at, updated_at.
+    El resto (currentStep, nacionalidad, perfilAcademico, _source, country_code,
+    phone_number, notes, contacted_at, contacted_by, etc.) viven en `metadata` JSONB
+    — el endpoint /api/leads ya las aplana al responder."""
+    raw_email = src.get('email')
+    email = raw_email.strip().lower() if isinstance(raw_email, str) and raw_email.strip() else None
+    lead_id = _det_lead_id(email, src.get('id'))
+
+    # Teléfono completo: prefiere `phone` directo, si no construye de country_code + phone_number
+    phone = src.get('phone') or src.get('phone_number') or ''
+    if not src.get('phone') and src.get('country_code') and src.get('phone_number'):
+        phone = f"{src['country_code']}{src['phone_number']}"
+
+    status = src.get('status') or 'new'
+    if status not in _LEAD_VALID_STATUSES:
+        status = 'new'
+
+    # Todo lo que no sea columna top-level se preserva en metadata
+    metadata = {k: v for k, v in src.items() if k not in _LEAD_FLAT_KEYS and v not in (None, "")}
+    # Aseguramos snake_case para los campos que el endpoint flatten lee:
+    if 'country_code' in src: metadata['country_code'] = src['country_code']
+    if 'phone_number' in src: metadata['phone_number'] = src['phone_number']
+    if 'notes' in src: metadata['notes'] = src.get('notes') or ''
+    if 'contacted_at' in src: metadata['contacted_at'] = src['contacted_at']
+    if 'contacted_by' in src: metadata['contacted_by'] = src['contacted_by']
+
+    payload = _clean({
+        'id': lead_id,
+        'name': src.get('name'),
+        'email': email,
+        'phone': phone,
+        'source': src.get('source'),
+        'status': status,
+        'metadata': metadata,
+        'created_at': src.get('created_at') or src.get('createdAt'),
+        'updated_at': src.get('updated_at') or src.get('updatedAt'),
+    })
+    if not dry_run:
+        sb.table('leads').upsert(payload, on_conflict='id').execute()
+    return lead_id
 
 
 def setup_visa_cases_migration_router(verify_staff_token):
@@ -906,6 +1247,169 @@ def setup_visa_cases_migration_router(verify_staff_token):
             'errors': errors,
             'totals': totals,
             'per_case': results,
+        }
+
+    @router.post("/classic-cases-import")
+    async def classic_cases_import(
+        payload: ClassicCasesImportPayload,
+        dryRun: bool = Query(False),
+        cleanBefore: bool = Query(False, description="Si true, elimina TODAS las filas de classic_cases antes de importar."),
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """
+        Importa la lista de clientes/casos de Gestión Clásica.
+
+        Forma del body: {total: int?, clients: [...]}
+        - Cada cliente se identifica por email (case-insensitive)
+        - Coordinador se resuelve por coordinator_email vs staff.email
+        - El case_id se genera determinísticamente (UUIDv5) del email → idempotente
+        - Toda la data específica de gestión clásica vive en classic_cases.data (JSONB):
+          deliverables, collaborativeNotes, timeline, contactLogs, progress, etc.
+
+        Query params:
+        - dryRun=true: simula sin escribir
+        - cleanBefore=true: borra TODOS los classic_cases existentes antes de importar
+          (los clientes no se tocan — pueden tener visa_cases asociados)
+        """
+        if staff_payload.get('role') not in ('super_admin', 'admin'):
+            raise HTTPException(status_code=403, detail="Only admin/super_admin can run migrations")
+
+        sb = get_supabase()
+        resolver = IdResolver(sb)
+
+        deleted_before = 0
+        if cleanBefore and not dryRun:
+            try:
+                # PostgREST requiere un filtro en delete → usamos un UUID imposible para "todo"
+                res = sb.table('classic_cases').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+                deleted_before = len(res.data or [])
+            except Exception as e:
+                logger.exception("classic_cases cleanBefore delete failed: %s", e)
+                raise HTTPException(status_code=500, detail=f"cleanBefore falló: {e}")
+
+        results = []
+        totals = {'clients': 0, 'cases': 0, 'no_email': 0, 'notes': 0, 'timeline': 0, 'contact_logs': 0}
+        errors = []
+
+        for src in payload.clients:
+            email = (src.get('email') or '').strip().lower() or None
+            try:
+                client_uuid = _import_classic_client(sb, src, dryRun)
+                if client_uuid:
+                    totals['clients'] += 1
+
+                coord_uuid = resolver.resolve_staff_by_email(src.get('coordinator_email'))
+
+                case_id = _import_classic_case(sb, src, client_uuid, coord_uuid, dryRun, resolver)
+                if case_id:
+                    totals['cases'] += 1
+                if not email:
+                    totals['no_email'] += 1
+
+                totals['notes'] += len(src.get('notes') or [])
+                totals['timeline'] += len(src.get('timeline') or [])
+                totals['contact_logs'] += len(src.get('contact_logs') or [])
+
+                results.append({
+                    'email': email,
+                    'name': src.get('name'),
+                    'client_id': client_uuid,
+                    'case_id': case_id,
+                    'coordinator_id': coord_uuid,
+                    'counts': {
+                        'notes': len(src.get('notes') or []),
+                        'timeline': len(src.get('timeline') or []),
+                        'deliverables_items': sum(len(cat.get('items') or []) for cat in (src.get('deliverables') or []) if isinstance(cat, dict)),
+                    },
+                    'status': 'ok',
+                })
+            except Exception as e:
+                logger.exception("Failed to import classic case for email=%s", email)
+                errors.append({'email': email, 'name': src.get('name'), 'error': str(e)})
+
+        return {
+            'dryRun': dryRun,
+            'cleanBefore': cleanBefore,
+            'deletedBefore': deleted_before,
+            'processed': len(payload.clients),
+            'success': len(payload.clients) - len(errors),
+            'errors': errors,
+            'totals': totals,
+            'per_client': results,
+        }
+
+    @router.post("/leads-import")
+    async def leads_import(
+        payload: LeadsImportPayload,
+        dryRun: bool = Query(False),
+        cleanBefore: bool = Query(False, description="Si true, elimina TODAS las filas de leads antes de importar."),
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """
+        Importa leads desde el shape {leads: [...], pagination?, counts?}.
+
+        - ID: respeta el UUID del source si lo trae; si no, lo deriva del email
+          (uuid5 → idempotente entre re-corridas).
+        - Columnas: name, email, phone, source, status, created_at, updated_at.
+        - El resto (currentStep, nacionalidad, perfilAcademico, _source,
+          country_code, phone_number, notes, contacted_at, contacted_by, etc.)
+          se conservan en `metadata` JSONB.
+
+        Query params:
+        - dryRun=true: simula sin escribir
+        - cleanBefore=true: borra TODOS los leads existentes antes de importar
+        """
+        if staff_payload.get('role') not in ('super_admin', 'admin'):
+            raise HTTPException(status_code=403, detail="Only admin/super_admin can run migrations")
+
+        sb = get_supabase()
+        deleted_before = 0
+        if cleanBefore and not dryRun:
+            try:
+                res = sb.table('leads').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+                deleted_before = len(res.data or [])
+            except Exception as e:
+                logger.exception("leads cleanBefore delete failed: %s", e)
+                raise HTTPException(status_code=500, detail=f"cleanBefore falló: {e}")
+
+        results = []
+        totals = {'leads': 0, 'no_email': 0, 'by_source': {}, 'by_status': {}}
+        errors = []
+
+        for src in payload.leads:
+            email = (src.get('email') or '').strip().lower() or None
+            try:
+                lead_id = _import_lead(sb, src, dryRun)
+                if lead_id:
+                    totals['leads'] += 1
+                if not email:
+                    totals['no_email'] += 1
+                src_tag = src.get('_source') or src.get('source') or 'unknown'
+                totals['by_source'][src_tag] = totals['by_source'].get(src_tag, 0) + 1
+                st = src.get('status') or 'new'
+                totals['by_status'][st] = totals['by_status'].get(st, 0) + 1
+
+                results.append({
+                    'email': email,
+                    'name': src.get('name'),
+                    'lead_id': lead_id,
+                    'source': src.get('source'),
+                    '_source': src.get('_source'),
+                    'status': src.get('status'),
+                })
+            except Exception as e:
+                logger.exception("Failed to import lead for email=%s", email)
+                errors.append({'email': email, 'name': src.get('name'), 'error': str(e)})
+
+        return {
+            'dryRun': dryRun,
+            'cleanBefore': cleanBefore,
+            'deletedBefore': deleted_before,
+            'processed': len(payload.leads),
+            'success': len(payload.leads) - len(errors),
+            'errors': errors,
+            'totals': totals,
+            'per_lead': results,
         }
 
     return router

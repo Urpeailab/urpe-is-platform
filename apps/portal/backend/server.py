@@ -11273,43 +11273,69 @@ async def delete_deliverable_template(
     staff_payload: dict = Depends(verify_staff_token)
 ):
     """Delete a deliverable template and optionally remove it from all cases"""
+    step = "init"
     try:
+        step = "permission_check"
         staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can delete deliverable templates")
-        
-        # Count how many cases have this deliverable
-        cases_with_deliverable = count("visa_deliverables", {
-            "stageNumber": stage_number,
-            "name.es": name_es
-        })
-        
+
+        # `name` is JSONB ({es,en}) and `deliverable_name` is the legacy TEXT
+        # column. Filter by stage on the DB and match the name in Python —
+        # avoids supabase-py / PostgREST quirks with the `->>` JSONB operator.
+        step = "fetch_rows"
+        sb = get_supabase()
+        rows = (sb.table("visa_deliverables")
+                .select("id,name,deliverable_name")
+                .eq("stage_number", stage_number)
+                .execute().data or [])
+        logger.info(f"[delete_deliverable] stage={stage_number} fetched {len(rows)} rows")
+
+        step = "match"
+        def _name_matches(r):
+            n = r.get("name")
+            if isinstance(n, dict) and n.get("es") == name_es:
+                return True
+            if r.get("deliverable_name") == name_es:
+                return True
+            return False
+        match_ids = [r["id"] for r in rows if _name_matches(r)]
+        cases_with_deliverable = len(match_ids)
+        logger.info(f"[delete_deliverable] name_es='{name_es}' matched {cases_with_deliverable} rows")
+
         cases_affected = 0
-        
-        # Delete from cases if requested
-        if delete_from_cases and cases_with_deliverable > 0:
-            result = delete("visa_deliverables", {
-                "stageNumber": stage_number,
-                "name.es": name_es
-            })
-            cases_affected = result.deleted_count
-            logger.info(f"Deleted deliverable '{name_es}' from stage {stage_number} - {cases_affected} cases affected")
-        
-        # Log the activity
-        log = ActivityLog.create_log(
-            staff_id=staff_payload['id'],
-            action='delete',
-            resource='deliverable_template',
-            resource_id=f"stage_{stage_number}_{name_es}",
-            details={
-                'stageNumber': stage_number,
-                'name': name_es,
-                'deletedFromCases': delete_from_cases,
-                'casesAffected': cases_affected
-            }
-        )
-        insert("activity_logs", log)
-        
+
+        # Delete from cases if requested. Batched because PostgREST puts all
+        # IDs in the URL query string — >~200 UUIDs blows the URL length limit
+        # and the server responds with 400 "Bad Request".
+        if delete_from_cases and match_ids:
+            step = "delete"
+            BATCH = 100
+            for i in range(0, len(match_ids), BATCH):
+                chunk = match_ids[i:i+BATCH]
+                _del = sb.table("visa_deliverables").delete().in_("id", chunk).execute()
+                cases_affected += len(_del.data or [])
+            logger.info(f"[delete_deliverable] deleted {cases_affected} rows from visa_deliverables in {(len(match_ids)+BATCH-1)//BATCH} batches")
+
+        # Log the activity (best-effort: if it fails, don't fail the whole request)
+        step = "activity_log"
+        try:
+            log = ActivityLog.create_log(
+                staff_id=staff_payload['id'],
+                action='delete',
+                resource='deliverable_template',
+                resource_id=f"stage_{stage_number}_{name_es}",
+                details={
+                    'stageNumber': stage_number,
+                    'name': name_es,
+                    'deletedFromCases': delete_from_cases,
+                    'casesAffected': cases_affected
+                }
+            )
+            insert("activity_logs", log)
+        except Exception as log_err:
+            logger.warning(f"[delete_deliverable] activity_log insert failed (non-fatal): {log_err}")
+
         return {
             "message": f"Entregable eliminado exitosamente",
             "stage_number": stage_number,
@@ -11317,12 +11343,12 @@ async def delete_deliverable_template(
             "cases_affected": cases_affected,
             "deleted_from_cases": delete_from_cases
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Delete deliverable template error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete deliverable template: {str(e)}")
+        logger.exception(f"Delete deliverable template error at step={step}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed at {step}: {str(e)}")
 
 
 # ============= DOCUMENT TEMPLATES MANAGEMENT =============
@@ -11657,32 +11683,34 @@ async def delete_document_template(
         staff = select("staff", filters={"id": staff_payload['id']}, single=True)
         if not staff or staff.get('role') not in ['admin', 'super_admin']:
             raise HTTPException(status_code=403, detail="Only admins can delete document templates")
-        
-        # Count how many cases have this document in both collections
-        cases_with_doc_new = count("case_documents", {
-            "stageNumber": stage_number,
-            "name.es": name_es
-        })
-        
-        cases_with_doc_old = count("visa_documents", {
-            "stageNumber": stage_number,
-            "name.es": name_es
-        })
-        
-        total_cases = cases_with_doc_new + cases_with_doc_old
+
+        # `visa_documents.name` is JSONB ({es,en}) and `document_name` is the
+        # legacy TEXT column. Filter by stage on the DB and match in Python —
+        # bypasses supabase-py / PostgREST quirks with the `->>` JSONB operator.
+        # (Mongo `case_documents` is gone in Supabase.)
+        sb = get_supabase()
+        rows = (sb.table("visa_documents")
+                .select("id,name,document_name")
+                .eq("stage_number", stage_number)
+                .execute().data or [])
+        def _name_matches(r):
+            n = r.get("name")
+            if isinstance(n, dict) and n.get("es") == name_es:
+                return True
+            if r.get("document_name") == name_es:
+                return True
+            return False
+        match_ids = [r["id"] for r in rows if _name_matches(r)]
+        total_cases = len(match_ids)
         cases_affected = 0
-        
-        # Delete from cases if requested
-        if delete_from_cases and total_cases > 0:
-            result_new = delete("case_documents", {
-                "stageNumber": stage_number,
-                "name.es": name_es
-            })
-            result_old = delete("visa_documents", {
-                "stageNumber": stage_number,
-                "name.es": name_es
-            })
-            cases_affected = result_new.deleted_count + result_old.deleted_count
+
+        # Delete in batches (URL length limit on PostgREST `id=in.(...)` filter).
+        if delete_from_cases and match_ids:
+            BATCH = 100
+            for i in range(0, len(match_ids), BATCH):
+                chunk = match_ids[i:i+BATCH]
+                _del = sb.table("visa_documents").delete().in_("id", chunk).execute()
+                cases_affected += len(_del.data or [])
             logger.info(f"Deleted document '{name_es}' from stage {stage_number} - {cases_affected} cases affected")
         
         # Log the activity

@@ -4,10 +4,10 @@ import axios from 'axios';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
-import { 
-  ArrowLeft, User, Mail, Phone, Briefcase, Calendar, 
+import {
+  ArrowLeft, User, Mail, Phone, Briefcase, Calendar,
   DollarSign, Loader2, Link as LinkIcon, Trash2, FileText,
-  AlertCircle, Copy, CheckCircle, Pencil
+  AlertCircle, Copy, CheckCircle, Pencil, ClipboardList
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
@@ -24,6 +24,16 @@ const STATUS_LABELS = {
   'cancelled': 'Cancelado'
 };
 
+const CLASSIC_STATUS = {
+  en_proceso:      { label: 'En Proceso',      bg: '#FEF3C7', text: '#92400E' },
+  radicado:        { label: 'Enviado',         bg: '#EDE9FE', text: '#5B21B6' },
+  recibido_uscis:  { label: 'Recibido USCIS',  bg: '#E0E7FF', text: '#3730A3' },
+  rfe_recibido:    { label: 'RFE Recibido',    bg: '#FED7AA', text: '#9A3412' },
+  rfe_respondido:  { label: 'RFE Respondido',  bg: '#FDE68A', text: '#78350F' },
+  devuelto:        { label: 'Devuelto',        bg: '#FEE2E2', text: '#991B1B' },
+  aprobado:        { label: 'Aprobado',        bg: '#D1FAE5', text: '#065F46' },
+};
+
 export const UserDetail = () => {
   const { userId } = useParams();
   const navigate = useNavigate();
@@ -31,6 +41,7 @@ export const UserDetail = () => {
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState(null);
   const [userCases, setUserCases] = useState([]);
+  const [userClassicCases, setUserClassicCases] = useState([]);
   const [userPayments, setUserPayments] = useState([]);
   const [userLinks, setUserLinks] = useState([]);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -57,7 +68,18 @@ export const UserDetail = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
       setUserCases(casesResponse.data.cases || []);
-      
+
+      // Fetch classic (gestión antigua) cases for this client
+      try {
+        const classicResponse = await axios.get(`${API}/classic-cases/admin?userId=${userId}&limit=50`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setUserClassicCases(classicResponse.data.cases || []);
+      } catch (err) {
+        console.warn('No se pudieron cargar casos clásicos:', err?.response?.data?.detail || err.message);
+        setUserClassicCases([]);
+      }
+
       // Fetch user payments
       const paymentsResponse = await axios.get(`${API}/admin/payments?userId=${userId}`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -108,6 +130,12 @@ export const UserDetail = () => {
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     toast.success('Copiado al portapapeles');
+  };
+
+  const buildMagicLinkUrl = (link) => {
+    if (link?.magicLinkUrl) return link.magicLinkUrl;
+    const token = link?.magicToken || '';
+    return `${window.location.origin}/welcome/${token}`;
   };
 
   if (loading) {
@@ -224,51 +252,214 @@ export const UserDetail = () => {
             </div>
           ) : (
             <div className="space-y-3">
-              {userCases.map((caso) => (
-                <div 
-                  key={caso.id || caso.caseId}
-                  className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
-                >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <Badge style={{ backgroundColor: '#eab308', color: '#000000', fontWeight: 600 }}>
-                        {caso.visaType || 'EB-2 NIW'}
-                      </Badge>
-                      <Badge style={{ backgroundColor: '#dbeafe', color: '#1e40af', fontWeight: 600 }}>
-                        {STATUS_LABELS[caso.status] || caso.status}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-4 text-sm" style={{ color: '#1f2937', fontWeight: 600 }}>
-                      <span>Progreso: {caso.overallProgress || 0}%</span>
-                      <span>Etapa: {caso.currentStage || 1}</span>
-                      {caso.createdAt && (
-                        <span>Creado: {format(new Date(caso.createdAt), 'dd/MM/yyyy')}</span>
-                      )}
+              {userCases.map((caso) => {
+                const totalStages = caso.totalStages || 11;
+                const currentStage = caso.currentStage || 1;
+                const lastPaid = caso.lastPaidStage || 0;
+                const progress = totalStages > 0 ? (lastPaid / totalStages) * 100 : 0;
+                return (
+                  <div
+                    key={caso.id || caso.caseId}
+                    className="p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <Badge style={{ backgroundColor: '#eab308', color: '#000000', fontWeight: 600 }}>
+                            {caso.visaType || 'EB-2 NIW'}
+                          </Badge>
+                          <Badge style={{ backgroundColor: '#dbeafe', color: '#1e40af', fontWeight: 600 }}>
+                            {STATUS_LABELS[caso.status] || caso.status}
+                          </Badge>
+                          {caso.priority && (
+                            <Badge style={{ backgroundColor: '#fef3c7', color: '#92400e', fontWeight: 600 }}>
+                              {caso.priority}
+                            </Badge>
+                          )}
+                        </div>
+
+                        {/* Progress bar */}
+                        <div className="mb-2">
+                          <div className="flex items-center justify-between text-xs mb-1" style={{ color: '#374151', fontWeight: 600 }}>
+                            <span>Progreso · Etapa {currentStage}/{totalStages}</span>
+                            <span>{Math.round(progress)}%</span>
+                          </div>
+                          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.max(0, progress))}%`, background: '#eab308' }} />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm" style={{ color: '#1f2937', fontWeight: 600 }}>
+                          {caso.coordinatorName && (
+                            <span><span style={{ color: '#6B7280' }}>Coord.:</span> {caso.coordinatorName}</span>
+                          )}
+                          {(caso.salesRepName || caso.advisorName) && (
+                            <span><span style={{ color: '#6B7280' }}>Vendedor:</span> {caso.salesRepName || caso.advisorName}</span>
+                          )}
+                          {lastPaid > 0 && (
+                            <span><span style={{ color: '#6B7280' }}>Pagada:</span> Etapa {lastPaid}</span>
+                          )}
+                          {caso.createdAt && (
+                            <span><span style={{ color: '#6B7280' }}>Creado:</span> {format(new Date(caso.createdAt), 'dd/MM/yyyy')}</span>
+                          )}
+                          {caso.updatedAt && (
+                            <span><span style={{ color: '#6B7280' }}>Actualizado:</span> {format(new Date(caso.updatedAt), 'dd/MM/yyyy')}</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-2 flex-shrink-0">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => navigate(`/admin/visa-cases/${caso.id || caso.caseId}`)}
+                          style={{ color: '#000000', borderColor: '#4b5563', fontWeight: 600 }}
+                        >
+                          Ver Detalle
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setCaseToDelete(caso);
+                            setDeleteModalOpen(true);
+                          }}
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => navigate(`/admin/visa-cases/${caso.id || caso.caseId}`)}
-                      style={{ color: '#000000', borderColor: '#4b5563', fontWeight: 600 }}
-                    >
-                      Ver Detalle
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setCaseToDelete(caso);
-                        setDeleteModalOpen(true);
-                      }}
-                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Classic Cases Card (Gestión Antigua) */}
+      <Card className="border-2 border-gray-200">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2" style={{ color: '#000000' }}>
+            <ClipboardList className="h-5 w-5" style={{ color: '#C9A96A' }} />
+            Gestión Clásica ({userClassicCases.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {userClassicCases.length === 0 ? (
+            <div className="text-center py-8" style={{ color: '#1f2937', fontWeight: 600 }}>
+              No hay casos de gestión clásica para este usuario
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {userClassicCases.map((c) => {
+                const st = CLASSIC_STATUS[c.status] || { label: c.status || 'Sin estado', bg: '#E5E7EB', text: '#374151' };
+                const progress = c.progress || 0;
+                const pCoord = c.progressCoordinator || 0;
+                const pArm = c.progressArmador || 0;
+                return (
+                  <div
+                    key={c.id}
+                    className="p-4 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2 flex-wrap">
+                          <Badge style={{ backgroundColor: st.bg, color: st.text, fontWeight: 600 }}>
+                            {st.label}
+                          </Badge>
+                          {c.processingType && (
+                            <Badge style={{ backgroundColor: c.processingType === 'premium' ? '#FEE2E2' : '#DBEAFE', color: c.processingType === 'premium' ? '#991B1B' : '#1E40AF', fontWeight: 600 }}>
+                              {c.processingType === 'premium' ? 'Premium' : 'Normal'}
+                            </Badge>
+                          )}
+                          {c.workStatus && c.workStatus !== 'working' && (
+                            <Badge style={{ backgroundColor: '#FEF3C7', color: '#92400E', fontWeight: 600 }}>
+                              {c.workStatus === 'paused' ? 'Pausado' : c.workStatus === 'waiting_uscis' ? 'Esperando USCIS' : c.workStatus === 'desisted' ? 'Desistió' : c.workStatus}
+                            </Badge>
+                          )}
+                          {c.ioeNumber && (
+                            <Badge style={{ backgroundColor: '#F3F4F6', color: '#374151', fontWeight: 600 }}>
+                              IOE: {c.ioeNumber}
+                            </Badge>
+                          )}
+                        </div>
+
+                        {/* Progress bars: total + coord + armador */}
+                        <div className="mb-2 space-y-1.5">
+                          <div>
+                            <div className="flex items-center justify-between text-xs mb-1" style={{ color: '#374151', fontWeight: 600 }}>
+                              <span>Progreso Total</span>
+                              <span>{Math.round(progress)}%</span>
+                            </div>
+                            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.max(0, progress))}%`, background: '#10B981' }} />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <div className="flex items-center justify-between text-xs mb-1" style={{ color: '#6B7280', fontWeight: 600 }}>
+                                <span>Coordinador</span>
+                                <span>{Math.round(pCoord)}%</span>
+                              </div>
+                              <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.max(0, pCoord))}%`, background: '#6366F1' }} />
+                              </div>
+                            </div>
+                            <div>
+                              <div className="flex items-center justify-between text-xs mb-1" style={{ color: '#6B7280', fontWeight: 600 }}>
+                                <span>Armador</span>
+                                <span>{Math.round(pArm)}%</span>
+                              </div>
+                              <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div className="h-full rounded-full" style={{ width: `${Math.min(100, Math.max(0, pArm))}%`, background: '#C9A96A' }} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm" style={{ color: '#1f2937', fontWeight: 600 }}>
+                          {c.coordinatorName && (
+                            <span><span style={{ color: '#6B7280' }}>Coord.:</span> {c.coordinatorName}</span>
+                          )}
+                          {c.seniorityDate && (
+                            <span><span style={{ color: '#6B7280' }}>Antigüedad:</span> {c.seniorityDate}</span>
+                          )}
+                          {c.trackingNumber && (
+                            <span><span style={{ color: '#6B7280' }}>Tracking:</span> {c.trackingNumber}{c.shippingCompany ? ` (${c.shippingCompany})` : ''}</span>
+                          )}
+                          {c.filingDate && (
+                            <span><span style={{ color: '#6B7280' }}>Radicado:</span> {c.filingDate}</span>
+                          )}
+                          {c.rfeDeadline && (
+                            <span><span style={{ color: '#6B7280' }}>RFE deadline:</span> {c.rfeDeadline}</span>
+                          )}
+                          {c.lastContactAt && (
+                            <span><span style={{ color: '#6B7280' }}>Último contacto:</span> {format(new Date(c.lastContactAt), 'dd/MM/yyyy')}</span>
+                          )}
+                          {c.createdAt && (
+                            <span><span style={{ color: '#6B7280' }}>Creado:</span> {format(new Date(c.createdAt), 'dd/MM/yyyy')}</span>
+                          )}
+                          {c.updatedAt && (
+                            <span><span style={{ color: '#6B7280' }}>Actualizado:</span> {format(new Date(c.updatedAt), 'dd/MM/yyyy')}</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => navigate(`/admin/classic-cases/${c.id}`)}
+                        style={{ color: '#000000', borderColor: '#4b5563', fontWeight: 600 }}
+                        className="flex-shrink-0"
+                      >
+                        Ver Detalle
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>
@@ -352,8 +543,8 @@ export const UserDetail = () => {
                         </Badge>
                       )}
                     </div>
-                    <p className="text-sm truncate" style={{ color: '#1f2937', fontWeight: 600 }}>
-                      Token: {link.magicToken}
+                    <p className="text-sm truncate" style={{ color: '#1f2937', fontWeight: 600 }} title={buildMagicLinkUrl(link)}>
+                      {buildMagicLinkUrl(link)}
                     </p>
                     {link.createdAt && (
                       <p className="text-xs mt-1" style={{ color: '#374151', fontWeight: 600 }}>
@@ -364,9 +555,10 @@ export const UserDetail = () => {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => copyToClipboard(link.magicToken)}
+                    onClick={() => copyToClipboard(buildMagicLinkUrl(link))}
                     style={{ color: '#000000', borderColor: '#4b5563', fontWeight: 600 }}
                     className="flex-shrink-0"
+                    title="Copiar link completo"
                   >
                     <Copy className="h-4 w-4" style={{ color: '#000000' }} />
                   </Button>

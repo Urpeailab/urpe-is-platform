@@ -288,10 +288,20 @@ const ClassicCasesList = () => {
                     setBulkDeleting(true);
                     try {
                       let deleted = 0;
+                      const failed = [];
                       for (const id of selectedCases) {
-                        try { await axios.delete(`${API}/api/classic-cases/admin/${id}`, { headers }); deleted++; } catch {}
+                        try {
+                          await axios.delete(`${API}/api/classic-cases/admin/${id}`, { headers });
+                          deleted++;
+                        } catch (e) {
+                          failed.push({ id, msg: e?.response?.data?.detail || e?.message || 'error' });
+                        }
                       }
-                      toast.success(`${deleted} caso(s) eliminado(s)`);
+                      if (deleted > 0) toast.success(`${deleted} caso(s) eliminado(s)`);
+                      if (failed.length) {
+                        console.error('Fallos al eliminar casos:', failed);
+                        toast.error(`${failed.length} fallaron: ${failed[0].msg}`);
+                      }
                       setSelectedCases(new Set()); setConfirmDelete(false); fetchCases();
                     } catch { toast.error('Error'); }
                     finally { setBulkDeleting(false); }
