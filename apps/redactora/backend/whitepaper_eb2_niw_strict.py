@@ -168,21 +168,41 @@ The document must satisfy all three prongs of Matter of Dhanasar,
 
 ---
 
-# PETITIONER INFORMATION
+# ⛔ ANTI-HALLUCINATION CONTRACT — READ FIRST, NON-NEGOTIABLE
 
-**NAME**: {author_name}
+The petitioner's biography below is the **ONLY** authorized source of facts about
+this person. You will be evaluated on whether every personal fact you write
+appears VERBATIM (or as a faithful translation) in the CV block below.
 
-**CREDENTIALS SUMMARY**:
-{detailed_credentials}
+**A real client filed a formal complaint** because a prior generation invented:
+- "Electrical Engineer" — when the CV said something different
+- "Ph.D. from Stanford University, 2010" — when no Stanford and no 2010 PhD existed
+- "CDS license" — a license the petitioner never held
+- A whole career profile that did not match the real person
 
-**EMPLOYMENT HISTORY**:
-{employment_details if employment_details else "Professional with demonstrated experience in the field"}
+This MUST NOT happen again. If you cannot find a specific fact in the CV block,
+you write `[NEEDED: <what is missing>]` and the post-processor handles it.
+Do not paraphrase a guess. Do not "fill in" with plausible-sounding details.
+Do not infer from `{author_name}` what their nationality, degree, or job is.
 
-**EDUCATION**:
-{education_details if education_details else "Relevant educational background"}
+# 🔒 GROUND TRUTH — VERBATIM CV (the ONLY source for biographical facts)
 
-**CERTIFICATIONS**:
-{certifications_details if certifications_details else "Professional certifications in the field"}
+NAME: {author_name}
+
+<CV_GROUND_TRUTH>
+{detailed_credentials if detailed_credentials and detailed_credentials.strip() else "[NEEDED: CV text was not provided to this generation. Stop writing biographical claims and emit [NEEDED: full CV] in every place that would have referenced the petitioner's background.]"}
+</CV_GROUND_TRUTH>
+
+# 🔒 STRUCTURED CV DATA (parsed from the CV above)
+
+**EMPLOYMENT HISTORY** (use ONLY these jobs — no others exist):
+{employment_details if employment_details else "[NEEDED: employment history — not parsed from CV. Refer ONLY to roles/employers that appear verbatim in the CV block above. If none appear, write [NEEDED: employment history] instead of inventing one.]"}
+
+**EDUCATION** (use ONLY these degrees and institutions — no others exist):
+{education_details if education_details else "[NEEDED: education — not parsed from CV. Refer ONLY to degrees and universities that appear verbatim in the CV block above. DO NOT write 'Stanford', 'MIT', 'Harvard', or any specific institution unless it appears in the CV.]"}
+
+**CERTIFICATIONS / LICENSES** (use ONLY these — no others exist):
+{certifications_details if certifications_details else "[NEEDED: certifications — not parsed from CV. DO NOT mention any license or certification unless it appears verbatim in the CV block above. Specifically: do not write 'CDS', 'PMP', 'CFA', 'CPA', or any professional license unless that exact name appears in the CV.]"}
 
 ---
 
@@ -193,6 +213,29 @@ The document must satisfy all three prongs of Matter of Dhanasar,
 **DESCRIPTION**: {project_description}
 
 ---
+
+# 🔒 VERBATIM-ONLY RULE FOR BIOGRAPHICAL FACTS
+
+Every proper noun about the petitioner — university, employer, city, country,
+license name, degree name, job title, exact dates, exact metrics — MUST appear
+literally in the CV_GROUND_TRUTH block above (or be a faithful English
+translation of a phrase that appears there). Before writing any such proper
+noun, mentally check: "Did I see this exact word in the CV block?"
+
+- If YES → write it.
+- If NO  → write `[NEEDED: <specific gap>]` and move on.
+
+Forbidden moves (each one would invalidate the document):
+- Inventing a university the CV does not name (Stanford, MIT, Harvard, etc.)
+- Inventing a profession from the petitioner's name or industry context
+- Inventing dates ("since 2010", "for over 15 years") not anchored in the CV
+- Inventing a license/certification (CDS, PMP, CFA, CPA, PE, MD, etc.) not in the CV
+- Inventing employer names, team sizes, revenue figures, awards, or publications
+- Filling biographical gaps with "qualitative" prose that asserts unverified facts
+
+The petitioner is NOT a generic professional. They are the specific person
+described in the CV block. If the CV is sparse, the document is shorter on
+biography and longer on Prong 1 (national importance of the endeavor).
 
 # DOCUMENT REQUIREMENTS
 

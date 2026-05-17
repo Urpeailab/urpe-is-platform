@@ -6,7 +6,6 @@ from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import asyncio
@@ -33355,13 +33354,26 @@ CRITICAL OUTPUT FORMAT:
 - Write [NEEDED: description] for any missing CV data — do NOT invent it
 - All credentials cite their Exhibit (A, B, C, D...)
 - Temperature is LOW — do not invent achievements, metrics, or statistics
-- Write ENTIRELY IN ENGLISH — translate any Spanish credentials before use"""
+- Write ENTIRELY IN ENGLISH — translate any Spanish credentials before use
+
+🔒 ANTI-HALLUCINATION CONTRACT (system prompt above is binding):
+- Every university, employer, degree, license, or date about the petitioner
+  MUST appear verbatim in the CV_GROUND_TRUTH block of the system prompt.
+- If a fact is not there, emit [NEEDED: <gap>] and continue. Do NOT guess.
+- Do NOT write "Stanford", "MIT", "Harvard", "Ph.D.", "Electrical Engineer",
+  "CDS license", or any specific credential unless it appears verbatim in the CV.
+- If the CV is sparse, keep Prong 2 (petitioner background) SHORT and expand
+  Prong 1 (national importance) instead. Never pad with invented credentials."""
             
             try:
-                content = await call_claude_sonnet_niw(
+                # Upgraded to Opus 4.6 (was Sonnet 4.6) + temperature 0.1 to
+                # eliminate biographical hallucinations reported by clients
+                # (e.g. invented "Electrical Engineer / PhD Stanford / CDS license"
+                # on petitioners who never held those credentials).
+                content = await call_claude_opus_niw(
                     system_message=system_message,
                     user_message=combined_batch_prompt,
-                    temperature=0.3,
+                    temperature=0.1,
                     max_tokens=16000
                 )
                 elapsed = time.time() - batch_start_t
@@ -33623,7 +33635,30 @@ async def generate_complete_whitepaper_endpoint(
     
     if not project_description:
         raise HTTPException(status_code=400, detail="Project description is required")
-    
+
+    # Block generation when the CV is too sparse to ground the biography.
+    # Without enough source text the LLM fills gaps with plausible-sounding but
+    # fabricated credentials (e.g. "PhD Stanford", "CDS license"). 200 chars is
+    # roughly one short paragraph — anything below that cannot anchor a 35k-word
+    # whitepaper.
+    full_cv_data = whitepaper.get('full_cv_data') or {}
+    cv_text_len = len((author_credentials or '').strip())
+    has_structured_cv = bool(
+        full_cv_data.get('employment_history')
+        or full_cv_data.get('education')
+        or full_cv_data.get('certifications')
+    )
+    if cv_text_len < 200 and not has_structured_cv:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El CV / credenciales del autor es demasiado corto para generar "
+                "el whitepaper sin riesgo de invención. Sube un CV completo o "
+                "pega al menos 200 caracteres con educación, experiencia y "
+                "certificaciones reales antes de continuar."
+            )
+        )
+
     # Check if already generating
     current_status = whitepaper.get('status', 'in_progress')
     if current_status == 'generating':
@@ -34427,13 +34462,28 @@ async def regenerate_whitepaper_section(
 - Project scope and boundaries
 
 **About the Author:**
-Expand this into a comprehensive professional biography for {whitepaper['author_name']} that includes:
-- Professional title/role and current position
-- Years of experience in {whitepaper['technical_domain']}
-- Key projects led or contributed to (use realistic examples based on the technical domain)
-- Technical certifications or credentials: {whitepaper['author_credentials']}
-- Areas of expertise and specialization
-- Notable achievements or contributions to the field
+Write a biography for {whitepaper['author_name']} using ONLY the facts that
+appear verbatim in AUTHOR_CREDENTIALS below. Do NOT invent job titles, employers,
+universities, degrees, dates, certifications, or licenses. If a fact you would
+normally include (years of experience, specific employer, exact role) is not in
+the credentials, write `[NEEDED: <gap>]` instead — the post-processor strips it.
+
+ALLOWED CONTENT for the biography:
+- Title/role IF stated verbatim in AUTHOR_CREDENTIALS
+- Employer / institution IF stated verbatim in AUTHOR_CREDENTIALS
+- Degrees, certifications, licenses IF stated verbatim in AUTHOR_CREDENTIALS
+- General description of the field (no petitioner-specific claims)
+
+FORBIDDEN (real clients have complained about each of these):
+- Inventing "Electrical Engineer", "PhD Stanford 2010", "CDS license", or any
+  credential that does not appear verbatim in AUTHOR_CREDENTIALS
+- "Realistic examples" of past projects — only mention projects that appear in the CV
+- "Industry-standard" metrics attributed to the petitioner
+
+AUTHOR_CREDENTIALS (the ONLY source for biographical facts):
+```
+{whitepaper['author_credentials']}
+```
 
 **Project Details:**
 - Project: {whitepaper['project_title']}
@@ -34441,7 +34491,8 @@ Expand this into a comprehensive professional biography for {whitepaper['author_
 - Technical Domain: {whitepaper['technical_domain']}
 - Target Audience: {whitepaper['target_audience']}
 
-Use professional, precise, and technical tone. Include concrete examples and realistic metrics. NO PLACEHOLDERS.""",
+Use professional, precise, and technical tone. Concrete metrics ONLY when they
+appear verbatim in the credentials. Use `[NEEDED: ...]` for everything else.""",
         
         2: f"**Part 2. Context and Problem**\nDevelop the context and problem with:\n- Technical background of the domain\n- Relevant national/international metrics\n- Quantifiable impact if not resolved\n- Current state of the art\n\nProject: {whitepaper['project_title']}\nDomain: {whitepaper['technical_domain']}\nTarget Audience: {whitepaper['target_audience']}\n\nInclude data tables when appropriate and technical references.",
         
@@ -34488,10 +34539,29 @@ You create expert-level content with:
 - Professional, precise, technical tone
 - Tables, formulas, and procedures where appropriate
 - IEEE or APA citations with DOI/URL
-- **CRITICAL: NEVER use placeholders like <TO_BE_SUPPLIED>. Always use concrete examples, realistic data, or omit the section if information is truly unavailable**
-- When specific metrics are unknown, provide realistic industry-standard examples or benchmarks
-- Use actual technology names (e.g., "Kubernetes, Docker, PostgreSQL" instead of "<CONTAINER_PLATFORM>")
 - Structured markdown format with proper headers (###), bold (**text**), and tables
+
+🔒 ANTI-HALLUCINATION CONTRACT (binding — prior generations fabricated
+"Electrical Engineer", "PhD Stanford 2010", and a "CDS license" that the
+real client never held; a formal complaint was filed):
+
+- Every fact about the petitioner ({whitepaper['author_name']}) MUST appear
+  verbatim in AUTHOR_CREDENTIALS (included in the user prompt). Never infer
+  a profession, university, degree, license, or date from the petitioner's
+  name or the technical domain.
+- For industry/sector statistics about the FIELD (not the petitioner), real
+  external sources are fine — cite them (BLS, NIH, Census, IEEE, etc.).
+- Technology names that are part of the proposed solution itself
+  (e.g. "PostgreSQL", "Kubernetes") may be used; technology certifications
+  attributed to the PETITIONER may NOT be invented.
+- For any missing biographical fact, write `[NEEDED: <specific gap>]` — the
+  post-processor strips these. They are INVISIBLE in the final PDF and are
+  the only acceptable way to acknowledge a gap.
+- Do NOT use visible placeholders like `<TO_BE_SUPPLIED>`, `[TBD]`, or
+  `[pending]`. Only `[NEEDED: ...]` is allowed.
+- If credentials are sparse, the section is SHORTER on biography and LONGER
+  on the project's technical and national-interest merits. Never pad with
+  invented credentials.
 
 CONTEXT OF PREVIOUS SECTIONS:
 {previous_context}
@@ -34500,7 +34570,9 @@ CONTEXT OF PREVIOUS SECTIONS:
 
 Create a comprehensive section with technical depth appropriate for experts in {whitepaper['technical_domain']}.
 
-REMINDER: Write ONLY in ENGLISH. The content will be translated to Spanish later. NO PLACEHOLDERS - use concrete examples."""
+REMINDER: Write ONLY in ENGLISH. The content will be translated to Spanish later.
+Use `[NEEDED: ...]` (which is stripped) for missing petitioner data — NEVER
+fabricate credentials or biographical facts."""
     
     logging.info(f"🔄 REGENERATING Whitepaper section {section_number} - Using evaluation feedback: {bool(feedback_context)}")
     
@@ -34519,7 +34591,9 @@ REMINDER: Write ONLY in ENGLISH. The content will be translated to Spanish later
         logging.info(f"   📝 Regeneration attempt {attempt}/{max_attempts}")
         
         # Generate in English
-        content_en = await call_openai_gpt5(system_message, base_prompt, temperature=0.7, max_tokens=current_max_tokens)
+        # temperature=0.15 (was 0.7) to reduce biographical hallucinations in
+        # section regeneration — prior runs fabricated petitioner credentials.
+        content_en = await call_openai_gpt5(system_message, base_prompt, temperature=0.15, max_tokens=current_max_tokens)
         
         if not content_en or len(content_en.strip()) < 100:
             logging.error(f"   ❌ Insufficient content (length: {len(content_en) if content_en else 0})")

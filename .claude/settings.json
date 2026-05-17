@@ -39,7 +39,13 @@
       "Bash(docker system *)",
       "Bash(docker version *)",
       "Bash(docker builder *)",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('services/letter_generation_v2.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('services/letter_generation_v2.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('server.py', encoding='utf-8'\\).read\\(\\)\\); print\\('server.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('whitepaper_eb2_niw_strict.py', encoding='utf-8'\\).read\\(\\)\\); print\\('whitepaper_eb2_niw_strict.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('whitepaper_prompts_eb2_niw.py', encoding='utf-8'\\).read\\(\\)\\); print\\('whitepaper_prompts_eb2_niw.py OK'\\)\")",
+      "Bash(python -m pytest tests/test_whitepaper_language_integrity.py tests/test_whitepaper_unresolved_brackets.py tests/test_whitepaper_placeholder_cleanup.py -x --tb=short)",
+      "Bash(python -m unittest discover -s tests -p \"test_whitepaper_unresolved_brackets.py\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('apps/redactora/backend/server.py', encoding='utf-8'\\).read\\(\\)\\); print\\('server.py OK'\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Temp"

@@ -60,40 +60,54 @@ def get_eb2_niw_system_message(author_name: str, author_credentials: str, techni
 
 **ABSOLUTE PROHIBITION: DO NOT INVENT ANY INFORMATION ABOUT THE PETITIONER.**
 
-The ONLY information you may use about {author_name} is what appears in AUTHOR_CREDENTIALS below.
-Everything else MUST be described qualitatively based on the role and field in the credentials.
+The ONLY information you may use about {author_name} is what appears VERBATIM in
+AUTHOR_CREDENTIALS below. Do NOT infer a profession, degree, employer, license,
+or nationality from the petitioner's name, industry context, or "what sounds
+plausible". A real client filed a complaint because a prior generation invented
+"Electrical Engineer", "PhD from Stanford 2010", and a "CDS license" that the
+petitioner never held. This cannot happen again.
 
 ## WHAT YOU MUST NOT DO:
 ❌ DO NOT invent job titles, roles, or positions not in credentials
-❌ DO NOT invent company names or organizations not in credentials  
+❌ DO NOT invent company names or organizations not in credentials
+❌ DO NOT invent universities (Stanford, MIT, Harvard, etc.) — only those VERBATIM in the CV
+❌ DO NOT invent degrees, majors, or graduation years not VERBATIM in the CV
+❌ DO NOT invent licenses (CDS, PMP, CFA, CPA, PE, MD, JD, etc.) not VERBATIM in the CV
 ❌ DO NOT invent metrics, percentages, or numbers for the author
-❌ DO NOT invent years of experience
+❌ DO NOT invent years of experience ("over 15 years", "since 2010") not anchored in the CV
 ❌ DO NOT invent certifications not explicitly listed
-❌ DO NOT invent achievements, awards, or recognitions
+❌ DO NOT invent achievements, awards, publications, or recognitions
 ❌ DO NOT invent team sizes managed
 ❌ DO NOT invent revenue figures handled
 ❌ DO NOT invent client numbers
 ❌ DO NOT assume information from project_description is author's past experience
+❌ DO NOT infer profession from name (e.g., a Spanish surname does NOT mean engineer)
 
 ## WHAT YOU MUST DO:
-✅ Use ONLY credentials explicitly provided: "{author_credentials}"
-✅ When author metrics are missing, describe the ROLE QUALITATIVELY ("The petitioner has demonstrated expertise in...") without inventing numbers
-✅ For any missing specific metric, use the ROLE DESCRIPTION from credentials as context
-✅ Industry statistics may come from external sources (cite them)
+✅ Use ONLY credentials explicitly provided in the CV block below
+✅ When a specific biographical fact is missing, write `[NEEDED: <specific gap>]` —
+   the post-processor strips these. DO NOT write a "qualitative" sentence that
+   asserts an unverified fact.
+✅ Industry statistics about the FIELD (not the petitioner) may come from external
+   sources (cite BLS, NIH, Census, etc.)
 ✅ The project_description contains FUTURE PLANS, not past achievements
-✅ If credentials mention a company/organization, you may describe its general characteristics from industry knowledge
+✅ If the CV gives you only a job title with no metrics, write the title and
+   stop — do not embellish with invented details
 
-## ⛔ WHAT IS ABSOLUTELY FORBIDDEN (DOCUMENT INVALIDATION):
-❌ DO NOT write `[pending information]` — EVER. This appears literally in the final PDF.
-❌ DO NOT write `[... — describe qualitatively]` — EVER. These are visible in the PDF and make the document unprofessional.
-❌ DO NOT write `[TBD]`, `[INSERT HERE]`, `[TO BE PROVIDED]`, or any bracket placeholder.
-❌ If you lack a specific number, write a qualitative sentence instead.
+## ⛔ VISIBLE PLACEHOLDERS ARE ALSO FORBIDDEN:
+❌ DO NOT write `[pending information]`, `[TBD]`, `[INSERT HERE]`, `[TO BE PROVIDED]`,
+   `[... — describe qualitatively]`, or any bracket placeholder that the reader sees.
+   The ONLY allowed bracket marker is `[NEEDED: <description>]` — these are stripped
+   by the post-processor and are invisible in the final PDF.
+
    WRONG: "The petitioner managed [team size — describe qualitatively] engineers"
-   RIGHT: "The petitioner's credentials reflect progressive leadership responsibilities in engineering teams"
+   WRONG: "The petitioner led teams of 25+ engineers" (invented number)
+   RIGHT: "The petitioner led engineering teams [NEEDED: exact team size]"
+   RIGHT: "The petitioner's role at [Company from CV] involved engineering leadership"
 
-## AUTHOR_CREDENTIALS (THIS IS THE ONLY SOURCE FOR AUTHOR BACKGROUND):
+## AUTHOR_CREDENTIALS — VERBATIM CV (THE ONLY SOURCE FOR AUTHOR BACKGROUND):
 ```
-{author_credentials}
+{author_credentials if author_credentials and author_credentials.strip() else "[NEEDED: CV text was not provided. Refuse to write any biographical claim and emit [NEEDED: full CV] wherever a biographical claim would have appeared.]"}
 ```
 
 ## PROJECT_DESCRIPTION (THIS IS FUTURE PLANS, NOT PAST ACHIEVEMENTS):
@@ -102,9 +116,10 @@ Everything else MUST be described qualitatively based on the role and field in t
 ```
 
 If credentials are limited, the white paper should:
-1. Focus more on the PROJECT'S national importance (Prong 1)
-2. Describe author's specific metrics QUALITATIVELY when exact figures are not in credentials (Prong 2)
-3. Explain what EVIDENCE would be needed to strengthen the case
+1. Focus more on the PROJECT'S national importance (Prong 1) — this can be long
+2. Keep Prong 2 (petitioner background) SHORT — only what the CV actually says
+3. Use `[NEEDED: ...]` markers for missing petitioner data instead of fabricating
+4. NEVER pad with invented credentials to reach a page count target
 
 # THREE PRONGS TO PROVE
 1. **Prong 1**: The proposed endeavor has SUBSTANTIAL MERIT and NATIONAL IMPORTANCE
