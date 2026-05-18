@@ -20,12 +20,15 @@ Características:
   UUID, se reusa ese UUID para no romper UNIQUE(email).
 - Dry-run con ?dryRun=true: no escribe nada, solo reporta contadores.
 """
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional, Any, Dict, List
 import logging
 import re
+import threading
+import time
 import uuid as _uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from db.supabase_client import get_supabase
 
@@ -98,16 +101,63 @@ _VISA_CASE_CHILDREN = [
 
 
 def _truncate_visa_cases_deep(sb) -> dict:
-    """Wipe visa_cases + all CASCADE children, batching every step to avoid statement_timeout."""
-    stats = {}
-    for table, batch in _VISA_CASE_CHILDREN:
+    """Wipe visa_cases + all CASCADE children. Hijas en paralelo + padre al final.
+
+    Paralelizar las hijas reduce el wall-clock de ~N×batch_time a ~1×batch_time
+    (cada PostgREST call es independiente, así que asyncio/threads escalan bien).
+    Importante para evitar gateway timeout (Coolify/Traefik ~15-30s).
+    """
+    stats: dict = {}
+
+    def _one(table_batch):
+        table, batch = table_batch
         try:
-            stats[table] = _truncate_table_batched(sb, table, batch_size=batch, missing_ok=True)
+            return table, _truncate_table_batched(sb, table, batch_size=batch, missing_ok=True)
         except Exception as e:
             logger.warning("could not truncate %s: %s", table, e)
-            stats[table] = -1
+            return table, -1
+
+    with ThreadPoolExecutor(max_workers=len(_VISA_CASE_CHILDREN)) as ex:
+        for table, count in ex.map(_one, _VISA_CASE_CHILDREN):
+            stats[table] = count
+
     stats['visa_cases'] = _truncate_table_batched(sb, 'visa_cases', batch_size=200)
     return stats
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Async cleanup jobs (escapan al gateway timeout)
+# ─────────────────────────────────────────────────────────────────────
+_CLEAN_JOBS: Dict[str, Dict[str, Any]] = {}
+_CLEAN_JOBS_LOCK = threading.Lock()
+
+
+def _run_clean_job(job_id: str, target: str):
+    """Worker que corre en background. Actualiza _CLEAN_JOBS[job_id]."""
+    sb = get_supabase()
+    started = time.time()
+    try:
+        if target == 'visa_cases':
+            stats = _truncate_visa_cases_deep(sb)
+        elif target == 'classic_cases':
+            stats = {'classic_cases': _truncate_table_batched(sb, 'classic_cases', batch_size=100)}
+        elif target == 'leads':
+            stats = {'leads': _truncate_table_batched(sb, 'leads', batch_size=500)}
+        else:
+            with _CLEAN_JOBS_LOCK:
+                _CLEAN_JOBS[job_id]['status'] = 'error'
+                _CLEAN_JOBS[job_id]['error'] = f'unknown target: {target}'
+            return
+        with _CLEAN_JOBS_LOCK:
+            _CLEAN_JOBS[job_id]['status'] = 'done'
+            _CLEAN_JOBS[job_id]['stats'] = stats
+            _CLEAN_JOBS[job_id]['durationSec'] = round(time.time() - started, 2)
+    except Exception as e:
+        logger.exception("clean job %s failed", job_id)
+        with _CLEAN_JOBS_LOCK:
+            _CLEAN_JOBS[job_id]['status'] = 'error'
+            _CLEAN_JOBS[job_id]['error'] = str(e)
+            _CLEAN_JOBS[job_id]['durationSec'] = round(time.time() - started, 2)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1267,6 +1317,44 @@ def _import_lead(sb, src: dict, dry_run: bool) -> Optional[str]:
 
 def setup_visa_cases_migration_router(verify_staff_token):
     router = APIRouter(prefix="/admin/migration", tags=["Migration"])
+
+    @router.post("/clean")
+    async def clean_async(
+        target: str = Query(..., description="Qué borrar: visa_cases | classic_cases | leads"),
+        background_tasks: BackgroundTasks = None,
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """Lanza el wipe en background y devuelve un job_id inmediatamente.
+
+        Evita el gateway timeout (Coolify/Traefik) cuando hay muchas filas.
+        Consulta el estado con GET /clean-status/{job_id}.
+        """
+        if staff_payload.get('role') not in ('super_admin', 'admin'):
+            raise HTTPException(status_code=403, detail="Only admin/super_admin can run migrations")
+        if target not in ('visa_cases', 'classic_cases', 'leads'):
+            raise HTTPException(status_code=400, detail="target debe ser visa_cases, classic_cases o leads")
+
+        job_id = str(_uuid.uuid4())
+        with _CLEAN_JOBS_LOCK:
+            _CLEAN_JOBS[job_id] = {
+                'jobId': job_id,
+                'target': target,
+                'status': 'running',
+                'startedAt': time.time(),
+            }
+        background_tasks.add_task(_run_clean_job, job_id, target)
+        return {'jobId': job_id, 'target': target, 'status': 'running',
+                'pollUrl': f'/api/admin/migration/clean-status/{job_id}'}
+
+    @router.get("/clean-status/{job_id}")
+    async def clean_status(job_id: str, staff_payload: dict = Depends(verify_staff_token)):
+        if staff_payload.get('role') not in ('super_admin', 'admin'):
+            raise HTTPException(status_code=403, detail="Only admin/super_admin")
+        with _CLEAN_JOBS_LOCK:
+            job = _CLEAN_JOBS.get(job_id)
+            if not job:
+                raise HTTPException(status_code=404, detail="job no encontrado")
+            return dict(job)
 
     @router.post("/visa-cases-import")
     async def visa_cases_import(
