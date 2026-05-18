@@ -1320,8 +1320,8 @@ def setup_visa_cases_migration_router(verify_staff_token):
 
     @router.post("/clean")
     async def clean_async(
+        background_tasks: BackgroundTasks,
         target: str = Query(..., description="Qué borrar: visa_cases | classic_cases | leads"),
-        background_tasks: BackgroundTasks = None,
         staff_payload: dict = Depends(verify_staff_token),
     ):
         """Lanza el wipe en background y devuelve un job_id inmediatamente.
