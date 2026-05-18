@@ -63,14 +63,6 @@ export const StageDetailPage = () => {
   const [ideasEvaluation, setIdeasEvaluation] = useState(null);
   const [titlesEvaluation, setTitlesEvaluation] = useState(null);
 
-  // BP preparation wizard state
-  const [bpPrep, setBpPrep] = useState(null);
-  const [bpNames, setBpNames] = useState([]);
-  const [bpRecommendation, setBpRecommendation] = useState(null);
-  const [bpLoadingNames, setBpLoadingNames] = useState(false);
-  const [bpPollingTaskId, setBpPollingTaskId] = useState(null);
-  const [bpSaving, setBpSaving] = useState(false);
-  const [bpJob, setBpJob] = useState(null);
 
   useEffect(() => {
     fetchStageData();
@@ -553,135 +545,6 @@ export const StageDetailPage = () => {
     }
   };
 
-  // =========================================================================
-  // BUSINESS PLAN PREPARATION FUNCTIONS
-  // =========================================================================
-
-  useEffect(() => {
-    const fetchBpPrep = async () => {
-      const token = getToken();
-      if (!token) return;
-      try {
-        const { data } = await axios.get(`${BACKEND_URL}/api/client/bp/preparation`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        const prep = data.preparation;
-        if (prep) {
-          setBpPrep(prep);
-          if (prep.suggestedNames) setBpNames(prep.suggestedNames);
-          if (prep.recommendation) setBpRecommendation(prep.recommendation);
-        }
-        // Also fetch BP job
-        const { data: jobData } = await axios.get(`${BACKEND_URL}/api/client/bp/job`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setBpJob(jobData.job);
-      } catch (e) {
-        console.error('Error fetching bp preparation:', e);
-      }
-    };
-    fetchBpPrep();
-  }, [caseData]);
-
-  // Poll BP job while generating
-  useEffect(() => {
-    if (!bpJob || !['processing', 'generating'].includes(bpJob.status)) return;
-    const interval = setInterval(async () => {
-      const token = getToken();
-      if (!token) return;
-      try {
-        const { data } = await axios.get(`${BACKEND_URL}/api/client/bp/job`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        setBpJob(data.job);
-      } catch (e) { console.error(e); }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [bpJob]);
-
-  const handleShowBpNames = async () => {
-    const token = getToken();
-    if (!token) return;
-    setBpLoadingNames(true);
-    try {
-      const { data } = await axios.post(`${BACKEND_URL}/api/client/bp/suggest-names`, {}, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      // Start polling for results
-      setBpPollingTaskId(data.task_id);
-      toast.success('Analizando tu perfil para sugerir proyectos...');
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Error al generar sugerencias');
-      setBpLoadingNames(false);
-    }
-  };
-
-  // Poll for BP name suggestions
-  useEffect(() => {
-    if (!bpPollingTaskId) return;
-    const interval = setInterval(async () => {
-      const token = getToken();
-      if (!token) return;
-      try {
-        const { data } = await axios.get(
-          `${BACKEND_URL}/api/client/bp/suggest-names-status/${bpPollingTaskId}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        if (data.status === 'completed') {
-          setBpNames(data.suggestions || []);
-          setBpRecommendation(data.recommendation || null);
-          setBpPrep(prev => ({ ...prev, step: 'names_shown', suggestedNames: data.suggestions }));
-          setBpPollingTaskId(null);
-          setBpLoadingNames(false);
-          toast.success('Sugerencias de proyecto generadas');
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [bpPollingTaskId]);
-
-  const handleSelectBpName = async (name, description) => {
-    const token = getToken();
-    if (!token) return;
-    setBpSaving(true);
-    try {
-      const { data } = await axios.post(`${BACKEND_URL}/api/client/bp/select-name`,
-        { selectedName: name, selectedDescription: description },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      setBpPrep(prev => ({ ...prev, step: 'ready', selectedName: name }));
-      toast.success(data.message || 'Proyecto seleccionado. Generacion iniciada.');
-      // Fetch job status
-      const { data: jobData } = await axios.get(`${BACKEND_URL}/api/client/bp/job`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setBpJob(jobData.job);
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Error al seleccionar proyecto');
-    } finally {
-      setBpSaving(false);
-    }
-  };
-
-  const handleResetBpPrep = async () => {
-    const token = getToken();
-    if (!token) return;
-    try {
-      await axios.post(`${BACKEND_URL}/api/client/bp/reset`, {}, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setBpPrep(null);
-      setBpNames([]);
-      setBpRecommendation(null);
-      setBpJob(null);
-      toast.success('Preparacion reiniciada');
-    } catch (error) {
-      toast.error('Error al reiniciar');
-    }
-  };
-
   const getStageStatus = () => {
     if (!stageData || !caseData) return { isPaid: false, isCompleted: false, isCurrent: false, isLocked: true, isFree: false };
     
@@ -928,30 +791,6 @@ export const StageDetailPage = () => {
           </div>
           )}
 
-          {/* ========== LOCKED STAGE CTA ========== */}
-          {isLocked && stageData.amount > 0 && (
-            <div className="bg-[#1E293B] rounded-xl border border-[#C9A96A]/30 p-5 sm:p-6">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-medium text-[#F8FAFC] mb-1">
-                    Desbloquea esta etapa
-                  </h3>
-                  <p className="text-sm text-[#94A3B8]">
-                    Agenda una cita para realizar el pago y continuar
-                  </p>
-                </div>
-                <Button
-                  onClick={() => navigate('/dashboard/appointments')}
-                  className="bg-[#C9A96A] hover:bg-[#B8956A] text-[#0F172A] font-semibold px-6 py-3 min-h-[52px] w-full sm:w-auto"
-                  data-testid="schedule-unlock-btn"
-                >
-                  <Calendar className="h-5 w-5 mr-2" />
-                  Agendar Cita
-                </Button>
-              </div>
-            </div>
-          )}
-
           {/* ========== DELIVERABLES SECTION ========== */}
           {/* ========== DELIVERABLES SECTION ========== */}
           <div className="bg-[#1E293B] rounded-xl border border-[#334155] overflow-hidden">
@@ -999,11 +838,8 @@ export const StageDetailPage = () => {
                   // Check if this is a Libro Técnico deliverable
                   const isLibro = deliverableName.toLowerCase().includes('libro') ||
                                   (deliverableName.toLowerCase().includes('book') && !deliverableName.toLowerCase().includes('facebook'));
-                  
-                  // Check if this is a Business Plan deliverable
-                  const isBP = deliverableName.toLowerCase().includes('business plan') ||
-                               deliverableName.toLowerCase().includes('propuesta de proyecto');
-                  
+
+
                   // If stage is paid/free/completed/unlocked → all deliverables can be downloaded
                   // isLocked is false when stage is paid, free, completed, or unlocked
                   const stageIsOpen = !isLocked;
@@ -1123,7 +959,7 @@ export const StageDetailPage = () => {
                           when stage is blocked). BP and Libro use their own wizards
                           when unlocked, but when locked they fall through here so the
                           client can preview the filenames without downloading. */}
-                      {delFiles.length > 0 && !hasSpecialDownload && (!canDownload || (!isLibro && !isBP)) && (
+                      {delFiles.length > 0 && !hasSpecialDownload && (!canDownload || !isLibro) && (
                         <div className="ml-6 mt-3 space-y-2">
                           {delFiles.map((file, index) => {
                             const fileNote = file.note || file.notes || '';
@@ -1443,157 +1279,6 @@ export const StageDetailPage = () => {
                         </div>
                       )}
 
-                      {/* ========== BUSINESS PLAN PREPARATION WIZARD ========== */}
-                      {isBP && canDownload && (
-                        <div className="ml-6 mt-4" data-testid="bp-wizard">
-                          {/* Step indicator */}
-                          <div className="flex items-center gap-2 mb-4">
-                            <div className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
-                              bpPrep?.step ? 'bg-[#C9A96A] text-[#0F172A]' : 'bg-[#334155] text-[#94A3B8]'
-                            }`}>1</div>
-                            <div className={`h-px flex-1 ${bpPrep?.selectedName ? 'bg-[#22C55E]' : 'bg-[#334155]'}`} />
-                            <div className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
-                              bpPrep?.selectedName ? 'bg-[#22C55E] text-[#0F172A]' : 'bg-[#334155] text-[#94A3B8]'
-                            }`}>2</div>
-                          </div>
-
-                          {/* STEP 1: Show Project Suggestions */}
-                          {(!bpPrep || !bpPrep.selectedName) && (
-                            <div className="bg-[#0F172A] rounded-xl p-4 border border-[#334155]">
-                              <div className="flex items-center gap-2 mb-3">
-                                <Lightbulb className="h-4 w-4 text-[#C9A96A]" />
-                                <h4 className="text-sm font-medium text-[#F8FAFC]">Paso 1: Elige tu proyecto</h4>
-                              </div>
-
-                              {bpNames.length === 0 ? (
-                                <div className="text-center py-4">
-                                  <p className="text-xs text-[#94A3B8] mb-3">
-                                    Analizaremos tu CV para sugerirte 3 proyectos de negocio personalizados
-                                  </p>
-                                  <Button
-                                    onClick={handleShowBpNames}
-                                    disabled={bpLoadingNames}
-                                    data-testid="show-bp-names-btn"
-                                    className="bg-[#C9A96A] hover:bg-[#B8956A] text-[#0F172A] font-semibold px-6"
-                                  >
-                                    {bpLoadingNames ? (
-                                      <>
-                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                        Analizando tu perfil...
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Sparkles className="h-4 w-4 mr-2" />
-                                        Mostrar Proyectos
-                                      </>
-                                    )}
-                                  </Button>
-                                </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  {bpNames.map((suggestion, idx) => {
-                                    const sName = typeof suggestion === 'string' ? suggestion : (suggestion.name || suggestion.title || '');
-                                    const sDesc = typeof suggestion === 'string' ? '' : (suggestion.description || suggestion.justification || '');
-                                    const isRecommended = bpRecommendation?.best_suggestion_number === String(idx) || bpRecommendation?.recommended_index === idx;
-                                    return (
-                                      <button
-                                        key={idx}
-                                        onClick={() => handleSelectBpName(sName, sDesc)}
-                                        disabled={bpSaving}
-                                        data-testid={`bp-suggestion-${idx}`}
-                                        className={`w-full text-left p-3 rounded-lg border transition-all hover:border-[#C9A96A] hover:bg-[#C9A96A]/5 ${
-                                          isRecommended ? 'border-[#C9A96A]/50 bg-[#C9A96A]/5' : 'border-[#334155] bg-[#1E293B]'
-                                        }`}
-                                      >
-                                        <div className="flex items-start gap-2">
-                                          <span className="text-xs font-bold text-[#C9A96A] mt-0.5">{idx + 1}.</span>
-                                          <div className="flex-1">
-                                            <p className="text-sm font-medium text-[#E2E8F0]">{sName}</p>
-                                            {sDesc && (
-                                              <p className="text-xs text-[#94A3B8] mt-1 line-clamp-2">{sDesc}</p>
-                                            )}
-                                            {isRecommended && (
-                                              <span className="inline-block mt-1 text-[10px] bg-[#C9A96A]/20 text-[#C9A96A] px-2 py-0.5 rounded-full font-medium">
-                                                Recomendado
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* STEP 2: Project selected — notify when ready */}
-                          {bpPrep?.selectedName && (
-                            <div className="bg-[#0F172A] rounded-xl p-4 border border-[#22C55E]/30">
-                              <div className="mb-3 p-2 bg-[#1E293B] rounded-lg border border-[#C9A96A]/20">
-                                <p className="text-[10px] text-[#C9A96A] font-medium uppercase tracking-wider mb-1">Proyecto seleccionado</p>
-                                <p className="text-sm font-medium text-[#F8FAFC]">{bpPrep.selectedName}</p>
-                              </div>
-
-                              <div className="flex items-center gap-2 mb-2">
-                                <CheckCircle className="h-5 w-5 text-[#22C55E]" />
-                                <span className="text-sm font-medium text-[#22C55E]">Proyecto registrado exitosamente</span>
-                              </div>
-                              <p className="text-xs text-[#94A3B8] ml-7">
-                                Nuestro equipo esta trabajando en tu Business Plan. Seras notificado cuando este listo para descarga.
-                              </p>
-
-                              <button
-                                onClick={handleResetBpPrep}
-                                className="flex items-center gap-1 mt-3 text-xs text-[#64748B] hover:text-[#C9A96A] transition-colors"
-                              >
-                                <RotateCcw className="h-3 w-3" />
-                                Empezar de nuevo
-                              </button>
-                            </div>
-                          )}
-
-                          {/* Show uploaded files if any */}
-                          {delFiles.length > 0 && (
-                            <div className="mt-3 space-y-2">
-                              {delFiles.map((file, index) => {
-                                const fileNote = file.note || file.notes || '';
-                                return (
-                                <div key={file.id || index} className="space-y-1">
-                                  <div className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2">
-                                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                                      <File className="h-4 w-4 flex-shrink-0 text-[#22C55E]" />
-                                      <span className="text-sm truncate text-[#F8FAFC]">
-                                        {file.fileName || `Archivo ${index + 1}`}
-                                      </span>
-                                    </div>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() => {
-                                        const fullUrl = file.fileUrl?.startsWith('http')
-                                          ? file.fileUrl
-                                          : `${BACKEND_URL}${file.fileUrl}`;
-                                        window.open(fullUrl, '_blank');
-                                      }}
-                                      className="h-8 px-2 text-[#64748B] hover:text-[#22C55E] hover:bg-[#22C55E]/10"
-                                    >
-                                      <Download className="h-4 w-4" />
-                                    </Button>
-                                  </div>
-                                  {fileNote && (
-                                    <div className="px-3 py-2 bg-[#1E293B] rounded-lg border border-[#C9A96A]/30">
-                                      <p className="text-[10px] uppercase tracking-wider text-[#C9A96A] font-medium mb-1">Nota del equipo</p>
-                                      <p className="text-xs text-[#E2E8F0] whitespace-pre-wrap">{fileNote}</p>
-                                    </div>
-                                  )}
-                                </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   );
                 })
@@ -1626,8 +1311,13 @@ export const StageDetailPage = () => {
                   const docName = document.documentName || document.name?.es || document.name?.en || 'Documento';
                   const isRequired = document.required || document.isRequired;
                   
-                  // Check if this is "Hoja de vida" and user has CV
-                  const isDocCV = docName.toLowerCase().includes('hoja de vida') || docName.toLowerCase().includes('curriculum') || docName.toLowerCase().includes('resume');
+                  // Auto-attach the client's CV ONLY for their own "Hoja de vida"
+                  // doc. Stages 8/9 ask for "Hoja de vida de quien va a firmar..."
+                  // (a third party's CV) — those must stay empty until uploaded.
+                  const _docNameLc = docName.toLowerCase();
+                  const _matchesCvName = _docNameLc.includes('hoja de vida') || _docNameLc.includes('curriculum') || _docNameLc.includes('resume');
+                  const _refersToOther = /\b(de\s+quien|del\s+firmante|del\s+experto|del\s+recomendador|del\s+autor|de\s+experto|tercero)\b/.test(_docNameLc);
+                  const isDocCV = _matchesCvName && !_refersToOther;
                   const cvForDoc = isDocCV && userCvs.length > 0 ? userCvs[0] : null;
                   
                   // Override status if CV exists
@@ -1748,6 +1438,39 @@ export const StageDetailPage = () => {
               )}
             </div>
           </div>
+
+          {/* ========== STAGE NAVIGATION ========== */}
+          {(() => {
+            const totalStages = caseData?.stages?.length || 0;
+            const currentNum = parseInt(stageNumber);
+            const hasPrev = currentNum > 1;
+            const hasNext = currentNum < totalStages;
+            if (!hasPrev && !hasNext) return null;
+            return (
+              <div className="flex items-center justify-between gap-3 pt-2">
+                {hasPrev ? (
+                  <button
+                    onClick={() => navigate(`/dashboard/my-case/stage/${currentNum - 1}`)}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#1E293B] border border-[#334155] text-[#E2E8F0] hover:border-[#C9A96A] hover:text-[#F8FAFC] transition-colors min-h-[44px]"
+                    data-testid="prev-stage"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    <span className="text-sm font-medium">Etapa {currentNum - 1}</span>
+                  </button>
+                ) : <div />}
+                {hasNext ? (
+                  <button
+                    onClick={() => navigate(`/dashboard/my-case/stage/${currentNum + 1}`)}
+                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#C9A96A] text-[#0F172A] hover:bg-[#B8956A] font-semibold transition-colors min-h-[44px]"
+                    data-testid="next-stage"
+                  >
+                    <span className="text-sm">Siguiente etapa</span>
+                    <ArrowLeft className="h-4 w-4 rotate-180" />
+                  </button>
+                ) : <div />}
+              </div>
+            );
+          })()}
 
         </div>
       </div>

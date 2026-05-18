@@ -82,12 +82,6 @@ export const PaymentsPage = () => {
     );
   }
 
-  const { case: visaCase, stages, progress } = caseData;
-  const totalAmount = stages.reduce((sum, s) => sum + s.amount, 0);
-  const paidAmount = summary.totalPaid || 0;
-  const pendingAmount = totalAmount - paidAmount;
-  const progressPercent = Math.round((paidAmount / totalAmount) * 100);
-
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-6 bg-navy-primary min-h-screen">
       {/* Header - Navy Premium */}
@@ -97,53 +91,6 @@ export const PaymentsPage = () => {
           Consulta tu historial de pagos
         </p>
       </div>
-
-      {/* Financial Summary Card - Navy Premium */}
-      <Card className="bg-navy-secondary border border-gold-dark/30 rounded-xl">
-        <CardContent className="p-4 sm:p-6">
-          {/* Grid responsive - stack en móvil */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
-            <div className="flex sm:block justify-between items-center sm:items-start">
-              <p className="text-slate text-xs sm:text-sm">Total del Programa</p>
-              <p className="text-2xl sm:text-3xl font-bold text-gold-primary">${totalAmount.toLocaleString()}</p>
-            </div>
-            <div className="flex sm:block justify-between items-center sm:items-start">
-              <div>
-                <p className="text-slate text-xs sm:text-sm">Total Pagado</p>
-                <p className="text-xs text-gold-dark sm:hidden">{progressPercent}% completado</p>
-              </div>
-              <div className="text-right sm:text-left">
-                <p className="text-2xl sm:text-3xl font-bold text-success">${paidAmount.toLocaleString()}</p>
-                <p className="text-slate text-xs sm:text-sm mt-1 hidden sm:block">{progressPercent}% completado</p>
-              </div>
-            </div>
-            <div className="flex sm:block justify-between items-center sm:items-start">
-              <div>
-                <p className="text-slate text-xs sm:text-sm">Pendiente</p>
-                <p className="text-xs text-gold-dark sm:hidden">
-                  {stages.length - progress.paidStages.length} etapas restantes
-                </p>
-              </div>
-              <div className="text-right sm:text-left">
-                <p className="text-2xl sm:text-3xl font-bold text-warning">${pendingAmount.toLocaleString()}</p>
-                <p className="text-slate text-xs sm:text-sm mt-1 hidden sm:block">
-                  {stages.length - progress.paidStages.length} etapas restantes
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Progress Bar - Navy Premium */}
-          <div className="mt-4 sm:mt-6">
-            <div className="w-full bg-navy-light/30 rounded-full h-2.5 sm:h-3">
-              <div
-                className="bg-gradient-to-r from-gold-dark to-success rounded-full h-2.5 sm:h-3 transition-all duration-500"
-                style={{ width: `${progressPercent}%` }}
-              ></div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Payment History - Navy Premium */}
       <Card className="bg-navy-secondary border border-navy-light/20 rounded-xl">

@@ -51,6 +51,26 @@ def _clean(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
+def _truncate_table_batched(sb, table: str, batch_size: int = 50) -> int:
+    """Delete every row of `table` in small batches to stay under Postgres statement_timeout.
+
+    Useful when ON DELETE CASCADE on child tables makes a single bulk DELETE exceed
+    the per-statement timeout (Supabase default ~8s).
+    Returns total rows deleted.
+    """
+    total = 0
+    while True:
+        page = sb.table(table).select('id').limit(batch_size).execute()
+        ids = [r['id'] for r in (page.data or []) if r.get('id')]
+        if not ids:
+            break
+        sb.table(table).delete().in_('id', ids).execute()
+        total += len(ids)
+        if len(ids) < batch_size:
+            break
+    return total
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Id Resolver
 # ─────────────────────────────────────────────────────────────────────
@@ -1235,11 +1255,9 @@ def setup_visa_cases_migration_router(verify_staff_token):
         deleted_before = 0
         if cleanBefore and not dryRun:
             try:
-                # PostgREST requiere un filtro en delete → usamos un UUID imposible
-                # para "todo". CASCADE limpia stages/deliverables/documents/notes/
-                # payments/audit_logs en una sola pasada.
-                res = sb.table('visa_cases').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-                deleted_before = len(res.data or [])
+                # Batched para evitar statement_timeout (CASCADE sobre stages/deliverables/
+                # documents/notes/payments/audit_logs puede tomar segundos por caso).
+                deleted_before = _truncate_table_batched(sb, 'visa_cases', batch_size=25)
                 logger.info("visa_cases cleanBefore: deleted %d rows (+ cascaded children)", deleted_before)
             except Exception as e:
                 logger.exception("visa_cases cleanBefore delete failed: %s", e)
@@ -1306,9 +1324,8 @@ def setup_visa_cases_migration_router(verify_staff_token):
         deleted_before = 0
         if cleanBefore and not dryRun:
             try:
-                # PostgREST requiere un filtro en delete → usamos un UUID imposible para "todo"
-                res = sb.table('classic_cases').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-                deleted_before = len(res.data or [])
+                deleted_before = _truncate_table_batched(sb, 'classic_cases', batch_size=50)
+                logger.info("classic_cases cleanBefore: deleted %d rows", deleted_before)
             except Exception as e:
                 logger.exception("classic_cases cleanBefore delete failed: %s", e)
                 raise HTTPException(status_code=500, detail=f"cleanBefore falló: {e}")
@@ -1392,8 +1409,8 @@ def setup_visa_cases_migration_router(verify_staff_token):
         deleted_before = 0
         if cleanBefore and not dryRun:
             try:
-                res = sb.table('leads').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
-                deleted_before = len(res.data or [])
+                deleted_before = _truncate_table_batched(sb, 'leads', batch_size=200)
+                logger.info("leads cleanBefore: deleted %d rows", deleted_before)
             except Exception as e:
                 logger.exception("leads cleanBefore delete failed: %s", e)
                 raise HTTPException(status_code=500, detail=f"cleanBefore falló: {e}")

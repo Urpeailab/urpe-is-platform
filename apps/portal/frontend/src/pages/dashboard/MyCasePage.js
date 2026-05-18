@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { 
-  CheckCircle, 
-  Lock, 
-  Clock, 
+import {
+  CheckCircle,
+  Lock,
+  Clock,
   ChevronRight,
   AlertCircle,
   RefreshCw,
@@ -20,7 +20,10 @@ import {
   Send,
   Star,
   Sparkles,
-  Plane
+  Plane,
+  X,
+  Calendar,
+  Loader2
 } from 'lucide-react';
 import { USCISStatusCard } from '../../components/uscis/USCISStatusCard';
 
@@ -50,6 +53,14 @@ export const MyCasePage = () => {
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [refreshing, setRefreshing] = useState(false);
   const [uscisCase, setUscisCase] = useState(null);
+
+  // Appointment booking modal state
+  const [showApptModal, setShowApptModal] = useState(false);
+  const [apptDate, setApptDate] = useState('');
+  const [apptTime, setApptTime] = useState('');
+  const [apptRole, setApptRole] = useState('coordinator');
+  const [apptReason, setApptReason] = useState('');
+  const [apptSubmitting, setApptSubmitting] = useState(false);
 
   useEffect(() => {
     fetchMyCaseData();
@@ -145,6 +156,84 @@ export const MyCasePage = () => {
   // Get stage icon config
   const getStageIcon = (stageNumber) => {
     return STAGE_ICONS[stageNumber] || STAGE_ICONS[1];
+  };
+
+  // ===== Appointment booking helpers =====
+  // Business hours: 09:00 - 17:00 Georgia time (America/New_York). Slots every 30min.
+  // Minimum 4h lead time. Mon-Fri only.
+  const GEORGIA_TZ = 'America/New_York';
+  const todayISOInGeorgia = () => {
+    // YYYY-MM-DD in Atlanta to set <input type="date" min>
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: GEORGIA_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    return parts; // en-CA gives YYYY-MM-DD
+  };
+  const buildTimeSlots = (dateStr) => {
+    // Returns ["09:00","09:30",...,"16:30"] filtered by min 4h from now (Georgia time)
+    const slots = [];
+    for (let h = 9; h < 17; h++) {
+      for (const m of ['00', '30']) slots.push(`${String(h).padStart(2, '0')}:${m}`);
+    }
+    if (!dateStr) return slots;
+    const minTs = Date.now() + 4 * 60 * 60 * 1000;
+    return slots.filter(slot => {
+      // Build a Date as if dateStr+slot is Georgia local time
+      // Easiest: construct with toLocaleString round-trip
+      const naive = new Date(`${dateStr}T${slot}:00`);
+      // Compute Georgia offset for that wall-clock moment and shift
+      const georgiaParts = new Intl.DateTimeFormat('en-US', {
+        timeZone: GEORGIA_TZ, hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      }).formatToParts(naive).reduce((acc, p) => (p.type !== 'literal' ? { ...acc, [p.type]: p.value } : acc), {});
+      const asUtc = Date.UTC(+georgiaParts.year, +georgiaParts.month - 1, +georgiaParts.day, +georgiaParts.hour, +georgiaParts.minute, +georgiaParts.second);
+      const offsetMs = naive.getTime() - asUtc;
+      const ts = naive.getTime() + offsetMs; // wall-clock at Georgia → UTC ms
+      return ts >= minTs;
+    });
+  };
+  const isWeekend = (dateStr) => {
+    if (!dateStr) return false;
+    const d = new Date(`${dateStr}T12:00:00`);
+    const dow = d.getDay();
+    return dow === 0 || dow === 6;
+  };
+
+  const submitAppointment = async () => {
+    if (!visaCase?.id && !visaCase?.caseId) {
+      toast.error('No se encontró el caso');
+      return;
+    }
+    if (!apptDate || !apptTime) {
+      toast.error('Selecciona fecha y hora');
+      return;
+    }
+    if (isWeekend(apptDate)) {
+      toast.error('Solo se pueden agendar citas de lunes a viernes');
+      return;
+    }
+    if (!apptReason || apptReason.trim().length < 5) {
+      toast.error('El motivo debe tener al menos 5 caracteres');
+      return;
+    }
+    setApptSubmitting(true);
+    try {
+      const userDataStr = localStorage.getItem('urpe_user');
+      const userData = userDataStr ? JSON.parse(userDataStr) : null;
+      const token = userData?.token;
+      await axios.post(`${BACKEND_URL}/api/appointments/create`, {
+        caseId: visaCase.id || visaCase.caseId,
+        proposedDate: apptDate,
+        proposedTime: apptTime,
+        reason: apptReason.trim(),
+        withRole: apptRole,
+      }, { headers: { Authorization: `Bearer ${token}` } });
+      toast.success('Cita solicitada. Te notificaremos cuando se confirme.');
+      setShowApptModal(false);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Error al solicitar la cita');
+    } finally {
+      setApptSubmitting(false);
+    }
   };
 
   return (
@@ -373,7 +462,15 @@ export const MyCasePage = () => {
                 <p className="text-[#64748B] text-sm">Tu asesor está disponible para ayudarte</p>
               </div>
               <button
-                onClick={() => navigate('/dashboard/messages')}
+                onClick={() => {
+                  // Default to whichever role the case actually has
+                  const defaultRole = visaCase?.coordinatorId ? 'coordinator' : (visaCase?.salesRepId || visaCase?.advisorId ? 'salesRep' : 'coordinator');
+                  setApptRole(defaultRole);
+                  setApptDate('');
+                  setApptTime('');
+                  setApptReason('');
+                  setShowApptModal(true);
+                }}
                 className="bg-[#C9A96A] hover:bg-[#B8956A] text-[#0F172A] text-sm font-semibold px-5 py-2.5 rounded-xl transition-colors"
                 data-testid="contact-advisor-btn"
               >
@@ -383,6 +480,145 @@ export const MyCasePage = () => {
           </div>
         </div>
       </div>
+
+      {/* ========== APPOINTMENT MODAL ========== */}
+      {showApptModal && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={(e) => { if (e.target === e.currentTarget && !apptSubmitting) setShowApptModal(false); }}
+        >
+          <div className="bg-[#1E293B] rounded-2xl border border-[#334155] max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-[#F8FAFC] flex items-center gap-2">
+                  <Calendar className="h-5 w-5 text-[#C9A96A]" /> Agendar cita
+                </h3>
+                <p className="text-xs text-[#94A3B8] mt-1">Lunes a viernes, 9:00 - 17:00 (hora Georgia, EE.UU.). Mínimo 4h de anticipación.</p>
+              </div>
+              <button
+                onClick={() => !apptSubmitting && setShowApptModal(false)}
+                className="text-[#64748B] hover:text-[#F8FAFC] p-1"
+                disabled={apptSubmitting}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Role selector */}
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8] mb-2 uppercase tracking-wider">¿Con quién quieres reunirte?</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={!visaCase?.coordinatorId || apptSubmitting}
+                    onClick={() => setApptRole('coordinator')}
+                    className={`p-3 rounded-xl border text-left transition-colors ${
+                      apptRole === 'coordinator' ? 'border-[#C9A96A] bg-[#C9A96A]/10' : 'border-[#334155] bg-[#0F172A] hover:border-[#475569]'
+                    } disabled:opacity-40 disabled:cursor-not-allowed`}
+                  >
+                    <p className="text-xs text-[#94A3B8]">Coordinador</p>
+                    <p className="text-sm font-medium text-[#F8FAFC] truncate">{visaCase?.coordinatorName || 'No asignado'}</p>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!(visaCase?.salesRepId || visaCase?.advisorId) || apptSubmitting}
+                    onClick={() => setApptRole('salesRep')}
+                    className={`p-3 rounded-xl border text-left transition-colors ${
+                      apptRole === 'salesRep' ? 'border-[#C9A96A] bg-[#C9A96A]/10' : 'border-[#334155] bg-[#0F172A] hover:border-[#475569]'
+                    } disabled:opacity-40 disabled:cursor-not-allowed`}
+                  >
+                    <p className="text-xs text-[#94A3B8]">Vendedor</p>
+                    <p className="text-sm font-medium text-[#F8FAFC] truncate">{visaCase?.salesRepName || visaCase?.advisorName || 'No asignado'}</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8] mb-2 uppercase tracking-wider">Fecha</label>
+                <input
+                  type="date"
+                  value={apptDate}
+                  min={todayISOInGeorgia()}
+                  onChange={(e) => { setApptDate(e.target.value); setApptTime(''); }}
+                  disabled={apptSubmitting}
+                  className="w-full bg-[#0F172A] border border-[#334155] text-[#F8FAFC] rounded-lg px-3 py-2.5 text-sm focus:border-[#C9A96A] focus:outline-none"
+                />
+                {apptDate && isWeekend(apptDate) && (
+                  <p className="text-xs text-red-400 mt-1">Las citas solo están disponibles lunes a viernes.</p>
+                )}
+              </div>
+
+              {/* Time slots */}
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8] mb-2 uppercase tracking-wider">Hora (Georgia)</label>
+                {!apptDate ? (
+                  <p className="text-xs text-[#64748B] py-2">Selecciona una fecha primero.</p>
+                ) : isWeekend(apptDate) ? (
+                  <p className="text-xs text-[#64748B] py-2">Elige un día entre lunes y viernes.</p>
+                ) : (
+                  (() => {
+                    const slots = buildTimeSlots(apptDate);
+                    if (slots.length === 0) {
+                      return <p className="text-xs text-[#64748B] py-2">No hay horarios disponibles ese día (mín. 4h de anticipación).</p>;
+                    }
+                    return (
+                      <div className="grid grid-cols-4 gap-2 max-h-44 overflow-y-auto">
+                        {slots.map(slot => (
+                          <button
+                            key={slot}
+                            type="button"
+                            disabled={apptSubmitting}
+                            onClick={() => setApptTime(slot)}
+                            className={`py-2 rounded-lg text-sm font-medium transition-colors ${
+                              apptTime === slot ? 'bg-[#C9A96A] text-[#0F172A]' : 'bg-[#0F172A] text-[#E2E8F0] border border-[#334155] hover:border-[#C9A96A]'
+                            }`}
+                          >
+                            {slot}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()
+                )}
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="block text-xs font-medium text-[#94A3B8] mb-2 uppercase tracking-wider">Motivo</label>
+                <textarea
+                  value={apptReason}
+                  onChange={(e) => setApptReason(e.target.value)}
+                  placeholder="¿De qué quieres hablar?"
+                  rows={3}
+                  maxLength={500}
+                  disabled={apptSubmitting}
+                  className="w-full bg-[#0F172A] border border-[#334155] text-[#F8FAFC] rounded-lg px-3 py-2 text-sm focus:border-[#C9A96A] focus:outline-none resize-none"
+                />
+                <p className="text-[10px] text-[#64748B] mt-1">{apptReason.length}/500 · mínimo 5 caracteres</p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-6">
+              <button
+                onClick={() => !apptSubmitting && setShowApptModal(false)}
+                disabled={apptSubmitting}
+                className="flex-1 py-2.5 rounded-lg border border-[#334155] text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#334155]/50 transition-colors text-sm font-medium"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={submitAppointment}
+                disabled={apptSubmitting || !apptDate || !apptTime || apptReason.trim().length < 5}
+                className="flex-1 py-2.5 rounded-lg bg-[#C9A96A] hover:bg-[#B8956A] disabled:opacity-50 disabled:cursor-not-allowed text-[#0F172A] text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+              >
+                {apptSubmitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Enviando...</> : 'Solicitar cita'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

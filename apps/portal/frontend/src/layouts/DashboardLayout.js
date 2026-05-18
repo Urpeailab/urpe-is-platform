@@ -30,7 +30,6 @@ import {
   Lock,
   Bell,
   BookOpen,
-  HelpCircle,
   Settings,
   LogOut,
   User,
@@ -137,13 +136,6 @@ export const DashboardLayout = ({ children }) => {
           icon: Video,
           label: t('webinars.title'),
           path: '/dashboard/webinars',
-          unlocked: true,
-        },
-        {
-          id: 'success-stories',
-          icon: Award,
-          label: t('stories.title'),
-          path: '/dashboard/success-stories',
           unlocked: true,
         },
       ]
@@ -446,14 +438,14 @@ export const DashboardLayout = ({ children }) => {
             </div>
           )}
 
-          {/* Help Link */}
+          {/* Terms Link */}
           <div className="mt-6 pt-6 border-t border-gold-dark/20">
             <button
-              onClick={() => navigate('/dashboard/help')}
+              onClick={() => navigate('/terms')}
               className="w-full flex items-center space-x-3 px-4 py-3 text-slate hover:text-gold-primary transition-colors"
             >
-              <HelpCircle className="h-5 w-5" />
-              <span className="font-medium">{t('dashboard.nav.help')}</span>
+              <FileText className="h-5 w-5" />
+              <span className="font-medium">Términos y Condiciones</span>
             </button>
           </div>
         </div>
