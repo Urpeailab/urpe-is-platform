@@ -1213,13 +1213,37 @@ def setup_visa_cases_migration_router(verify_staff_token):
     async def visa_cases_import(
         payload: VisaCaseImportPayload,
         dryRun: bool = Query(False),
+        cleanBefore: bool = Query(False, description="Si true, elimina TODAS las filas de visa_cases (y sus hijos por CASCADE) antes de importar."),
         staff_payload: dict = Depends(verify_staff_token),
     ):
+        """
+        Importa casos de visa.
+
+        Query params:
+        - dryRun=true: simula sin escribir
+        - cleanBefore=true: borra TODOS los visa_cases existentes antes de importar.
+          Los hijos (visa_stages, visa_deliverables, visa_documents, case_notes,
+          payments, case_audit_logs) se borran por FK CASCADE.
+          NO toca clients ni magic_links — esos sobreviven al wipe.
+        """
         if staff_payload.get('role') not in ('super_admin', 'admin'):
             raise HTTPException(status_code=403, detail="Only admin/super_admin can run migrations")
 
         sb = get_supabase()
         resolver = IdResolver(sb)
+
+        deleted_before = 0
+        if cleanBefore and not dryRun:
+            try:
+                # PostgREST requiere un filtro en delete → usamos un UUID imposible
+                # para "todo". CASCADE limpia stages/deliverables/documents/notes/
+                # payments/audit_logs en una sola pasada.
+                res = sb.table('visa_cases').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+                deleted_before = len(res.data or [])
+                logger.info("visa_cases cleanBefore: deleted %d rows (+ cascaded children)", deleted_before)
+            except Exception as e:
+                logger.exception("visa_cases cleanBefore delete failed: %s", e)
+                raise HTTPException(status_code=500, detail=f"cleanBefore falló: {e}")
 
         results = []
         totals = {
@@ -1242,6 +1266,8 @@ def setup_visa_cases_migration_router(verify_staff_token):
 
         return {
             'dryRun': dryRun,
+            'cleanBefore': cleanBefore,
+            'deletedBefore': deleted_before,
             'processed': len(payload.cases),
             'success': len(payload.cases) - len(errors),
             'errors': errors,

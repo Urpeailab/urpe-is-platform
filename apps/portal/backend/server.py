@@ -10789,9 +10789,17 @@ async def update_stage_full(
                 # If marking as not paid, reset paidAmount
                 update_data["paidAmount"] = 0
         
-        # Handle isUnlocked field
+        # Handle isUnlocked field — `visa_stages` doesn't have an is_unlocked
+        # column; the lock state is encoded in `status` ('locked' / 'unlocked').
+        # We also stamp `unlocked_at` (migration 017) when transitioning to
+        # unlocked so the audit trail has a timestamp.
         if request.isUnlocked is not None:
-            update_data["isUnlocked"] = request.isUnlocked
+            # Only override status from isUnlocked when the caller didn't pass
+            # an explicit status (e.g. unmarking a stage to 'in_progress').
+            if request.status is None or request.status == "":
+                update_data["status"] = "unlocked" if request.isUnlocked else "locked"
+            if request.isUnlocked:
+                update_data["unlockedAt"] = datetime.now(timezone.utc).isoformat()
         
         # Update the stage
         result = update("visa_stages", filters={"case_id": case_id, "stage_number": stage_number}, data=update_data)

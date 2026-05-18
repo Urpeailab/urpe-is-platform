@@ -1119,8 +1119,11 @@ export const StageDetailPage = () => {
                         </div>
                       )}
                       
-                      {/* Regular files list - show files always, but download only if unlocked */}
-                      {delFiles.length > 0 && !hasSpecialDownload && !isLibro && !isBP && (
+                      {/* Regular files list — show filenames always (with Lock icon
+                          when stage is blocked). BP and Libro use their own wizards
+                          when unlocked, but when locked they fall through here so the
+                          client can preview the filenames without downloading. */}
+                      {delFiles.length > 0 && !hasSpecialDownload && (!canDownload || (!isLibro && !isBP)) && (
                         <div className="ml-6 mt-3 space-y-2">
                           {delFiles.map((file, index) => {
                             const fileNote = file.note || file.notes || '';
