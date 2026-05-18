@@ -51,16 +51,22 @@ def _clean(d: dict) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
-def _truncate_table_batched(sb, table: str, batch_size: int = 50) -> int:
+def _truncate_table_batched(sb, table: str, batch_size: int = 50, *, missing_ok: bool = False) -> int:
     """Delete every row of `table` in small batches to stay under Postgres statement_timeout.
 
     Useful when ON DELETE CASCADE on child tables makes a single bulk DELETE exceed
     the per-statement timeout (Supabase default ~8s).
-    Returns total rows deleted.
+    Returns total rows deleted. If `missing_ok=True`, swallows errors when the table
+    doesn't exist (returns whatever was deleted before the error).
     """
     total = 0
     while True:
-        page = sb.table(table).select('id').limit(batch_size).execute()
+        try:
+            page = sb.table(table).select('id').limit(batch_size).execute()
+        except Exception:
+            if missing_ok:
+                return total
+            raise
         ids = [r['id'] for r in (page.data or []) if r.get('id')]
         if not ids:
             break
@@ -69,6 +75,39 @@ def _truncate_table_batched(sb, table: str, batch_size: int = 50) -> int:
         if len(ids) < batch_size:
             break
     return total
+
+
+# Tablas hijas de visa_cases con ON DELETE CASCADE. Se vacían PRIMERO en lotes
+# propios para que el DELETE final del padre no tenga nada que cascadear y
+# encaje en el statement_timeout de Supabase (~8s).
+_VISA_CASE_CHILDREN = [
+    # tablas grandes / muy ramificadas primero
+    ('visa_deliverables', 500),
+    ('visa_documents', 500),
+    ('case_audit_logs', 500),
+    ('case_notes', 500),
+    ('payments', 500),
+    ('visa_stages', 500),
+    ('visa_meetings', 500),
+    ('appointments', 500),
+    ('uscis_submissions', 500),
+    ('book_preparations', 500),
+    ('book_jobs', 500),
+    ('niw_petitions', 500),
+]
+
+
+def _truncate_visa_cases_deep(sb) -> dict:
+    """Wipe visa_cases + all CASCADE children, batching every step to avoid statement_timeout."""
+    stats = {}
+    for table, batch in _VISA_CASE_CHILDREN:
+        try:
+            stats[table] = _truncate_table_batched(sb, table, batch_size=batch, missing_ok=True)
+        except Exception as e:
+            logger.warning("could not truncate %s: %s", table, e)
+            stats[table] = -1
+    stats['visa_cases'] = _truncate_table_batched(sb, 'visa_cases', batch_size=200)
+    return stats
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1253,12 +1292,12 @@ def setup_visa_cases_migration_router(verify_staff_token):
         resolver = IdResolver(sb)
 
         deleted_before = 0
+        clean_stats = {}
         if cleanBefore and not dryRun:
             try:
-                # Batched para evitar statement_timeout (CASCADE sobre stages/deliverables/
-                # documents/notes/payments/audit_logs puede tomar segundos por caso).
-                deleted_before = _truncate_table_batched(sb, 'visa_cases', batch_size=25)
-                logger.info("visa_cases cleanBefore: deleted %d rows (+ cascaded children)", deleted_before)
+                clean_stats = _truncate_visa_cases_deep(sb)
+                deleted_before = clean_stats.get('visa_cases', 0)
+                logger.info("visa_cases cleanBefore stats: %s", clean_stats)
             except Exception as e:
                 logger.exception("visa_cases cleanBefore delete failed: %s", e)
                 raise HTTPException(status_code=500, detail=f"cleanBefore falló: {e}")
@@ -1286,6 +1325,7 @@ def setup_visa_cases_migration_router(verify_staff_token):
             'dryRun': dryRun,
             'cleanBefore': cleanBefore,
             'deletedBefore': deleted_before,
+            'cleanStats': clean_stats,
             'processed': len(payload.cases),
             'success': len(payload.cases) - len(errors),
             'errors': errors,
