@@ -38,7 +38,7 @@ import uuid
 import os
 
 class BookGenerationE2ETester:
-    def __init__(self, base_url="https://niwtoolsuite.preview.emergentagent.com/api"):
+    def __init__(self, base_url="https://domain-relink-test.preview.emergentagent.com/api"):
         self.base_url = base_url
         self.tests_run = 0
         self.tests_passed = 0

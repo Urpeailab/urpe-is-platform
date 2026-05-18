@@ -19,7 +19,7 @@ import time
 from datetime import datetime
 
 class BookGenerationDebugTester:
-    def __init__(self, base_url="https://niwtoolsuite.preview.emergentagent.com/api"):
+    def __init__(self, base_url="https://domain-relink-test.preview.emergentagent.com/api"):
         self.base_url = base_url
         self.access_token = None
         self.test_results = []

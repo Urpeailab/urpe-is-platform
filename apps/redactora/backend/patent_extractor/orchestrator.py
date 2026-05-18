@@ -92,6 +92,7 @@ async def process_patent_document(file_content: bytes, filename: str) -> Dict[st
             'confidence': final_result['confidence'],
             'patent_info': display_data,
             'formatted_for_niw': formatted_for_niw,
+            'raw_text': text,
             'extracted_text_length': len(text)
         }
         

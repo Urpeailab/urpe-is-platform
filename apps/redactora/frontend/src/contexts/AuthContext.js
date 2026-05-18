@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
 
@@ -12,31 +12,116 @@ export const useAuth = () => {
   return context;
 };
 
+// Safe localStorage (fails silently in iframe with Tracking Prevention)
+const safeGetItem = (key) => { try { return localStorage.getItem(key); } catch { return null; } };
+const safeSetItem = (key, val) => { try { localStorage.setItem(key, val); } catch {} };
+const safeRemoveItem = (key) => { try { localStorage.removeItem(key); } catch {} };
+
+// Extract ?token= from URL (panel iframe token) — checks current URL + original URL
+const getIframeToken = () => {
+  try {
+    // Check current URL
+    let t = new URLSearchParams(window.location.search).get('token');
+    if (t) return t;
+    // Check if we were redirected and the original URL had the token (stored in sessionStorage or memory)
+    t = window.__IFRAME_TOKEN__;
+    if (t) return t;
+    return null;
+  } catch { return null; }
+};
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [token, setToken] = useState(safeGetItem('token'));
+  const ssoInProgress = useRef(false);
 
-  const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-  const API = `${BACKEND_URL}/api`;
+  const API = `${window.location.origin}/api`;
 
-  // Setup axios interceptor
+  // Save iframe token globally so it persists across client-side navigations
+  useEffect(() => {
+    const urlToken = new URLSearchParams(window.location.search).get('token');
+    if (urlToken) {
+      window.__IFRAME_TOKEN__ = urlToken;
+    }
+  }, []);
+
+  // Main auth effect
   useEffect(() => {
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      fetchCurrentUser();
+      // Only fetch user if we don't already have one
+      if (!user) {
+        fetchCurrentUser();
+      } else {
+        setLoading(false);
+      }
     } else {
-      setLoading(false);
+      // No token — try auto-SSO from iframe URL first
+      const iframeToken = getIframeToken();
+      if (iframeToken && !ssoInProgress.current) {
+        ssoInProgress.current = true;
+        autoSSOFromIframe(iframeToken);
+      } else if (!ssoInProgress.current) {
+        // No iframe token either — create a guest session so the app loads
+        ssoInProgress.current = true;
+        autoGuestSession();
+      }
     }
   }, [token]);
+
+  const autoGuestSession = async () => {
+    try {
+      const response = await axios.post(`${API}/auth/guest`);
+      const { access_token, user: userData } = response.data;
+      safeSetItem('token', access_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      setUser(userData);
+      setToken(access_token);
+    } catch (error) {
+      console.error('Guest session failed:', error);
+    } finally {
+      ssoInProgress.current = false;
+      setLoading(false);
+    }
+  };
+
+  const autoSSOFromIframe = async (externalToken) => {
+    try {
+      const response = await axios.post(`${API}/auth/sso`, { external_token: externalToken });
+      const { access_token, user: userData } = response.data;
+
+      safeSetItem('token', access_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      setUser(userData);
+      setToken(access_token);
+      setLoading(false);
+    } catch (error) {
+      console.error('Auto-SSO failed:', error);
+      // Reset so SSOHandler can try
+      ssoInProgress.current = false;
+      setLoading(false);
+    }
+  };
 
   const fetchCurrentUser = async () => {
     try {
       const response = await axios.get(`${API}/auth/me`);
       setUser(response.data);
     } catch (error) {
-      console.error('Error fetching user:', error);
-      logout();
+      // Token invalid — try re-SSO from iframe token
+      const iframeToken = getIframeToken();
+      if (iframeToken && !ssoInProgress.current) {
+        ssoInProgress.current = true;
+        safeRemoveItem('token');
+        delete axios.defaults.headers.common['Authorization'];
+        await autoSSOFromIframe(iframeToken);
+        return;
+      }
+      safeRemoveItem('token');
+      setToken(null);
+      setUser(null);
+      delete axios.defaults.headers.common['Authorization'];
     } finally {
       setLoading(false);
     }
@@ -45,19 +130,16 @@ export const AuthProvider = ({ children }) => {
   const register = async (userData) => {
     try {
       const response = await axios.post(`${API}/auth/register`, userData);
-      const { access_token, user } = response.data;
-      
-      localStorage.setItem('token', access_token);
+      const { access_token, user: u } = response.data;
+      safeSetItem('token', access_token);
       setToken(access_token);
-      setUser(user);
+      setUser(u);
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-      
       toast.success('¡Registro exitoso!');
       return true;
     } catch (error) {
-      console.error('Registration error:', error);
       const message = error.response?.data?.detail || 'Error al registrarse';
-      toast.error(message);
+      toast.error(message.includes('already') ? 'Este email ya está registrado.' : message);
       return false;
     }
   };
@@ -65,38 +147,49 @@ export const AuthProvider = ({ children }) => {
   const login = async (credentials) => {
     try {
       const response = await axios.post(`${API}/auth/login`, credentials);
-      const { access_token, user } = response.data;
-      
-      localStorage.setItem('token', access_token);
+      const { access_token, user: u } = response.data;
+      safeSetItem('token', access_token);
       setToken(access_token);
-      setUser(user);
+      setUser(u);
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-      
       toast.success('¡Bienvenido!');
       return true;
     } catch (error) {
-      console.error('Login error:', error);
-      const message = error.response?.data?.detail || 'Error al iniciar sesión';
-      toast.error(message);
+      toast.error(error.response?.data?.detail || 'Error al iniciar sesión');
       return false;
     }
   };
 
+  const ssoLogin = async (externalToken) => {
+    try {
+      ssoInProgress.current = true;
+      const response = await axios.post(`${API}/auth/sso`, { external_token: externalToken });
+      const { access_token, user: u } = response.data;
+      safeSetItem('token', access_token);
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      setUser(u);
+      setToken(access_token);
+      setLoading(false);
+      return { success: true, user: u };
+    } catch (error) {
+      ssoInProgress.current = false;
+      return { success: false, error: error.response?.data?.detail || 'Error de autenticación SSO' };
+    }
+  };
+
   const logout = () => {
-    localStorage.removeItem('token');
+    safeRemoveItem('token');
     setToken(null);
     setUser(null);
     delete axios.defaults.headers.common['Authorization'];
+    window.__IFRAME_TOKEN__ = null;
     toast.success('Sesión cerrada');
   };
 
   const value = {
-    user,
-    loading,
+    user, loading,
     isAuthenticated: !!user,
-    register,
-    login,
-    logout
+    register, login, ssoLogin, logout
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
