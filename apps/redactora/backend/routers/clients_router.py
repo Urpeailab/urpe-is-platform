@@ -10,6 +10,7 @@ import uuid
 import math
 import asyncio
 import logging
+from collections import Counter
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,40 @@ async def get_clients(
             ).to_list(length=len(operator_ids))
             operators = {u["id"]: u for u in users}
         
-        # Add info for each client
+        # Document counts: fetch all (client_id, ...) rows per collection in a single
+        # request and group in memory. One HTTP round-trip per collection instead of
+        # one per (client, collection) pair.
+        client_ids = [c["id"] for c in clients]
+
+        async def _counts(collection_name: str, extra_filter: dict | None = None):
+            if not client_ids:
+                return Counter()
+            query = {"client_id": {"$in": client_ids}}
+            if extra_filter:
+                query.update(extra_filter)
+            try:
+                rows = await db[collection_name].find(
+                    query, {"_id": 0, "client_id": 1}
+                ).to_list(length=None)
+            except Exception as e:
+                logger.warning(f"count fetch failed for {collection_name}: {e}")
+                return Counter()
+            return Counter(r["client_id"] for r in rows if r.get("client_id"))
+
+        completed = {"status": "completed"}
+        (niw_counts, bp_counts, patent_prog_counts, patent_counts,
+         book_prog_counts, book_counts, case_study_counts, letter_counts) = await asyncio.gather(
+            _counts("niw_in_progress", completed),
+            _counts("business_plans", completed),
+            _counts("patents_in_progress", completed),
+            _counts("patents"),
+            _counts("books_in_progress", completed),
+            _counts("books"),
+            _counts("case_studies", completed),
+            _counts("self_petition_letters", completed),
+        )
+
+        # Add info for each client (O(1) lookups now)
         for client in clients:
             operator_id = client.get("operator_id")
             if operator_id and operator_id in operators:
@@ -302,34 +336,21 @@ async def get_clients(
                     "name": "Usuario desconocido",
                     "email": ""
                 }
-            
-            # Document counts
-            client_id = client["id"]
-            doc_counts = await asyncio.gather(
-                db.niw_in_progress.count_documents({"client_id": client_id, "status": "completed"}),
-                db.business_plans.count_documents({"client_id": client_id, "status": "completed"}),
-                db.patents_in_progress.count_documents({"client_id": client_id, "status": "completed"}),
-                db.patents.count_documents({"client_id": client_id}),
-                db.books_in_progress.count_documents({"client_id": client_id, "status": "completed"}),
-                db.books.count_documents({"client_id": client_id}),
-                db.case_studies.count_documents({"client_id": client_id, "status": "completed"}),
-                db.self_petition_letters.count_documents({"client_id": client_id, "status": "completed"}),
-                return_exceptions=True
+
+            cid = client["id"]
+            niw_count = niw_counts[cid]
+            bp_count = bp_counts[cid]
+            patent_prog_count = patent_prog_counts[cid]
+            patent_count = patent_counts[cid]
+            book_prog_count = book_prog_counts[cid]
+            book_count = book_counts[cid]
+            case_study_count = case_study_counts[cid]
+            letter_count = letter_counts[cid]
+
+            client["documents_count"] = (
+                niw_count + bp_count + patent_prog_count + patent_count
+                + book_prog_count + book_count + case_study_count + letter_count
             )
-            
-            niw_count = doc_counts[0] if isinstance(doc_counts[0], int) else 0
-            bp_count = doc_counts[1] if isinstance(doc_counts[1], int) else 0
-            patent_prog_count = doc_counts[2] if isinstance(doc_counts[2], int) else 0
-            patent_count = doc_counts[3] if isinstance(doc_counts[3], int) else 0
-            book_prog_count = doc_counts[4] if isinstance(doc_counts[4], int) else 0
-            book_count = doc_counts[5] if isinstance(doc_counts[5], int) else 0
-            case_study_count = doc_counts[6] if isinstance(doc_counts[6], int) else 0
-            letter_count = doc_counts[7] if isinstance(doc_counts[7], int) else 0
-            
-            total_docs = sum([niw_count, bp_count, patent_prog_count, patent_count,
-                            book_prog_count, book_count, case_study_count, letter_count])
-            
-            client["documents_count"] = total_docs
             client["documents_by_type"] = {
                 "niw": niw_count,
                 "business_plans": bp_count,

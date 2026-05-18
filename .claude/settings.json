@@ -45,7 +45,12 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('whitepaper_prompts_eb2_niw.py', encoding='utf-8'\\).read\\(\\)\\); print\\('whitepaper_prompts_eb2_niw.py OK'\\)\")",
       "Bash(python -m pytest tests/test_whitepaper_language_integrity.py tests/test_whitepaper_unresolved_brackets.py tests/test_whitepaper_placeholder_cleanup.py -x --tb=short)",
       "Bash(python -m unittest discover -s tests -p \"test_whitepaper_unresolved_brackets.py\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('apps/redactora/backend/server.py', encoding='utf-8'\\).read\\(\\)\\); print\\('server.py OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('apps/redactora/backend/server.py', encoding='utf-8'\\).read\\(\\)\\); print\\('server.py OK'\\)\")",
+      "Bash(powershell -Command ' *)",
+      "Bash(python database/scripts/check_redactora_tables.py)",
+      "Bash(pip install *)",
+      "Bash(docker volume *)",
+      "Bash(docker rm *)"
     ],
     "additionalDirectories": [
       "C:\\Temp"

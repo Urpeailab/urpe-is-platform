@@ -1,11 +1,4 @@
 services:
-  mongo:
-    image: mongo:7
-    restart: unless-stopped
-    volumes:
-      - mongo_data:/data/db
-    # Not exposed to host — only internal services connect via the docker network.
-
   portal:
     build: ./apps/portal
     ports:
@@ -14,8 +7,6 @@ services:
       - .env
     environment:
       - APP_NAME=portal
-    depends_on:
-      - mongo
     restart: unless-stopped
 
   redactora:
@@ -27,6 +18,3 @@ services:
     environment:
       - APP_NAME=redactora
     restart: unless-stopped
-
-volumes:
-  mongo_data:

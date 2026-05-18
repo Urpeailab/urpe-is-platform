@@ -273,17 +273,15 @@ const Dashboard = () => {
       // Construir query params con paginación
       const createdByParam = (selectedCreator && selectedCreator !== 'all') ? `&created_by=${selectedCreator}` : '';
       
-      const [clientsRes, statsRes, activityRes] = await Promise.all([
+      const [clientsRes, statsRes] = await Promise.all([
         axios.get(`${API}/clients?limit=${clientsPerPage}&page=${currentPage}${createdByParam}`),
-        axios.get(`${API}/dashboard/overview?view_all=${viewAllClients}`),
-        axios.get(`${API}/dashboard/recent-activity?limit=10`)
+        axios.get(`${API}/dashboard/overview?view_all=${viewAllClients}`)
       ]);
-      
+
       setClients(clientsRes.data.clients || []);
       setTotalPages(clientsRes.data.pages || 1);
       setTotalClients(clientsRes.data.total || 0);
       setDashboardStats(statsRes.data);
-      setRecentActivity(activityRes.data.activities || []);
     } catch (error) {
       console.error('Error loading dashboard:', error);
       toast.error('Error al cargar el dashboard');
