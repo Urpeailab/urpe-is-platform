@@ -7,6 +7,7 @@ import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { WelcomeVideoModal } from '../../components/WelcomeVideoModal';
 import { RegisterModal } from '../../components/RegisterModal';
+import { AppointmentRequestModal } from '../../components/AppointmentRequestModal';
 import { getDisplayName } from '../../utils/userUtils';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -37,6 +38,7 @@ export const DashboardHome = () => {
   const [downloadingPDF, setDownloadingPDF] = useState(false);
   const [caseData, setCaseData] = useState(null);
   const [loadingCase, setLoadingCase] = useState(true);
+  const [showApptModal, setShowApptModal] = useState(false);
 
   const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -44,14 +46,12 @@ export const DashboardHome = () => {
   const isVisitor = user?.userState === 'U1';
   const hasReport = user?.report;
 
-  // Fetch case data for clients
+  // Fetch case data — intentamos siempre que haya token; si el usuario no tiene
+  // caso activo la API responde 404 y simplemente dejamos caseData en null.
+  // (Antes el fetch dependía de `isClient`, pero ese flag falla para clientes
+  // migrados donde user.userState != 'U3' y el modal de citas quedaba vacío.)
   useEffect(() => {
     const fetchCaseData = async () => {
-      if (!isClient) {
-        setLoadingCase(false);
-        return;
-      }
-
       try {
         setLoadingCase(true);
         const userDataStr = localStorage.getItem('urpe_user');
@@ -69,14 +69,16 @@ export const DashboardHome = () => {
 
         setCaseData(response.data);
       } catch (error) {
-        console.error('Error fetching case data:', error);
+        if (error.response?.status !== 404) {
+          console.error('Error fetching case data:', error);
+        }
       } finally {
         setLoadingCase(false);
       }
     };
 
     fetchCaseData();
-  }, [isClient, BACKEND_URL]);
+  }, [BACKEND_URL]);
 
   // Fetch probability data
   useEffect(() => {
@@ -258,9 +260,15 @@ export const DashboardHome = () => {
 
   return (
     <>
-      <RegisterModal 
-        isOpen={showRegisterModal} 
-        onClose={() => setShowRegisterModal(false)} 
+      <RegisterModal
+        isOpen={showRegisterModal}
+        onClose={() => setShowRegisterModal(false)}
+      />
+
+      <AppointmentRequestModal
+        isOpen={showApptModal}
+        onClose={() => setShowApptModal(false)}
+        visaCase={caseData?.case}
       />
 
       <div className="min-h-screen bg-[#0F172A] pb-24 sm:pb-8">
@@ -415,7 +423,13 @@ export const DashboardHome = () => {
                 {quickActions.slice(0, 4).map((action) => (
                   <button
                     key={action.id}
-                    onClick={() => navigate(action.path)}
+                    onClick={() => {
+                      if (action.id === 'appointments') {
+                        setShowApptModal(true);
+                      } else {
+                        navigate(action.path);
+                      }
+                    }}
                     className="bg-[#1E293B] border border-[#334155] hover:border-[#C9A96A]/50 rounded-xl p-4 text-left transition-all duration-200 active:scale-[0.98] min-h-[100px] group"
                     data-testid={`action-${action.id}`}
                   >
