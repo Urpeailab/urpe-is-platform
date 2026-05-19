@@ -1763,7 +1763,193 @@ Solo proporciona los 3 titulos numerados, nada mas."""
         case_id = case.get('id') or case.get('_id')
         await db.bp_preparations.delete_one({"caseId": case_id})
         return {"success": True, "message": "Preparacion reiniciada"}
-    
+
+    class _ClientZipItem(BaseModel):
+        type: str  # 'deliverable' | 'document'
+        itemId: str
+        fileId: Optional[str] = None
+
+    class _ClientZipRequest(BaseModel):
+        items: List[_ClientZipItem]
+
+    @client_router.post("/my-case/download-zip")
+    async def client_download_case_files_zip(
+        request: _ClientZipRequest,
+        user_payload: dict = Depends(verify_token),
+    ):
+        """Bundle entregables/documentos del cliente en un ZIP.
+
+        - Verifica ownership: cada item debe pertenecer al case del cliente
+        - Rechaza items en etapas bloqueadas (sólo paid / free / unlocked / completed)
+        - Estructura: Etapa N - Nombre/<entregable o documento>/<archivo>
+        """
+        import re
+        import zipfile
+        from io import BytesIO
+        from pathlib import Path as _Path
+        import httpx
+        from db.supabase_client import select as sb_select
+
+        def _safe_segment(name: str) -> str:
+            if not name:
+                return 'sin_nombre'
+            cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(name)).strip().strip('.')
+            return cleaned or 'sin_nombre'
+
+        def _name_to_text(name_field, fallback='item'):
+            if isinstance(name_field, dict):
+                return name_field.get('es') or name_field.get('en') or fallback
+            return name_field or fallback
+
+        user_id = user_payload.get('id')
+        if not request.items:
+            raise HTTPException(status_code=400, detail="No items selected")
+
+        cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+        case = next((c for c in cases if not c.get('is_master_case')), None)
+        if not case:
+            raise HTTPException(status_code=404, detail="No active visa case found")
+        case_id = case.get('id')
+
+        # Mapa stage_number → unlocked? (paid OR free OR status in {unlocked, completed})
+        stages = sb_select("visa_stages", filters={"case_id": case_id}, columns="stage_number,status,amount,is_paid", limit=200)
+        unlocked_stages: set = set()
+        for s in stages:
+            sn = s.get('stage_number') or s.get('stageNumber')
+            if sn is None:
+                continue
+            status = (s.get('status') or '').lower()
+            is_paid = bool(s.get('is_paid') or s.get('isPaid'))
+            try:
+                amount = float(s.get('amount') or 0)
+            except (TypeError, ValueError):
+                amount = 0
+            if is_paid or amount == 0 or status in ('unlocked', 'completed'):
+                unlocked_stages.add(int(sn))
+
+        async def _read_file_bytes(file_url: str):
+            if not file_url:
+                return None
+            if file_url.startswith('/api/documents/download/'):
+                fname = file_url.rsplit('/', 1)[-1]
+                fpath = _Path("/app/backend/uploads") / fname
+                if fpath.exists():
+                    return fpath.read_bytes()
+                fpath_local = _Path(__file__).parent / "uploads" / fname
+                if fpath_local.exists():
+                    return fpath_local.read_bytes()
+                return None
+            if file_url.startswith('http://') or file_url.startswith('https://'):
+                async with httpx.AsyncClient(timeout=60) as http:
+                    resp = await http.get(file_url)
+                    if resp.status_code == 200:
+                        return resp.content
+                    return None
+            fname = file_url.rsplit('/', 1)[-1]
+            fpath = _Path("/app/backend/uploads") / fname
+            if fpath.exists():
+                return fpath.read_bytes()
+            return None
+
+        deliverables_cache: dict = {}
+        documents_cache: dict = {}
+
+        buf = BytesIO()
+        used_paths: set = set()
+        included = 0
+        rejected_locked = 0
+
+        with zipfile.ZipFile(buf, mode='w', compression=zipfile.ZIP_DEFLATED) as zf:
+            for sel in request.items:
+                if sel.type == 'deliverable':
+                    item = deliverables_cache.get(sel.itemId)
+                    if not item:
+                        item = sb_select("visa_deliverables", filters={"id": sel.itemId}, single=True)
+                        if not item or (item.get('case_id') or item.get('caseId')) != case_id:
+                            continue
+                        deliverables_cache[sel.itemId] = item
+                    parent_label = _safe_segment(_name_to_text(item.get('name') or item.get('deliverable_name') or item.get('deliverableName'), 'Entregable'))
+                    files_arr = item.get('files') or []
+                    if not files_arr and (item.get('file_url') or item.get('fileUrl')):
+                        files_arr = [{
+                            'id': 'legacy',
+                            'fileName': item.get('file_name') or item.get('fileName') or 'archivo',
+                            'fileUrl': item.get('file_url') or item.get('fileUrl'),
+                        }]
+                elif sel.type == 'document':
+                    item = documents_cache.get(sel.itemId)
+                    if not item:
+                        item = sb_select("visa_documents", filters={"id": sel.itemId}, single=True)
+                        if not item or (item.get('case_id') or item.get('caseId')) != case_id:
+                            continue
+                        documents_cache[sel.itemId] = item
+                    parent_label = _safe_segment(_name_to_text(item.get('name') or item.get('document_name') or item.get('documentName'), 'Documento'))
+                    files_arr = item.get('files') or []
+                    if not files_arr and (item.get('file_url') or item.get('fileUrl')):
+                        files_arr = [{
+                            'id': 'legacy',
+                            'fileName': item.get('file_name') or item.get('fileName') or 'archivo',
+                            'fileUrl': item.get('file_url') or item.get('fileUrl'),
+                        }]
+                else:
+                    continue
+
+                # Gate: la etapa de este item debe estar desbloqueada
+                stage_num = item.get('stage_number') or item.get('stageNumber')
+                try:
+                    stage_num_int = int(stage_num) if stage_num is not None else None
+                except (TypeError, ValueError):
+                    stage_num_int = None
+                if stage_num_int is None or stage_num_int not in unlocked_stages:
+                    rejected_locked += 1
+                    continue
+
+                if sel.fileId:
+                    files_arr = [f for f in files_arr if isinstance(f, dict) and f.get('id') == sel.fileId]
+
+                folder = f"Etapa {stage_num_int} - {parent_label}"
+                for f in files_arr:
+                    if not isinstance(f, dict):
+                        continue
+                    file_url = f.get('fileUrl') or f.get('file_url')
+                    file_name = _safe_segment(f.get('fileName') or f.get('file_name') or 'archivo')
+                    payload = await _read_file_bytes(file_url)
+                    if payload is None:
+                        logger.warning(f"client download-zip: skip unreadable {file_url}")
+                        continue
+                    zip_path = f"{folder}/{file_name}"
+                    base_path = zip_path
+                    counter = 1
+                    while zip_path in used_paths:
+                        if '.' in file_name:
+                            stem, ext = file_name.rsplit('.', 1)
+                            zip_path = f"{folder}/{stem}_{counter}.{ext}"
+                        else:
+                            zip_path = f"{base_path}_{counter}"
+                        counter += 1
+                    used_paths.add(zip_path)
+                    zf.writestr(zip_path, payload)
+                    included += 1
+
+        if included == 0:
+            detail = "No se pudo recuperar ningún archivo"
+            if rejected_locked:
+                detail += f" ({rejected_locked} archivo(s) ignorados por estar en etapas bloqueadas)"
+            raise HTTPException(status_code=404, detail=detail)
+
+        buf.seek(0)
+        from fastapi.responses import StreamingResponse
+        client_label = (case.get('client_name') or case.get('clientName') or 'caso').replace(' ', '_')
+        zip_name = f"mis_documentos_{client_label}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.zip"
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{zip_name}"',
+                "Content-Length": str(buf.getbuffer().nbytes),
+            },
+        )
+
     return client_router
 
 

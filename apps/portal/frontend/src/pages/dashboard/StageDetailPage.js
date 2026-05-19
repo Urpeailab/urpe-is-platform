@@ -32,6 +32,16 @@ import { useAuth } from '../../contexts/AuthContext';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
+// Coerce a value to a renderable string. Migrated rows store bilingual fields as
+// `{ es, en }` jsonb — if both are empty, the previous `v?.es || v?.en || v`
+// chain fell through to the raw object and crashed React (error #31).
+const toText = (v) => {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number') return String(v);
+  if (typeof v === 'object') return v.es || v.en || '';
+  return '';
+};
+
 export const StageDetailPage = () => {
   const { stageNumber } = useParams();
   const navigate = useNavigate();
@@ -600,8 +610,8 @@ export const StageDetailPage = () => {
   }
 
   const { isPaid, isCompleted, isCurrent, isLocked, isFree } = getStageStatus();
-  const stageName = stageData.name?.es || stageData.name?.en || `Etapa ${stageData.stageNumber}`;
-  const stageDescription = stageData.description?.es || stageData.description?.en || '';
+  const stageName = toText(stageData.name) || `Etapa ${stageData.stageNumber}`;
+  const stageDescription = toText(stageData.description);
   const isFinalStage = stageData.stageNumber === (caseData?.stages?.length || 12) || stageData.stageNumber === 12;
 
   return (
@@ -814,7 +824,7 @@ export const StageDetailPage = () => {
                 </div>
               ) : (
                 stageDeliverables.map((deliverable) => {
-                  const deliverableName = deliverable.deliverableName || deliverable.name?.es || deliverable.name?.en || 'Entregable';
+                  const deliverableName = toText(deliverable.deliverableName) || toText(deliverable.name) || 'Entregable';
                   
                   // Check deliverable types
                   const isManualDIY = deliverableName.toLowerCase().includes('manual diy') || 
@@ -895,9 +905,9 @@ export const StageDetailPage = () => {
                       </div>
                       
                       {/* Description */}
-                      {deliverable.description && (
+                      {toText(deliverable.description) && (
                         <p className="text-xs text-[#64748B] mt-1 line-clamp-2 ml-6">
-                          {deliverable.description?.es || deliverable.description?.en || deliverable.description}
+                          {toText(deliverable.description)}
                         </p>
                       )}
                       
@@ -1308,7 +1318,7 @@ export const StageDetailPage = () => {
                 </div>
               ) : (
                 stageDocuments.map((document) => {
-                  const docName = document.documentName || document.name?.es || document.name?.en || 'Documento';
+                  const docName = toText(document.documentName) || toText(document.name) || 'Documento';
                   const isRequired = document.required || document.isRequired;
                   
                   // Auto-attach the client's CV ONLY for their own "Hoja de vida"
@@ -1480,7 +1490,7 @@ export const StageDetailPage = () => {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-[#1E293B] rounded-xl border border-[#334155] max-w-md w-full p-6">
             <h3 className="text-lg font-semibold text-[#F8FAFC] mb-4">
-              Subir {selectedDocument.documentName || selectedDocument.name?.es || 'Documento'}
+              Subir {toText(selectedDocument.documentName) || toText(selectedDocument.name) || 'Documento'}
             </h3>
             <div 
               className={`

@@ -3153,8 +3153,11 @@ export const VisaCaseDetailRedesign = () => {
                                 );
                                 const isAIReport = isEligibilityReport || isRutaPersonalizada;
 
-                                // Check if this is a "Hoja de vida" deliverable
-                                const isHojaDeVida = (
+                                // Check if this is the CLIENT's own "Hoja de vida" deliverable.
+                                // Stages 8/9 also have "Hoja de vida de quien va a firmar..." (third-
+                                // party CV) — those must NOT auto-attach the client's CV.
+                                const _refersToOther = /\b(de\s+quien|del\s+firmante|del\s+experto|del\s+recomendador|del\s+autor|de\s+experto|tercero)\b/.test(delName);
+                                const isHojaDeVida = !_refersToOther && (
                                   delName.includes('hoja de vida') ||
                                   delName.includes('curriculum') ||
                                   delName.includes('cv') ||
@@ -3348,7 +3351,7 @@ export const VisaCaseDetailRedesign = () => {
                                             className="bg-orange-600 hover:bg-orange-700 text-white"
                                             asChild
                                           >
-                                            <a href={latestCv.url} target="_blank" rel="noopener noreferrer">
+                                            <a href={latestCv.file_url || latestCv.url} target="_blank" rel="noopener noreferrer">
                                               <Download className="h-4 w-4 mr-1" />
                                               Descargar CV
                                             </a>
@@ -3876,7 +3879,8 @@ export const VisaCaseDetailRedesign = () => {
                             <div className="space-y-3">
                               {stageDocuments.map((doc) => {
                                 const docName = getText(doc.name || doc.documentType || doc.documentName, 'Documento').toLowerCase();
-                                const isDocHojaDeVida = docName.includes('hoja de vida') || docName.includes('curriculum') || docName.includes('resume');
+                                const _docRefersToOther = /\b(de\s+quien|del\s+firmante|del\s+experto|del\s+recomendador|del\s+autor|de\s+experto|tercero)\b/.test(docName);
+                                const isDocHojaDeVida = !_docRefersToOther && (docName.includes('hoja de vida') || docName.includes('curriculum') || docName.includes('resume'));
                                 const cvForDoc = isDocHojaDeVida && userCvs.length > 0 ? userCvs[0] : null;
                                 
                                 // Override status if Hoja de vida has CV
@@ -3889,7 +3893,7 @@ export const VisaCaseDetailRedesign = () => {
                                   : doc.fileUrl 
                                     ? [{ id: 'legacy', fileName: doc.fileName || 'Archivo', fileUrl: doc.fileUrl }]
                                     : isDocHojaDeVida && cvForDoc
-                                      ? [{ id: 'cv-auto', fileName: cvForDoc.fileName || 'Hoja de vida', fileUrl: cvForDoc.url }]
+                                      ? [{ id: 'cv-auto', fileName: cvForDoc.file_name || cvForDoc.fileName || 'Hoja de vida', fileUrl: cvForDoc.file_url || cvForDoc.url }]
                                       : [];
                                 
                                 return (
@@ -4142,7 +4146,9 @@ export const VisaCaseDetailRedesign = () => {
                               ? [{ id: 'legacy', fileName: item.fileName || 'Archivo', fileUrl: item.fileUrl }]
                               : [];
                         } else {
-                          const isHV = dName.toLowerCase().includes('hoja de vida') || dName.toLowerCase().includes('curriculum');
+                          const _dNameLc = dName.toLowerCase();
+                          const _dRefersOther = /\b(de\s+quien|del\s+firmante|del\s+experto|del\s+recomendador|del\s+autor|de\s+experto|tercero)\b/.test(_dNameLc);
+                          const isHV = !_dRefersOther && (_dNameLc.includes('hoja de vida') || _dNameLc.includes('curriculum'));
                           const cvAuto = isHV && userCvs.length > 0 ? userCvs[0] : null;
                           const effStatus = (isHV && cvAuto && item.status === 'pending') ? 'uploaded' : item.status;
                           files = item.files?.length > 0
@@ -4150,7 +4156,7 @@ export const VisaCaseDetailRedesign = () => {
                             : item.fileUrl
                               ? [{ id: 'legacy', fileName: item.fileName || 'Archivo', fileUrl: item.fileUrl }]
                               : isHV && cvAuto
-                                ? [{ id: 'cv-auto', fileName: cvAuto.fileName || 'Hoja de vida', fileUrl: cvAuto.url }]
+                                ? [{ id: 'cv-auto', fileName: cvAuto.file_name || cvAuto.fileName || 'Hoja de vida', fileUrl: cvAuto.file_url || cvAuto.url }]
                                 : [];
                           statusLabel = (DOCUMENT_STATUS_CONFIG[effStatus] || DOCUMENT_STATUS_CONFIG.pending).label;
                         }

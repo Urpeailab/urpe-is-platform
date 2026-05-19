@@ -4478,25 +4478,41 @@ async def get_case_activities(
         "note_added": ("message", "Nota agregada"),
     }
 
+    GENERIC_VERBS = {"update", "create", "delete", "insert", "patch", "edit"}
     for a in activities:
         ts = a.get("created_at") or a.get("createdAt")
         if isinstance(ts, datetime):
             ts = ts.isoformat()
         action_type = a.get("field_changed") or a.get("fieldChanged") or ""
-        icon, default_label = type_icon_map.get(action_type, ("activity", action_type))
+        icon, default_label = type_icon_map.get(action_type, ("activity", action_type or "Actividad"))
+        # Mejor etiqueta si quedó genérica
+        if default_label.strip().lower() in GENERIC_VERBS:
+            default_label = "Caso actualizado"
 
         sid = a.get("staff_id") or a.get("staffId")
         staff = staff_map.get(sid)
 
-        a["label"] = a.get("action") or default_label
+        # Si la acción quedó como un genérico ("update", "create", etc.), preferí el label tipado
+        raw_action = a.get("action")
+        if raw_action and raw_action.strip().lower() in {"update", "create", "delete", "insert", "patch"}:
+            raw_action = None
+        a["label"] = raw_action or default_label
         a["type"] = action_type
         a["icon"] = icon
         a["timestamp"] = ts
-        a["performedBy"] = {
-            "id": sid or "",
-            "name": staff.get("name", "Sistema") if staff else "(sistema)",
-            "role": staff.get("role", "") if staff else "",
-        }
+        if staff:
+            a["performedBy"] = {
+                "id": sid or "",
+                "name": staff.get("name") or "Sistema",
+                "role": staff.get("role") or "",
+            }
+        else:
+            # Sin staff resuelto: marcá explícitamente como histórico/migración
+            a["performedBy"] = {
+                "id": sid or "",
+                "name": "Histórico (migración)" if not sid else "Usuario eliminado",
+                "role": "sistema",
+            }
 
     return {"activities": activities, "total": total, "page": page, "pages": (total + limit - 1) // limit if total > 0 else 1}
 
@@ -9313,9 +9329,23 @@ async def delete_deliverable_file(
             }
         )
         insert("activity_logs", log)
-        
+
+        # Audit log para timeline del caso (sin esto, el delete no aparece en historial)
+        _del_case_id = deliverable.get('case_id') or deliverable.get('caseId')
+        if _del_case_id:
+            _name = deliverable.get('fileName') or 'archivo'
+            await log_case_audit(
+                case_id=_del_case_id,
+                action=f"Archivo '{_name}' eliminado del entregable",
+                action_type="deliverable_file_deleted",
+                performed_by_id=staff_payload['id'],
+                performed_by_name=staff_payload.get('name', 'Staff'),
+                performed_by_role=staff_payload.get('role', ''),
+                details={'deliverableId': deliverable_id, 'fileName': _name, 'allFiles': True},
+            )
+
         logger.info(f"Deliverable file deleted: {deliverable_id} by staff {staff_payload['id']}")
-        
+
         return {
             'message': 'Deliverable file deleted successfully'
         }

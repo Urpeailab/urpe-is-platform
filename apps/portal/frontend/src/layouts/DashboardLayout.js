@@ -168,6 +168,15 @@ export const DashboardLayout = ({ children }) => {
       collapsible: true,
       items: [
         {
+          id: 'documents',
+          icon: FileText,
+          label: 'Documentos',
+          path: '/dashboard/documents',
+          unlocked: isRegistered,
+          badge: 'client',
+          requiresRegistration: true,
+        },
+        {
           id: 'payments',
           icon: CreditCard,
           label: t('dashboard.nav.payments'),
