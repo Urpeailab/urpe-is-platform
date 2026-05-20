@@ -17,8 +17,11 @@ import {
 	Play,
 	BookOpen,
 	Search,
+	RotateCcw,
+	Settings,
 } from "lucide-react";
 import { toast } from "sonner";
+import LearningSessionConnector from "./LearningSessionConnector";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -83,7 +86,13 @@ export const LearningSession = () => {
 	const avatarStatusRef = useRef("idle");
 	const listeningRef = useRef(false);
 	const sendingRef = useRef(false);
-	const autoModeRef = useRef(true);
+	const autoModeRef = useRef(false);
+
+	// Si el backend devuelve provider="elevenlabs_connector" en avatar_session,
+	// el flujo cambia radicalmente (no hay Whisper, ni VAD, ni sendMessage manual
+	// — ElevenLabs maneja todo). En ese caso renderizamos el componente
+	// LearningSessionConnector y salimos antes de tocar el resto del flujo legacy.
+	const [connectorSession, setConnectorSession] = useState(null);
 
 	const [sessionId, setSessionId] = useState(null);
 	const [moduleData, setModuleData] = useState(null);
@@ -100,7 +109,16 @@ export const LearningSession = () => {
 	const [idleWarning, setIdleWarning] = useState(0); // segundos restantes; 0 = sin warning
 	const [paused, setPaused] = useState(false);
 	const [resuming, setResuming] = useState(false);
-	const [autoMode, setAutoMode] = useState(true);
+	// Default a MANUAL: push-to-talk es más predecible y evita falsos disparos
+	// del VAD. El usuario puede pasar a Auto desde el toggle si lo prefiere,
+	// y la elección queda persistida en localStorage.
+	const [autoMode, setAutoMode] = useState(() => {
+		try {
+			return localStorage.getItem("learning_auto_mode") === "1";
+		} catch {
+			return false;
+		}
+	});
 	const [voiceLevel, setVoiceLevel] = useState(0);
 	const [showHeadphonesTip, setShowHeadphonesTip] = useState(
 		() => !localStorage.getItem("learning_headphones_tip_dismissed"),
@@ -108,6 +126,62 @@ export const LearningSession = () => {
 	const idleTimerRef = useRef(null);
 	const countdownIntervalRef = useRef(null);
 	const pausedRef = useRef(false);
+
+	// UX additions:
+	// - pendingTranscript: muestra lo que Whisper/STT entendió para confirmar/editar
+	//   antes de mandarlo al LLM (~3s countdown auto-send)
+	// - showSettings: panel lateral con sliders del VAD + velocidad TTS
+	// - ttsSpeed: playbackRate del <audio> que renderiza al avatar (0.8 a 1.4)
+	const [pendingTranscript, setPendingTranscript] = useState(null); // {text, expiresAt}
+	const [showSettings, setShowSettings] = useState(false);
+	const [ttsSpeed, setTtsSpeed] = useState(() => {
+		const stored = parseFloat(localStorage.getItem("learning_tts_speed") || "1");
+		return isNaN(stored) ? 1 : Math.max(0.7, Math.min(1.5, stored));
+	});
+	const lastAssistantTextRef = useRef("");
+
+	// Aplicamos la velocidad al elemento <audio> en cada cambio. LiveAvatar
+	// renderiza audio del avatar a través de ese elemento, así que cambiar
+	// `playbackRate` afecta la velocidad percibida del TTS sin tocar la API
+	// del backend.
+	useEffect(() => {
+		if (audioRef.current) audioRef.current.playbackRate = ttsSpeed;
+		try { localStorage.setItem("learning_tts_speed", String(ttsSpeed)); } catch { /* ignore */ }
+	}, [ttsSpeed]);
+
+	// Auto-send del pendingTranscript después de PENDING_SEND_DELAY_MS si el
+	// usuario no lo edita ni lo cancela. Solo aparece para el fallback de Whisper
+	// (donde el usuario no tuvo preview), así que bajamos el delay para no
+	// agregar latencia perceptible al turno.
+	const PENDING_SEND_DELAY_MS = 1200;
+	useEffect(() => {
+		if (!pendingTranscript?.text) return;
+		const t = setTimeout(() => {
+			const txt = pendingTranscript.text;
+			setPendingTranscript(null);
+			if (txt && txt.trim()) sendMessage(txt.trim());
+		}, PENDING_SEND_DELAY_MS);
+		return () => clearTimeout(t);
+	}, [pendingTranscript?.text, pendingTranscript?.nonce]);
+
+	// confirmAndSend: si la transcripción vino del browser STT, el usuario ya
+	// la vio en vivo en el overlay inferior — mandamos directo sin confirmar
+	// para que el avatar responda apenas el usuario termina de hablar. El
+	// confirmador solo aparece para el fallback de Whisper (donde no hubo
+	// preview en vivo) y para textos largos donde una corrección puede importar.
+	const confirmAndSend = (text, source = "whisper") => {
+		const t = (text || "").trim();
+		if (!t) return;
+		if (source === "browser") {
+			sendMessage(t);
+			return;
+		}
+		if (t.length < 6) {
+			sendMessage(t);
+			return;
+		}
+		setPendingTranscript({ text: t, nonce: Date.now() });
+	};
 
 	const headers = () => ({
 		Authorization: `Bearer ${localStorage.getItem("admin_token")}`,
@@ -126,6 +200,11 @@ export const LearningSession = () => {
 	}, [sending]);
 	useEffect(() => {
 		autoModeRef.current = autoMode;
+		try {
+			localStorage.setItem("learning_auto_mode", autoMode ? "1" : "0");
+		} catch {
+			/* ignore */
+		}
 	}, [autoMode]);
 
 	const _newEventId = () =>
@@ -166,6 +245,23 @@ export const LearningSession = () => {
 	// Barge-in: corta inmediatamente lo que el avatar esté diciendo. Lo usamos
 	// cuando el usuario presiona el mic para que pueda preguntar de nuevo sin
 	// esperar que termine la respuesta anterior. Manda dos eventos por compatibilidad
+	// Repite la última respuesta del avatar (sin pasar por el LLM otra vez).
+	// El texto está guardado en lastAssistantTextRef y se manda al canal de TTS.
+	const repeatLastAvatarMessage = async () => {
+		const text = lastAssistantTextRef.current?.trim();
+		if (!text) {
+			toast.info("Todavía no hay respuesta para repetir.");
+			return;
+		}
+		const room = roomRef.current;
+		const avatarSessionId = avatarSessionRef.current?.session_id;
+		if (!room || !avatarSessionId) {
+			toast.error("El avatar no está conectado.");
+			return;
+		}
+		await speakViaAvatar(room, avatarSessionId, text);
+	};
+
 	// entre versiones de LiveAvatar (algunas usan 'avatar.interrupt', otras 'avatar.stop').
 	const interruptAvatar = async () => {
 		const room = roomRef.current;
@@ -194,10 +290,46 @@ export const LearningSession = () => {
 	// - barge-in: si el avatar está hablando, igual detecta voz del usuario y corta
 	//   la respuesta (con umbral más alto para ignorar el eco residual)
 
-	const VAD_SPEECH_START_MS = 100;
-	const VAD_SILENCE_END_MS = 700;
-	const VAD_THRESHOLD_BASE = 0.018; // ambiente normal
-	const VAD_THRESHOLD_DURING_TTS = 0.05; // mientras avatar habla (eco residual)
+	// Sensibilidad del VAD ajustable por el usuario (persistida en localStorage).
+	// Defaults pensados para minimizar latencia percibida sin sacrificar precisión:
+	//   - speechStartMs 250: balance entre responsividad y tolerar tos/ruido.
+	//   - silenceEndMs 450: cierra el turno apenas el usuario hace una pausa
+	//     natural (antes 700ms agregaba ~250ms muertos por turno).
+	// VAD_SETTINGS_VERSION sube cuando los defaults cambian, así invalidamos
+	// los valores cacheados en localStorage de usuarios que ya tenían settings
+	// viejos. Sin esto, los usuarios existentes seguirían con 700ms.
+	const VAD_DEFAULTS = { speechStartMs: 250, silenceEndMs: 450, thresholdBase: 0.022, thresholdTts: 0.06 };
+	const VAD_SETTINGS_VERSION = 2;
+	const [vadSettings, setVadSettings] = useState(() => {
+		try {
+			const raw = localStorage.getItem('learning_vad_settings');
+			if (raw) {
+				const parsed = JSON.parse(raw);
+				if (parsed && parsed._v === VAD_SETTINGS_VERSION) {
+					const { _v, ...rest } = parsed;
+					return { ...VAD_DEFAULTS, ...rest };
+				}
+			}
+		} catch { /* ignore */ }
+		return VAD_DEFAULTS;
+	});
+	const vadSettingsRef = useRef(vadSettings);
+	useEffect(() => {
+		vadSettingsRef.current = vadSettings;
+		try {
+			localStorage.setItem(
+				'learning_vad_settings',
+				JSON.stringify({ ...vadSettings, _v: VAD_SETTINGS_VERSION }),
+			);
+		} catch { /* ignore */ }
+	}, [vadSettings]);
+
+	// Helpers que LEEN siempre desde el ref para que el cambio sea instantáneo
+	// dentro del loop rAF (el closure original quedaría con valores stale).
+	const getVadSpeechStartMs = () => vadSettingsRef.current.speechStartMs;
+	const getVadSilenceEndMs = () => vadSettingsRef.current.silenceEndMs;
+	const getVadThresholdBase = () => vadSettingsRef.current.thresholdBase;
+	const getVadThresholdDuringTts = () => vadSettingsRef.current.thresholdTts;
 
 	const _computeRms = (buf) => {
 		let sum = 0;
@@ -220,8 +352,8 @@ export const LearningSession = () => {
 		if (autoModeRef.current && !pausedRef.current) {
 			const isAvatarTTS = avatarStatusRef.current === "speaking";
 			const threshold = isAvatarTTS
-				? VAD_THRESHOLD_DURING_TTS
-				: VAD_THRESHOLD_BASE;
+				? getVadThresholdDuringTts()
+				: getVadThresholdBase();
 			const isSpeech = rms > threshold;
 
 			if (
@@ -235,7 +367,7 @@ export const LearningSession = () => {
 						vadSpeechStartRef.current = performance.now();
 					if (
 						performance.now() - vadSpeechStartRef.current >
-						VAD_SPEECH_START_MS
+						getVadSpeechStartMs()
 					) {
 						vadSpeechStartRef.current = 0;
 						vadStartingRef.current = true;
@@ -253,7 +385,7 @@ export const LearningSession = () => {
 						vadSilenceTimerRef.current = setTimeout(() => {
 							vadSilenceTimerRef.current = null;
 							if (listeningRef.current) stopListening();
-						}, VAD_SILENCE_END_MS);
+						}, getVadSilenceEndMs());
 					}
 				} else if (vadSilenceTimerRef.current) {
 					clearTimeout(vadSilenceTimerRef.current);
@@ -481,6 +613,16 @@ export const LearningSession = () => {
 					{ headers: headers() },
 				);
 				if (cancelled) return;
+
+				// Si el backend está en modo Connector (LEARNING_USE_ELEVENLABS=true),
+				// el response trae avatar_session.provider="elevenlabs_connector".
+				// Cambiamos a un componente totalmente distinto y salimos de este
+				// useEffect ANTES de inicializar el pipeline legacy (mic recorder,
+				// VAD, Whisper, etc.).
+				if (data?.avatar_session?.provider === "elevenlabs_connector") {
+					setConnectorSession(data);
+					return;
+				}
 
 				setSessionId(data.session_id);
 				setModuleData(data.module);
@@ -771,7 +913,8 @@ export const LearningSession = () => {
 					}
 				}
 			}
-			// Marcar el mensaje como no-streaming al final
+			// Marcar el mensaje como no-streaming al final + recordar el texto
+			// para el botón "Repetir" del avatar.
 			setMessages((prev) => {
 				const next = [...prev];
 				if (
@@ -781,6 +924,7 @@ export const LearningSession = () => {
 				) {
 					const { _streaming, ...rest } = next[next.length - 1];
 					next[next.length - 1] = rest;
+					lastAssistantTextRef.current = rest.content || "";
 				}
 				return next;
 			});
@@ -996,7 +1140,7 @@ export const LearningSession = () => {
 						"[transcribe] using browser STT (skipping Whisper):",
 						browserText,
 					);
-					await sendMessage(browserText);
+					confirmAndSend(browserText, "browser");
 					return;
 				}
 
@@ -1033,7 +1177,7 @@ export const LearningSession = () => {
 						return;
 					}
 					setSending(false);
-					await sendMessage(text);
+					confirmAndSend(text);
 				} catch (err) {
 					setSending(false);
 					const detail =
@@ -1120,6 +1264,17 @@ export const LearningSession = () => {
 			setEnding(false);
 		}
 	};
+
+	// Flujo Connector: si el backend devolvió ese provider, delegamos todo a
+	// LearningSessionConnector — el componente legacy no monta su pipeline.
+	if (connectorSession) {
+		return (
+			<LearningSessionConnector
+				sessionData={connectorSession}
+				onEnd={() => navigate("/admin/learning")}
+			/>
+		);
+	}
 
 	if (evaluation) {
 		return (
@@ -1429,6 +1584,146 @@ export const LearningSession = () => {
 					</div>
 				)}
 
+				{/* ============ Confirmador de transcripción ============ */}
+				{/* Aparece después de Whisper / browser STT con countdown a auto-enviar.
+				    Permite editar el texto antes de mandarlo al LLM (Whisper se equivoca
+				    con nombres propios, jerga técnica, acentos). */}
+				{pendingTranscript && (
+					<div className="absolute top-1/3 left-1/2 -translate-x-1/2 z-40 w-[min(560px,92%)] bg-gray-900/95 border border-yellow-500/40 rounded-xl shadow-2xl backdrop-blur-md p-4">
+						<div className="flex items-center gap-2 mb-2">
+							<span className="text-[10px] font-bold uppercase tracking-widest text-yellow-500">
+								Confirmá lo que dijiste
+							</span>
+							<span className="text-[10px] text-gray-500 ml-auto">Auto-envío en 1.2s</span>
+						</div>
+						<textarea
+							value={pendingTranscript.text}
+							onChange={(e) =>
+								setPendingTranscript({
+									text: e.target.value,
+									nonce: Date.now(), // reinicia el timer al editar
+								})
+							}
+							autoFocus
+							rows={2}
+							className="w-full bg-gray-950 border border-gray-700 focus:border-yellow-500 text-white text-sm rounded-md px-3 py-2 resize-none outline-none"
+						/>
+						<div className="flex justify-end gap-2 mt-3">
+							<button
+								onClick={() => setPendingTranscript(null)}
+								className="px-3 py-1.5 rounded-md text-xs text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
+							>
+								Cancelar
+							</button>
+							<button
+								onClick={() => {
+									const t = pendingTranscript.text.trim();
+									setPendingTranscript(null);
+									if (t) sendMessage(t);
+								}}
+								className="px-4 py-1.5 rounded-md text-xs font-semibold bg-gradient-to-br from-yellow-500 to-yellow-600 text-black hover:from-yellow-400 hover:to-yellow-500"
+							>
+								Enviar ahora
+							</button>
+						</div>
+					</div>
+				)}
+
+				{/* ============ Settings panel (slide-in) ============ */}
+				{showSettings && (
+					<div className="absolute top-16 right-4 z-40 w-80 bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl backdrop-blur-md p-4 space-y-4">
+						<div className="flex items-center justify-between">
+							<h3 className="text-sm font-bold text-yellow-500 uppercase tracking-wider">
+								Ajustes de voz
+							</h3>
+							<button
+								onClick={() => setShowSettings(false)}
+								className="text-gray-400 hover:text-white"
+							>
+								<X className="h-4 w-4" />
+							</button>
+						</div>
+
+						<div>
+							<label className="text-xs text-gray-300 flex justify-between mb-1">
+								<span>Tiempo para activar el micrófono</span>
+								<span className="text-yellow-500 font-mono">{vadSettings.speechStartMs}ms</span>
+							</label>
+							<input
+								type="range"
+								min="100"
+								max="500"
+								step="50"
+								value={vadSettings.speechStartMs}
+								onChange={(e) => setVadSettings({ ...vadSettings, speechStartMs: parseInt(e.target.value, 10) })}
+								className="w-full accent-yellow-500"
+							/>
+							<p className="text-[10px] text-gray-500">Más alto = menos falsos positivos por tos/ruido. Más bajo = más responsivo.</p>
+						</div>
+
+						<div>
+							<label className="text-xs text-gray-300 flex justify-between mb-1">
+								<span>Silencio antes de enviar</span>
+								<span className="text-yellow-500 font-mono">{vadSettings.silenceEndMs}ms</span>
+							</label>
+							<input
+								type="range"
+								min="400"
+								max="1500"
+								step="100"
+								value={vadSettings.silenceEndMs}
+								onChange={(e) => setVadSettings({ ...vadSettings, silenceEndMs: parseInt(e.target.value, 10) })}
+								className="w-full accent-yellow-500"
+							/>
+							<p className="text-[10px] text-gray-500">Cuánto silencio espera el sistema antes de cerrar tu turno.</p>
+						</div>
+
+						<div>
+							<label className="text-xs text-gray-300 flex justify-between mb-1">
+								<span>Sensibilidad del micrófono</span>
+								<span className="text-yellow-500 font-mono">{vadSettings.thresholdBase.toFixed(3)}</span>
+							</label>
+							<input
+								type="range"
+								min="0.008"
+								max="0.05"
+								step="0.002"
+								value={vadSettings.thresholdBase}
+								onChange={(e) => setVadSettings({ ...vadSettings, thresholdBase: parseFloat(e.target.value) })}
+								className="w-full accent-yellow-500"
+							/>
+							<p className="text-[10px] text-gray-500">Más alto = ignora ruidos ambiente más fuertes.</p>
+						</div>
+
+						<div>
+							<label className="text-xs text-gray-300 flex justify-between mb-1">
+								<span>Velocidad del tutor</span>
+								<span className="text-yellow-500 font-mono">{ttsSpeed.toFixed(2)}x</span>
+							</label>
+							<input
+								type="range"
+								min="0.7"
+								max="1.5"
+								step="0.05"
+								value={ttsSpeed}
+								onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
+								className="w-full accent-yellow-500"
+							/>
+							<p className="text-[10px] text-gray-500">Velocidad de reproducción del avatar (0.7x más lento, 1.5x más rápido).</p>
+						</div>
+
+						<button
+							onClick={() => {
+								setVadSettings({ ...VAD_DEFAULTS });
+								setTtsSpeed(1);
+							}}
+							className="w-full text-xs text-gray-400 hover:text-yellow-500 underline"
+						>
+							Restablecer defaults
+						</button>
+					</div>
+				)}
+
 				{/* Top-left: status header cuando el chat está oculto (modo voz) */}
 				{!chatOpen && (
 					<div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-gray-900/70 backdrop-blur-sm rounded-md px-3 py-2 border border-gray-700">
@@ -1447,8 +1742,29 @@ export const LearningSession = () => {
 					</div>
 				)}
 
-				{/* Top-right controls (Auto/Manual + Historial + Terminar) */}
+				{/* Top-right controls (Auto/Manual + Repetir + Settings + Historial + Terminar) */}
 				<div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+					{!chatOpen && lastAssistantTextRef.current && avatarStatus !== "speaking" && (
+						<button
+							onClick={repeatLastAvatarMessage}
+							className="h-10 px-3 rounded-md bg-gray-900/80 hover:bg-gray-900 text-white text-sm flex items-center gap-1.5 transition-colors backdrop-blur-sm border border-gray-700 hover:border-yellow-500/40"
+							title="Repetir la última respuesta del avatar"
+						>
+							<RotateCcw className="h-4 w-4 text-yellow-500" />
+							Repetir
+						</button>
+					)}
+					<button
+						onClick={() => setShowSettings((v) => !v)}
+						className={`h-10 w-10 flex items-center justify-center rounded-md transition-colors backdrop-blur-sm border ${
+							showSettings
+								? "bg-yellow-500/15 text-yellow-400 border-yellow-500/40"
+								: "bg-gray-900/80 hover:bg-gray-900 text-gray-300 border-gray-700 hover:border-yellow-500/40"
+						}`}
+						title="Ajustes de voz"
+					>
+						<Settings className="h-4 w-4" />
+					</button>
 					{!chatOpen && (
 						<button
 							onClick={() => setAutoMode((v) => !v)}

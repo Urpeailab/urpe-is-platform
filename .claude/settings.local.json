@@ -24,7 +24,8 @@
       "Bash(curl -s -o /dev/null -w \"Redactora / -> HTTP %{http_code}\\\\n\" http://localhost:8002/)",
       "Bash(curl -s -o /dev/null -w \"Redactora /api -> HTTP %{http_code}\\\\n\" http://localhost:8002/api/)",
       "Bash(curl -s -o /dev/null -w \"Portal / -> HTTP %{http_code}\\\\n\" http://localhost:8001/)",
-      "Bash(grep -n '\"\\\\$options\"\\\\|\"\\\\$regex\"' /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py)"
+      "Bash(grep -n '\"\\\\$options\"\\\\|\"\\\\$regex\"' /d/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py)",
+      "WebFetch(domain:docs.liveavatar.com)"
     ]
   }
 }

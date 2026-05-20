@@ -131,6 +131,12 @@ export const VisaCaseDetailRedesign = () => {
   const [docNoteVisibleDraft, setDocNoteVisibleDraft] = useState(false);
   const [savingDocNote, setSavingDocNote] = useState(false);
 
+  // Per-file conversation thread reply state (client documents)
+  const [replyingFileNote, setReplyingFileNote] = useState(null); // { documentId, fileId }
+  const [fileReplyDraft, setFileReplyDraft] = useState('');
+  const [fileReplyNotify, setFileReplyNotify] = useState(false);
+  const [sendingFileReply, setSendingFileReply] = useState(false);
+
   // ZIP download selection state for the Documentos tab.
   // Map keyed by `${type}::${itemId}::${fileId}` → true.
   const [zipSelection, setZipSelection] = useState({});
@@ -1804,6 +1810,21 @@ export const VisaCaseDetailRedesign = () => {
     }
   };
 
+  const handleToggleFilePublished = async (deliverableId, fileId, currentPublished) => {
+    const nextPublished = !currentPublished;
+    try {
+      await axios.patch(
+        `${BACKEND_URL}/api/admin/deliverables/${deliverableId}/files/${fileId || 'legacy'}/published`,
+        { published: nextPublished },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success(nextPublished ? 'Archivo publicado' : 'Archivo marcado como borrador');
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo actualizar el estado');
+    }
+  };
+
   const formatUploadedAt = (value) => {
     if (!value) return null;
     try {
@@ -1870,6 +1891,46 @@ export const VisaCaseDetailRedesign = () => {
       fetchCaseData();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'No se pudo eliminar la nota');
+    }
+  };
+
+  // Fold legacy `clientNote` into a thread so the new UI shows old + new uploads.
+  const buildFileNoteThread = (file) => {
+    if (Array.isArray(file?.noteThread) && file.noteThread.length > 0) {
+      return file.noteThread;
+    }
+    if (file?.clientNote?.text) {
+      return [{
+        id: file.clientNote.id || 'legacy-client-note',
+        text: file.clientNote.text,
+        authorId: file.clientNote.authorId,
+        authorName: file.clientNote.authorName || 'Cliente',
+        authorRole: file.clientNote.authorRole || 'client',
+        createdAt: file.clientNote.createdAt,
+      }];
+    }
+    return [];
+  };
+
+  const handleSendFileReply = async (documentId, fileId) => {
+    const text = fileReplyDraft.trim();
+    if (!text) return;
+    setSendingFileReply(true);
+    try {
+      await axios.post(
+        `${BACKEND_URL}/api/admin/client-documents/${documentId}/files/${fileId}/notes`,
+        { text, notifyClient: fileReplyNotify },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success(fileReplyNotify ? 'Respuesta enviada y notificada al cliente' : 'Respuesta enviada');
+      setReplyingFileNote(null);
+      setFileReplyDraft('');
+      setFileReplyNotify(false);
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo enviar la respuesta');
+    } finally {
+      setSendingFileReply(false);
     }
   };
 
@@ -3784,10 +3845,11 @@ export const VisaCaseDetailRedesign = () => {
                                           const uploadedAtLabel = formatUploadedAt(uploadedAtRaw);
                                           const uploaderName = resolveUploaderName(file);
                                           const fileId = file.id || 'legacy';
+                                          const isPublished = file.published !== false; // default a true (compat con archivos antiguos)
                                           return (
                                           <div
                                             key={file.id || index}
-                                            className="bg-gray-50 rounded-lg px-3 py-2 border border-gray-200"
+                                            className={`rounded-lg px-3 py-2 border ${isPublished ? 'bg-gray-50 border-gray-200' : 'bg-amber-50/40 border-amber-200'}`}
                                           >
                                             <div className="flex items-center justify-between gap-2">
                                               <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -3795,6 +3857,18 @@ export const VisaCaseDetailRedesign = () => {
                                                 <span className="text-sm text-gray-700 truncate">
                                                   {file.fileName || `Archivo ${index + 1}`}
                                                 </span>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleToggleFilePublished(del.id, fileId, isPublished)}
+                                                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border transition-colors ${
+                                                    isPublished
+                                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                                      : 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200'
+                                                  }`}
+                                                  title={isPublished ? 'Click para marcar como borrador' : 'Click para publicar'}
+                                                >
+                                                  {isPublished ? 'Publicado' : 'Borrador'}
+                                                </button>
                                               </div>
                                               <div className="flex items-center gap-1">
                                                 <Button
@@ -4018,6 +4092,104 @@ export const VisaCaseDetailRedesign = () => {
                                                 )}
                                               </div>
                                             )}
+                                            {(() => {
+                                              const thread = buildFileNoteThread(file);
+                                              const isReplying = replyingFileNote?.documentId === (doc.id || doc._id) && replyingFileNote?.fileId === file.id;
+                                              if (thread.length === 0 && !isReplying) {
+                                                return (
+                                                  <button
+                                                    onClick={() => { setReplyingFileNote({ documentId: doc.id || doc._id, fileId: file.id }); setFileReplyDraft(''); setFileReplyNotify(false); }}
+                                                    className="mt-2 inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-blue-600 transition-colors"
+                                                  >
+                                                    <MessageSquare className="h-3 w-3" />
+                                                    Agregar nota
+                                                  </button>
+                                                );
+                                              }
+                                              return (
+                                                <div className="mt-2 space-y-2">
+                                                  {thread.map((entry) => {
+                                                    const fromClient = entry.authorRole === 'client';
+                                                    return (
+                                                      <div
+                                                        key={entry.id}
+                                                        className={`px-2.5 py-2 rounded-md border-l-2 ${
+                                                          fromClient
+                                                            ? 'bg-amber-50 border-amber-400'
+                                                            : 'bg-blue-50 border-blue-400'
+                                                        }`}
+                                                      >
+                                                        <div className={`flex items-center gap-1.5 text-[11px] mb-1 ${fromClient ? 'text-amber-700' : 'text-blue-700'}`}>
+                                                          <MessageSquare className="h-3 w-3" />
+                                                          <span className="font-semibold">{entry.authorName || (fromClient ? 'Cliente' : 'Equipo')}</span>
+                                                          <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                                                            fromClient ? 'bg-amber-200 text-amber-900' : 'bg-blue-200 text-blue-900'
+                                                          }`}>
+                                                            {fromClient ? 'Cliente' : 'Equipo'}
+                                                          </span>
+                                                          {entry.createdAt && (
+                                                            <>
+                                                              <span>·</span>
+                                                              <span>{(() => { try { return new Date(entry.createdAt).toLocaleString('es', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); } catch { return ''; } })()}</span>
+                                                            </>
+                                                          )}
+                                                        </div>
+                                                        <p className={`text-xs whitespace-pre-wrap ${fromClient ? 'text-amber-900' : 'text-blue-900'}`}>{entry.text}</p>
+                                                      </div>
+                                                    );
+                                                  })}
+                                                  {!isReplying && (
+                                                    <button
+                                                      onClick={() => { setReplyingFileNote({ documentId: doc.id || doc._id, fileId: file.id }); setFileReplyDraft(''); setFileReplyNotify(false); }}
+                                                      className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-blue-600 transition-colors"
+                                                    >
+                                                      <MessageSquare className="h-3 w-3" />
+                                                      Responder
+                                                    </button>
+                                                  )}
+                                                  {isReplying && (
+                                                    <div className="bg-white border border-gray-300 rounded-md p-2 space-y-2">
+                                                      <textarea
+                                                        value={fileReplyDraft}
+                                                        onChange={(e) => setFileReplyDraft(e.target.value)}
+                                                        placeholder="Escribe tu respuesta para el cliente..."
+                                                        rows={3}
+                                                        maxLength={1000}
+                                                        disabled={sendingFileReply}
+                                                        className="w-full bg-gray-50 border border-gray-200 text-gray-900 rounded px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none resize-none"
+                                                      />
+                                                      <div className="flex items-center justify-between gap-2">
+                                                        <label className="flex items-center gap-1.5 text-[11px] text-gray-700 cursor-pointer">
+                                                          <input
+                                                            type="checkbox"
+                                                            checked={fileReplyNotify}
+                                                            onChange={(e) => setFileReplyNotify(e.target.checked)}
+                                                            disabled={sendingFileReply}
+                                                            className="rounded border-gray-300"
+                                                          />
+                                                          Notificar al cliente por correo
+                                                        </label>
+                                                        <span className="text-[10px] text-gray-400">{fileReplyDraft.length}/1000</span>
+                                                      </div>
+                                                      <div className="flex justify-end gap-2">
+                                                        <button
+                                                          onClick={() => { setReplyingFileNote(null); setFileReplyDraft(''); setFileReplyNotify(false); }}
+                                                          disabled={sendingFileReply}
+                                                          className="text-[11px] text-gray-600 hover:text-gray-900 px-2 py-1"
+                                                        >Cancelar</button>
+                                                        <button
+                                                          onClick={() => handleSendFileReply(doc.id || doc._id, file.id)}
+                                                          disabled={sendingFileReply || !fileReplyDraft.trim()}
+                                                          className="text-[11px] bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1 rounded disabled:opacity-50"
+                                                        >
+                                                          {sendingFileReply ? 'Enviando...' : 'Enviar respuesta'}
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              );
+                                            })()}
                                           </div>
                                           );
                                         })}

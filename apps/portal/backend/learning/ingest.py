@@ -6,7 +6,7 @@ from typing import Optional
 
 from db.supabase_client import get_supabase, select, update as sb_update, insert, delete
 
-from .config import LEARNING_BUCKET
+from .config import LEARNING_BUCKET, EMBEDDING_MODEL
 from .extract import extract_text
 from .chunker import chunk_text
 from .embeddings import embed_texts
@@ -60,6 +60,7 @@ def ingest_document(document_id: str) -> dict:
                         "chunk_index": batch_start + offset,
                         "content": content,
                         "embedding": vec,
+                        "embedding_model": EMBEDDING_MODEL,
                         "metadata": {"source_filename": doc.get("filename")},
                     }
                 )

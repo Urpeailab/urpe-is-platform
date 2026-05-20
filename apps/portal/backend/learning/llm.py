@@ -104,7 +104,13 @@ def chat(messages: List[dict], model: Optional[str] = None, temperature: float =
 def chat_stream(messages: List[dict], model: Optional[str] = None, temperature: float = 0.4):
     """Generator que cede deltas de texto a medida que llegan del modelo.
     Permite que el avatar empiece a hablar la primera oración antes de que
-    el LLM termine de generar todo. Yields strings (puede ser '' al final)."""
+    el LLM termine de generar todo. Yields strings.
+
+    Al terminar, devuelve (via StopIteration.value) un dict con
+    {tokens_input, tokens_output, model} para que el caller pueda persistir
+    el costo de la respuesta. Se solicita `stream_options.include_usage=True`
+    a OpenRouter para que el último chunk incluya el `usage`.
+    """
     client = _get_client()
     model = model or OPENROUTER_MODEL_DEFAULT
     stream = client.chat.completions.create(
@@ -112,15 +118,29 @@ def chat_stream(messages: List[dict], model: Optional[str] = None, temperature: 
         messages=messages,
         temperature=temperature,
         stream=True,
+        stream_options={"include_usage": True},
     )
+    usage = {"tokens_input": None, "tokens_output": None, "model": model}
     for chunk in stream:
+        # Algunos chunks (el último) traen sólo `usage` sin `choices`.
         try:
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage:
+                usage["tokens_input"] = getattr(chunk_usage, "prompt_tokens", None)
+                usage["tokens_output"] = getattr(chunk_usage, "completion_tokens", None)
+        except Exception:
+            pass
+
+        try:
+            if not getattr(chunk, "choices", None):
+                continue
             delta = chunk.choices[0].delta
         except (AttributeError, IndexError):
             continue
         content = getattr(delta, "content", None)
         if content:
             yield content
+    return usage
 
 
 def chat_json(messages: List[dict], model: Optional[str] = None, temperature: float = 0.2) -> dict:
@@ -196,9 +216,21 @@ def build_module_system_prompt(module: dict) -> str:
 
 
 def build_rag_user_message(user_text: str, context: str) -> str:
-    """Compose a user-role message that injects retrieved context."""
+    """Compose a user-role message that injects retrieved context.
+
+    Si no hay contexto recuperado, le decimos al LLM que sea honesto en su respuesta
+    en lugar de cortocircuitar con un canned message (que rompía conversaciones
+    naturales y bloqueaba follow-ups o saludos).
+    """
     if not context:
-        return user_text
+        return (
+            f"Pregunta del colaborador: {user_text}\n\n"
+            "Nota interna: no se recuperaron pasajes específicos del material para esta "
+            "consulta. Si la pregunta apunta a contenido del módulo, sé claro en que no "
+            "tienes esa información puntual y sugiere consultar al líder o revisar el "
+            "material directamente. Si es conversacional o general (saludos, agradecimientos, "
+            "follow-ups), responde con naturalidad."
+        )
     return (
         f"Contexto recuperado de los materiales del módulo:\n\n{context}\n\n"
         f"---\n\nPregunta del colaborador: {user_text}"

@@ -20,6 +20,8 @@ import {
   Plus,
   File,
   Loader2,
+  X,
+  MessageSquare,
   BookOpen,
   Lightbulb,
   Type,
@@ -54,6 +56,8 @@ export const StageDetailPage = () => {
   const [stageDeliverables, setStageDeliverables] = useState([]);
   const [stageDocuments, setStageDocuments] = useState([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadNote, setUploadNote] = useState('');
+  const [pendingFile, setPendingFile] = useState(null);
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -72,6 +76,56 @@ export const StageDetailPage = () => {
   const [showCustomIdea, setShowCustomIdea] = useState(false);
   const [ideasEvaluation, setIdeasEvaluation] = useState(null);
   const [titlesEvaluation, setTitlesEvaluation] = useState(null);
+
+  // File note thread reply UI: which file is being replied to + draft text
+  const [replyingFileId, setReplyingFileId] = useState(null);
+  const [replyDraft, setReplyDraft] = useState('');
+  const [sendingReply, setSendingReply] = useState(false);
+
+  // Fold legacy `clientNote` into a thread so the new UI renders both old and
+  // new uploads uniformly.
+  const buildNoteThread = (file) => {
+    if (Array.isArray(file?.noteThread) && file.noteThread.length > 0) {
+      return file.noteThread;
+    }
+    if (file?.clientNote?.text) {
+      return [{
+        id: file.clientNote.id || 'legacy-client-note',
+        text: file.clientNote.text,
+        authorId: file.clientNote.authorId,
+        authorName: file.clientNote.authorName || 'Cliente',
+        authorRole: file.clientNote.authorRole || 'client',
+        createdAt: file.clientNote.createdAt,
+      }];
+    }
+    return [];
+  };
+
+  const handleSendFileReply = async (documentId, fileId) => {
+    const text = replyDraft.trim();
+    if (!text) return;
+    setSendingReply(true);
+    try {
+      const userDataStr = localStorage.getItem('urpe_user');
+      const userData = userDataStr ? JSON.parse(userDataStr) : null;
+      const token = userData?.token;
+
+      await axios.post(
+        `${BACKEND_URL}/api/client/documents/${documentId}/files/${fileId}/notes`,
+        { text },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Respuesta enviada');
+      setReplyingFileId(null);
+      setReplyDraft('');
+      fetchStageData();
+    } catch (error) {
+      console.error('Error sending reply:', error);
+      toast.error(error.response?.data?.detail || 'Error al enviar la respuesta');
+    } finally {
+      setSendingReply(false);
+    }
+  };
 
 
   useEffect(() => {
@@ -124,7 +178,7 @@ export const StageDetailPage = () => {
     }
   };
 
-  const handleDocumentUpload = async (documentId, file) => {
+  const handleDocumentUpload = async (documentId, file, note = '') => {
     setUploading(true);
     try {
       const userDataStr = localStorage.getItem('urpe_user');
@@ -133,6 +187,9 @@ export const StageDetailPage = () => {
 
       const formData = new FormData();
       formData.append('file', file);
+      if (note && note.trim()) {
+        formData.append('note', note.trim());
+      }
 
       await axios.post(
         `${BACKEND_URL}/api/client/documents/${documentId}/upload`,
@@ -148,6 +205,8 @@ export const StageDetailPage = () => {
       toast.success('Documento subido exitosamente');
       setShowUploadModal(false);
       setSelectedDocument(null);
+      setUploadNote('');
+      setPendingFile(null);
       fetchStageData();
     } catch (error) {
       console.error('Error uploading document:', error);
@@ -1387,39 +1446,129 @@ export const StageDetailPage = () => {
                           {docFiles.map((file, index) => (
                             <div
                               key={file.id || index}
-                              className="flex items-center justify-between bg-[#0F172A] rounded-lg px-3 py-2"
+                              className="bg-[#0F172A] rounded-lg px-3 py-2"
                             >
-                              <div className="flex items-center gap-2 flex-1 min-w-0">
-                                <File className="h-4 w-4 text-[#64748B] flex-shrink-0" />
-                                <span className="text-sm text-[#F8FAFC] truncate">
-                                  {file.fileName || `Archivo ${index + 1}`}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 flex-shrink-0">
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => {
-                                    const fullUrl = file.fileUrl?.startsWith('http')
-                                      ? file.fileUrl
-                                      : `${BACKEND_URL}${file.fileUrl}`;
-                                    window.open(fullUrl, '_blank');
-                                  }}
-                                  className="h-8 px-2 text-[#64748B] hover:text-[#F8FAFC] hover:bg-[#334155]"
-                                >
-                                  <Download className="h-4 w-4" />
-                                </Button>
-                                {!isLocked && file.id !== 'legacy' && (
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  <File className="h-4 w-4 text-[#64748B] flex-shrink-0" />
+                                  <span className="text-sm text-[#F8FAFC] truncate">
+                                    {file.fileName || `Archivo ${index + 1}`}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
                                   <Button
                                     size="sm"
                                     variant="ghost"
-                                    onClick={() => handleDeleteFile(document._id || document.id, file.id)}
-                                    className="h-8 px-2 text-[#64748B] hover:text-[#EF4444] hover:bg-[#EF4444]/10"
+                                    onClick={() => {
+                                      const fullUrl = file.fileUrl?.startsWith('http')
+                                        ? file.fileUrl
+                                        : `${BACKEND_URL}${file.fileUrl}`;
+                                      window.open(fullUrl, '_blank');
+                                    }}
+                                    className="h-8 px-2 text-[#64748B] hover:text-[#F8FAFC] hover:bg-[#334155]"
                                   >
-                                    <Trash2 className="h-4 w-4" />
+                                    <Download className="h-4 w-4" />
                                   </Button>
-                                )}
+                                  {!isLocked && file.id !== 'legacy' && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => handleDeleteFile(document._id || document.id, file.id)}
+                                      className="h-8 px-2 text-[#64748B] hover:text-[#EF4444] hover:bg-[#EF4444]/10"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </div>
                               </div>
+                              {(() => {
+                                const thread = buildNoteThread(file);
+                                const isReplying = replyingFileId === file.id;
+                                if (thread.length === 0 && !isReplying) {
+                                  return !isLocked ? (
+                                    <button
+                                      onClick={() => { setReplyingFileId(file.id); setReplyDraft(''); }}
+                                      className="mt-2 inline-flex items-center gap-1 text-[11px] text-[#64748B] hover:text-[#C9A96A] transition-colors"
+                                    >
+                                      <MessageSquare className="h-3 w-3" />
+                                      Agregar nota
+                                    </button>
+                                  ) : null;
+                                }
+                                return (
+                                  <div className="mt-2 space-y-2">
+                                    {thread.map((entry) => {
+                                      const fromClient = entry.authorRole === 'client';
+                                      return (
+                                        <div
+                                          key={entry.id}
+                                          className={`px-2.5 py-2 rounded-md border-l-2 ${
+                                            fromClient
+                                              ? 'bg-[#1E293B] border-[#C9A96A]'
+                                              : 'bg-[#0F2540] border-[#3B82F6]'
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-1.5 text-[10px] text-[#94A3B8] mb-1">
+                                            <MessageSquare className="h-3 w-3" />
+                                            <span className="font-medium">{entry.authorName || (fromClient ? 'Cliente' : 'Equipo')}</span>
+                                            <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                                              fromClient ? 'bg-[#C9A96A]/20 text-[#C9A96A]' : 'bg-[#3B82F6]/20 text-[#60A5FA]'
+                                            }`}>
+                                              {fromClient ? 'Tú' : 'Equipo'}
+                                            </span>
+                                            {entry.createdAt && (
+                                              <>
+                                                <span>·</span>
+                                                <span>{new Date(entry.createdAt).toLocaleString('es-ES', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                                              </>
+                                            )}
+                                          </div>
+                                          <p className="text-xs text-[#E2E8F0] whitespace-pre-wrap">{entry.text}</p>
+                                        </div>
+                                      );
+                                    })}
+                                    {!isLocked && !isReplying && (
+                                      <button
+                                        onClick={() => { setReplyingFileId(file.id); setReplyDraft(''); }}
+                                        className="inline-flex items-center gap-1 text-[11px] text-[#64748B] hover:text-[#C9A96A] transition-colors"
+                                      >
+                                        <MessageSquare className="h-3 w-3" />
+                                        Responder
+                                      </button>
+                                    )}
+                                    {isReplying && (
+                                      <div className="bg-[#0F172A] border border-[#334155] rounded-md p-2 space-y-2">
+                                        <textarea
+                                          value={replyDraft}
+                                          onChange={(e) => setReplyDraft(e.target.value)}
+                                          placeholder="Escribe tu respuesta..."
+                                          rows={3}
+                                          maxLength={1000}
+                                          disabled={sendingReply}
+                                          className="w-full bg-[#1E293B] border border-[#334155] text-[#F8FAFC] rounded px-2 py-1.5 text-xs focus:border-[#C9A96A] focus:outline-none resize-none"
+                                        />
+                                        <div className="flex items-center justify-between">
+                                          <span className="text-[10px] text-[#64748B]">{replyDraft.length}/1000</span>
+                                          <div className="flex gap-2">
+                                            <button
+                                              onClick={() => { setReplyingFileId(null); setReplyDraft(''); }}
+                                              disabled={sendingReply}
+                                              className="text-[11px] text-[#94A3B8] hover:text-[#F8FAFC] px-2 py-1"
+                                            >Cancelar</button>
+                                            <button
+                                              onClick={() => handleSendFileReply(document._id || document.id, file.id)}
+                                              disabled={sendingReply || !replyDraft.trim()}
+                                              className="text-[11px] bg-[#C9A96A] hover:bg-[#B8956A] text-[#0F172A] font-semibold px-3 py-1 rounded disabled:opacity-50"
+                                            >
+                                              {sendingReply ? 'Enviando...' : 'Enviar'}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           ))}
                         </div>
@@ -1488,53 +1637,103 @@ export const StageDetailPage = () => {
       {/* ========== UPLOAD MODAL ========== */}
       {showUploadModal && selectedDocument && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-[#1E293B] rounded-xl border border-[#334155] max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold text-[#F8FAFC] mb-4">
+          <div className="bg-[#1E293B] rounded-xl border border-[#334155] max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-[#F8FAFC] mb-1">
               Subir {toText(selectedDocument.documentName) || toText(selectedDocument.name) || 'Documento'}
             </h3>
-            <div 
-              className={`
-                border-2 border-dashed rounded-lg p-8 text-center transition-colors
-                ${isDragging ? 'border-[#C9A96A] bg-[#C9A96A]/10' : 'border-[#334155] hover:border-[#475569]'}
-              `}
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragging(false);
-                const file = e.dataTransfer.files[0];
-                if (file && selectedDocument) handleDocumentUpload(selectedDocument._id || selectedDocument.id, file);
-              }}
-            >
-              <Upload className="h-10 w-10 text-[#64748B] mx-auto mb-3" />
-              <p className="text-[#F8FAFC] font-medium mb-1">Arrastra tu archivo aquí</p>
-              <p className="text-[#64748B] text-sm mb-4">o</p>
-              <label className="cursor-pointer">
-                <span className="bg-[#C9A96A] hover:bg-[#B8956A] text-[#0F172A] font-medium px-4 py-2 rounded-lg transition-colors inline-block">
-                  {uploading ? 'Subiendo...' : 'Seleccionar archivo'}
-                </span>
-                <input
-                  type="file"
-                  className="hidden"
+            <p className="text-xs text-[#94A3B8] mb-4">Adjunta el archivo y, si quieres, deja una nota para tu equipo.</p>
+
+            {/* File picker / preview */}
+            {!pendingFile ? (
+              <div
+                className={`
+                  border-2 border-dashed rounded-lg p-6 text-center transition-colors mb-4
+                  ${isDragging ? 'border-[#C9A96A] bg-[#C9A96A]/10' : 'border-[#334155] hover:border-[#475569]'}
+                `}
+                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  const file = e.dataTransfer.files[0];
+                  if (file) setPendingFile(file);
+                }}
+              >
+                <Upload className="h-8 w-8 text-[#64748B] mx-auto mb-2" />
+                <p className="text-[#F8FAFC] text-sm font-medium mb-1">Arrastra tu archivo aquí</p>
+                <p className="text-[#64748B] text-xs mb-3">o</p>
+                <label className="cursor-pointer">
+                  <span className="bg-[#C9A96A] hover:bg-[#B8956A] text-[#0F172A] font-medium px-4 py-2 rounded-lg transition-colors inline-block text-sm">
+                    Seleccionar archivo
+                  </span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) setPendingFile(file);
+                    }}
+                  />
+                </label>
+              </div>
+            ) : (
+              <div className="bg-[#0F172A] border border-[#334155] rounded-lg p-3 mb-4 flex items-center gap-3">
+                <File className="h-5 w-5 text-[#C9A96A] flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-[#F8FAFC] truncate">{pendingFile.name}</p>
+                  <p className="text-xs text-[#64748B]">{(pendingFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPendingFile(null)}
                   disabled={uploading}
-                  onChange={(e) => {
-                    const file = e.target.files[0];
-                    if (file && selectedDocument) handleDocumentUpload(selectedDocument._id || selectedDocument.id, file);
-                  }}
-                />
+                  className="text-[#64748B] hover:text-[#F8FAFC] p-1 disabled:opacity-40"
+                  title="Cambiar archivo"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Note textarea — always visible */}
+            <div className="mb-4">
+              <label className="block text-xs font-medium text-[#94A3B8] mb-2 uppercase tracking-wider">
+                Nota u observación <span className="text-[#64748B] normal-case">(opcional)</span>
               </label>
+              <textarea
+                value={uploadNote}
+                onChange={(e) => setUploadNote(e.target.value)}
+                placeholder="¿Algo que tu equipo deba saber sobre este archivo?"
+                rows={4}
+                maxLength={1000}
+                disabled={uploading}
+                className="w-full bg-[#0F172A] border border-[#334155] text-[#F8FAFC] rounded-lg px-3 py-2 text-sm focus:border-[#C9A96A] focus:outline-none resize-none"
+              />
+              <p className="text-[10px] text-[#64748B] mt-1">{uploadNote.length}/1000 · la nota quedará junto al archivo y no podrá editarse después</p>
             </div>
-            <div className="flex justify-end mt-4">
+
+            <div className="flex justify-end gap-2">
               <Button
                 variant="ghost"
                 onClick={() => {
                   setShowUploadModal(false);
                   setSelectedDocument(null);
+                  setUploadNote('');
+                  setPendingFile(null);
                 }}
                 className="text-[#94A3B8] hover:text-[#F8FAFC] hover:bg-[#334155]"
                 disabled={uploading}
               >
                 Cancelar
+              </Button>
+              <Button
+                onClick={() => handleDocumentUpload(selectedDocument._id || selectedDocument.id, pendingFile, uploadNote)}
+                disabled={uploading || !pendingFile}
+                className="bg-[#C9A96A] hover:bg-[#B8956A] text-[#0F172A] font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {uploading ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Subiendo...</>
+                ) : 'Subir documento'}
               </Button>
             </div>
           </div>

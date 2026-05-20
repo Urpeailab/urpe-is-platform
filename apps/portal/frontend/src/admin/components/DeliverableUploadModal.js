@@ -24,6 +24,7 @@ export const DeliverableUploadModal = ({
 	const [noteVisibleToClient, setNoteVisibleToClient] = useState(false);
 	const [dragActive, setDragActive] = useState(false);
 	const [notifyClient, setNotifyClient] = useState(true);
+	const [published, setPublished] = useState(true); // default: publicado
 
 	// Helper function to extract text from bilingual objects
 	const getText = (field) => {
@@ -118,7 +119,8 @@ export const DeliverableUploadModal = ({
 						fileSize: uploadResponse.data.fileSize,
 						notes,
 						noteVisibleToClient,
-						notifyClient: notifyClient && isLast,
+						notifyClient: notifyClient && isLast && published,
+						published,
 					},
 					{ headers: { Authorization: `Bearer ${token}` } },
 				);
@@ -164,6 +166,7 @@ export const DeliverableUploadModal = ({
 		setNotes("");
 		setNoteVisibleToClient(false);
 		setNotifyClient(true);
+		setPublished(true);
 		setUploadProgress({ current: 0, total: 0 });
 	};
 
@@ -333,6 +336,45 @@ export const DeliverableUploadModal = ({
 								)}
 							</div>
 
+							{/* Published / Draft selector */}
+							<div className="space-y-1.5">
+								<Label>Estado del archivo</Label>
+								<div className="grid grid-cols-2 gap-2">
+									<button
+										type="button"
+										onClick={() => setPublished(true)}
+										className={`p-3 rounded-lg border text-left transition-colors ${
+											published
+												? "border-emerald-500 bg-emerald-50 ring-2 ring-emerald-200"
+												: "border-gray-200 bg-white hover:border-gray-300"
+										}`}
+									>
+										<p className={`text-sm font-semibold ${published ? "text-emerald-700" : "text-gray-700"}`}>
+											Publicado
+										</p>
+										<p className="text-[11px] text-gray-500 mt-0.5">
+											Visible para el cliente
+										</p>
+									</button>
+									<button
+										type="button"
+										onClick={() => setPublished(false)}
+										className={`p-3 rounded-lg border text-left transition-colors ${
+											!published
+												? "border-amber-500 bg-amber-50 ring-2 ring-amber-200"
+												: "border-gray-200 bg-white hover:border-gray-300"
+										}`}
+									>
+										<p className={`text-sm font-semibold ${!published ? "text-amber-700" : "text-gray-700"}`}>
+											Borrador
+										</p>
+										<p className="text-[11px] text-gray-500 mt-0.5">
+											Solo lo ve el equipo
+										</p>
+									</button>
+								</div>
+							</div>
+
 							{/* Notify Client Toggle */}
 							<div className="flex items-center justify-between bg-purple-50 border border-purple-200 rounded-lg px-3 py-2">
 								<div className="flex items-center gap-2">
@@ -373,18 +415,30 @@ export const DeliverableUploadModal = ({
 								</button>
 							</div>
 
-							{/* Warning Box */}
-							<div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
-								<div className="flex items-start gap-2">
-									<AlertCircle className="h-4 w-4 text-yellow-600 mt-0.5 flex-shrink-0" />
-									<div className="text-xs text-yellow-800">
-										<p className="font-semibold">
-											BORRADOR hasta que el cliente pague la etapa. Una vez
-											pagado, descargará la versión final sin marca de agua.
-										</p>
+							{/* Info Box */}
+							{!published ? (
+								<div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+									<div className="flex items-start gap-2">
+										<AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+										<div className="text-xs text-amber-800">
+											<p className="font-semibold">
+												Borrador interno: el cliente no verá este archivo hasta que lo publiques.
+											</p>
+										</div>
 									</div>
 								</div>
-							</div>
+							) : (
+								<div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
+									<div className="flex items-start gap-2">
+										<AlertCircle className="h-4 w-4 text-yellow-600 mt-0.5 flex-shrink-0" />
+										<div className="text-xs text-yellow-800">
+											<p className="font-semibold">
+												Si la etapa aún no está pagada, el cliente verá una marca de agua hasta que pague.
+											</p>
+										</div>
+									</div>
+								</div>
+							)}
 						</div>
 					</div>
 

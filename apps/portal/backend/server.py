@@ -9231,6 +9231,9 @@ class DeliverableUploadRequest(BaseModel):
     notes: Optional[str] = None
     noteVisibleToClient: Optional[bool] = False
     notifyClient: Optional[bool] = True
+    # 'published' = el cliente puede ver/descargar este archivo. 'borrador' (False)
+    # = sólo lo ve el staff. Default True para no cambiar el comportamiento previo.
+    published: Optional[bool] = True
 
 
 class DeliverableFileNoteUpdateRequest(BaseModel):
@@ -9251,6 +9254,11 @@ class DeliverableFileNoteAddRequest(BaseModel):
 class ClientDocumentNoteAddRequest(BaseModel):
     text: str
     visibleToClient: Optional[bool] = False
+
+
+class FileNoteReplyRequest(BaseModel):
+    text: str
+    notifyClient: Optional[bool] = False
 
 @api_router.delete("/admin/deliverables/{deliverable_id}")
 async def delete_deliverable(
@@ -9427,6 +9435,70 @@ async def delete_single_deliverable_file(
     except Exception as e:
         logger.error(f"Delete single deliverable file error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+
+
+class FilePublishedUpdate(BaseModel):
+    published: bool
+
+
+@api_router.patch("/admin/deliverables/{deliverable_id}/files/{file_id}/published")
+async def set_deliverable_file_published(
+    deliverable_id: str,
+    file_id: str,
+    request: FilePublishedUpdate,
+    staff_payload: dict = Depends(verify_staff_token),
+):
+    """Alterna el estado published de un archivo dentro de un entregable.
+
+    published=True → visible para el cliente (descargable).
+    published=False → borrador, sólo visible para el staff.
+    """
+    deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
+    if not deliverable:
+        raise HTTPException(status_code=404, detail="Entregable no encontrado")
+
+    files = deliverable.get('files') or []
+    if not files and deliverable.get('fileUrl'):
+        # Materializar el archivo legacy para poder marcarlo
+        files = [{
+            'id': 'legacy',
+            'fileName': deliverable.get('fileName', 'archivo'),
+            'fileUrl': deliverable.get('fileUrl'),
+            'fileSize': deliverable.get('fileSize', 0),
+            'uploadedBy': deliverable.get('uploadedBy'),
+            'uploadedAt': deliverable.get('uploadedAt'),
+            'published': True,
+        }]
+
+    found = False
+    for f in files:
+        if isinstance(f, dict) and f.get('id') == file_id:
+            f['published'] = bool(request.published)
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    update("visa_deliverables", filters={"id": deliverable_id}, data={
+        'files': files,
+        'updatedAt': datetime.now(timezone.utc).isoformat(),
+    })
+
+    case_id = deliverable.get('case_id') or deliverable.get('caseId')
+    if case_id:
+        target_file = next((f for f in files if f.get('id') == file_id), {})
+        label = 'publicado' if request.published else 'movido a borrador'
+        await log_case_audit(
+            case_id=case_id,
+            action=f"Archivo '{target_file.get('fileName', '')}' {label}",
+            action_type="deliverable_file_published" if request.published else "deliverable_file_unpublished",
+            performed_by_id=staff_payload['id'],
+            performed_by_name=staff_payload.get('name', 'Staff'),
+            performed_by_role=staff_payload.get('role', ''),
+            details={'deliverableId': deliverable_id, 'fileId': file_id, 'published': request.published},
+        )
+
+    return {'success': True, 'published': bool(request.published)}
 
 
 def _normalize_file_notes(file_obj: dict) -> list:
@@ -9874,6 +9946,7 @@ async def upload_deliverable(
             'uploadedAt': datetime.now(timezone.utc).isoformat(),
             'noteVisibleToClient': bool(request.noteVisibleToClient),
             'clientNotified': bool(request.notifyClient),
+            'published': bool(request.published) if request.published is not None else True,
         }
         if request.notes:
             new_file['note'] = request.notes
@@ -9959,9 +10032,9 @@ async def upload_deliverable(
         
         logger.info(f"Deliverable uploaded: {request.deliverableId} for case {request.caseId} (total files: {len(existing_files)})")
         
-        # Notify client about new deliverable via email (only if requested)
-        logger.info(f"📧 notifyClient={request.notifyClient}")
-        if request.notifyClient:
+        # Notify client about new deliverable via email (only if requested AND published)
+        logger.info(f"📧 notifyClient={request.notifyClient}, published={request.published}")
+        if request.notifyClient and request.published:
             try:
                 from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
                 case_for_email = select("visa_cases", filters={"id": request.caseId}, single=True)
@@ -12140,6 +12213,123 @@ async def delete_client_document_note(
     except Exception as e:
         logger.error(f"Delete client document note error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete note: {str(e)}")
+
+
+def _file_note_thread(file_obj: dict) -> list:
+    """Mirror of client_endpoints._file_note_thread — folds legacy clientNote
+    into the first thread entry when noteThread is still empty."""
+    thread = file_obj.get('noteThread')
+    if isinstance(thread, list) and thread:
+        return list(thread)
+    legacy = file_obj.get('clientNote') or {}
+    if legacy.get('text'):
+        return [{
+            'id': legacy.get('id') or 'legacy-client-note',
+            'text': legacy.get('text'),
+            'authorId': legacy.get('authorId'),
+            'authorName': legacy.get('authorName') or 'Cliente',
+            'authorRole': legacy.get('authorRole') or 'client',
+            'createdAt': legacy.get('createdAt'),
+        }]
+    return []
+
+
+@api_router.post("/admin/client-documents/{document_id}/files/{file_id}/notes")
+async def add_file_note_admin(
+    document_id: str,
+    file_id: str,
+    request: FileNoteReplyRequest,
+    staff_payload: dict = Depends(verify_staff_token)
+):
+    """Append a staff reply to a file's note thread. Optionally emails the
+    client so they see the response in their inbox."""
+    try:
+        text = (request.text or '').strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
+        if len(text) > 1000:
+            raise HTTPException(status_code=400, detail="El mensaje no puede exceder 1000 caracteres")
+
+        document = select("visa_documents", filters={"id": document_id}, single=True)
+        if not document:
+            raise HTTPException(status_code=404, detail="Documento no encontrado")
+
+        files = document.get('files') or []
+        target = next((f for f in files if f.get('id') == file_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+        staff_row = select("staff", filters={"id": staff_payload['id']}, single=True)
+        author_name = staff_payload.get('name') or (staff_row or {}).get('name') or 'Equipo'
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        thread = _file_note_thread(target)
+        entry = {
+            'id': str(uuid.uuid4()),
+            'text': text,
+            'authorId': staff_payload['id'],
+            'authorName': author_name,
+            'authorRole': 'advisor',
+            'createdAt': now_iso,
+            'notifiedClient': bool(request.notifyClient),
+        }
+        thread.append(entry)
+        target['noteThread'] = thread
+
+        update("visa_documents", filters={"id": document_id}, data={'files': files})
+
+        case_id = document.get('case_id') or document.get('caseId')
+        doc_name_field = document.get('name') or document.get('document_name') or document.get('documentName')
+        doc_name = (doc_name_field.get('es') if isinstance(doc_name_field, dict) else str(doc_name_field or '')) or 'Documento'
+
+        if case_id:
+            await log_case_audit(
+                case_id=case_id,
+                action=f"Respuesta en archivo de '{doc_name}'",
+                action_type="client_document_file_note_added",
+                performed_by_id=staff_payload['id'],
+                performed_by_name=author_name,
+                performed_by_role=staff_payload.get('role', ''),
+                details={
+                    'documentId': document_id,
+                    'fileId': file_id,
+                    'noteId': entry['id'],
+                    'notifiedClient': entry['notifiedClient'],
+                },
+            )
+
+        if request.notifyClient and case_id:
+            try:
+                from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
+                case_row = select("visa_cases", filters={"id": case_id}, single=True)
+                client_id = (case_row or {}).get('client_id') or (case_row or {}).get('clientId')
+                client = select("clients", filters={"id": client_id}, columns="name,email", single=True) if client_id else None
+                if client and client.get('email'):
+                    import html as _htmllib
+                    subject = f"{author_name} respondió en {doc_name}"
+                    body = f"""
+                    <p>El equipo respondió a tu archivo <strong>{_htmllib.escape(target.get('fileName') or '')}</strong> en el documento <strong>{_htmllib.escape(doc_name)}</strong>:</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
+                      <tr>
+                        <td style="background:#EFF6FF;border-left:3px solid #2563EB;border-radius:8px;padding:16px;">
+                          <p style="margin:0 0 4px;font-size:12px;color:#1E40AF;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">{_htmllib.escape(author_name)}</p>
+                          <p style="margin:0;font-size:14px;color:#0F172A;white-space:pre-wrap;">{_htmllib.escape(text)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p>Ingresa al portal para ver el mensaje completo y responder.</p>
+                    """
+                    html_body = _email_wrapper(client.get('name', 'Cliente'), "Nueva respuesta del equipo", body, "Ver mi caso", f"{FRONTEND_URL}/dashboard/my-case")
+                    _send_email(client['email'], subject, html_body)
+            except Exception as notif_err:
+                logger.warning(f"Admin reply notification failed (non-critical): {notif_err}")
+
+        return {'success': True, 'note': entry, 'thread': thread}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Add file note (admin) error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add file note: {str(e)}")
 
 
 # ===== Stages Endpoints =====

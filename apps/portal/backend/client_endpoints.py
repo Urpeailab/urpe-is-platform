@@ -3,7 +3,7 @@ Client-facing endpoints for Pay As You Advance Visa™ system
 Allows clients to view their case, upload documents, and make payments (demo mode)
 """
 
-from fastapi import APIRouter, HTTPException, Depends, File, UploadFile
+from fastapi import APIRouter, HTTPException, Depends, File, UploadFile, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -44,6 +44,9 @@ class DocumentUploadRequest(BaseModel):
     fileSize: int
     notes: Optional[str] = None
 
+class FileNoteAddRequest(BaseModel):
+    text: str
+
 class PaymentCreateRequest(BaseModel):
     caseId: str
     stageNumber: int
@@ -53,6 +56,28 @@ class PaymentCreateRequest(BaseModel):
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
+
+def _file_note_thread(file_obj: dict) -> list:
+    """Return the conversation thread for a single uploaded file.
+
+    Folds the legacy single-shot `clientNote` into the first entry when the
+    array hasn't been initialized yet, so older uploads display in the new UI
+    without a backfill migration."""
+    thread = file_obj.get('noteThread')
+    if isinstance(thread, list) and thread:
+        return list(thread)
+    legacy = file_obj.get('clientNote') or {}
+    if legacy.get('text'):
+        return [{
+            'id': legacy.get('id') or 'legacy-client-note',
+            'text': legacy.get('text'),
+            'authorId': legacy.get('authorId'),
+            'authorName': legacy.get('authorName') or 'Cliente',
+            'authorRole': legacy.get('authorRole') or 'client',
+            'createdAt': legacy.get('createdAt'),
+        }]
+    return []
+
 
 async def get_client_case(db, user_id: str):
     """Get the active visa case for a client"""
@@ -130,11 +155,15 @@ def _sanitize_client_documents(documents):
 
 def _sanitize_client_deliverables(deliverables):
     """In-place: keep only client-visible note entries inside each file and
-    strip staff-private fields. Also normalizes the file-level files array."""
+    strip staff-private fields. Also normalizes the file-level files array.
+    Files con `published=False` se ocultan del cliente (son borradores internos)."""
     for d in deliverables or []:
         if not isinstance(d, dict):
             continue
-        files = d.get('files') or []
+        raw_files = d.get('files') or []
+        # Filtrar borradores antes de exponerlos al cliente. Si no hay flag,
+        # asumimos published=True (default histórico).
+        files = [f for f in raw_files if not (isinstance(f, dict) and f.get('published') is False)]
         file_url = d.get('file_url') or d.get('fileUrl')
         has_files = len(files) > 0 or (file_url and isinstance(file_url, str) and file_url.strip())
         if not has_files:
@@ -161,7 +190,8 @@ def _sanitize_client_deliverables(deliverables):
                 clean.pop('note', None)
                 clean.pop('notes', None)
             for k in ('uploadedBy', 'uploadedByName', 'noteUpdatedBy',
-                      'noteUpdatedAt', 'noteVisibleToClient', 'clientNotified'):
+                      'noteUpdatedAt', 'noteVisibleToClient', 'clientNotified',
+                      'published'):
                 clean.pop(k, None)
             sanitized_files.append(clean)
         d['files'] = sanitized_files
@@ -414,14 +444,25 @@ def setup_client_endpoints(db, verify_token):
     async def upload_document_by_id(
         document_id: str,
         file: UploadFile = File(...),
+        note: Optional[str] = Form(None),
         user_payload: dict = Depends(verify_token)
     ):
-        """Upload a file for a specific document requirement (Supabase)."""
+        """Upload a file for a specific document requirement (Supabase).
+
+        El cliente puede adjuntar una nota/observación que queda asociada al
+        archivo. La nota es inmutable (no se permite editarla desde el admin).
+        """
         try:
             from storage_service import upload_file as supabase_upload
             from db.supabase_client import select as sb_select, update as sb_update
 
             user_id = user_payload.get('id')
+            client_name = user_payload.get('name') or 'Cliente'
+            # Si el JWT no trae el nombre, intentar leerlo de clients
+            if client_name == 'Cliente':
+                cl = sb_select("clients", filters={"id": user_id}, columns="name", single=True)
+                if cl and cl.get('name'):
+                    client_name = cl['name']
 
             # Verify user has a case
             cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
@@ -449,14 +490,27 @@ def setup_client_endpoints(db, verify_token):
                 raise HTTPException(status_code=500, detail=f"Error uploading to storage: {result.get('error', 'Unknown error')}")
 
             # Build files array
+            note_text = (note or '').strip()
+            now_iso = datetime.now(timezone.utc).isoformat()
             new_file = {
                 'id': str(uuid.uuid4()),
                 'fileName': file.filename,
                 'fileUrl': result['fileUrl'],
                 'fileSize': len(file_content),
-                'uploadedAt': datetime.now(timezone.utc).isoformat(),
-                'uploadedBy': str(user_id)
+                'uploadedAt': now_iso,
+                'uploadedBy': str(user_id),
+                'uploadedByName': client_name,
+                'uploadedByRole': 'client',
             }
+            if note_text:
+                # Nota del cliente: inmutable. Guardamos quién la escribió y cuándo.
+                new_file['clientNote'] = {
+                    'text': note_text,
+                    'authorId': str(user_id),
+                    'authorName': client_name,
+                    'authorRole': 'client',
+                    'createdAt': now_iso,
+                }
             existing_files = doc.get('files') or []
             if not existing_files and doc.get('file_url'):
                 existing_files = [{'id': str(uuid.uuid4()), 'fileName': doc.get('file_name', 'archivo'), 'fileUrl': doc.get('file_url')}]
@@ -505,6 +559,11 @@ def setup_client_endpoints(db, verify_token):
 
                 if staff_to_notify:
                     subject = f"Nuevo documento: {user_name} subió {doc_name}"
+                    import html as _htmllib
+                    note_html = (
+                        f'<p style="margin:8px 0 0;padding:8px 10px;background:#FEF3C7;border-left:3px solid #F59E0B;border-radius:4px;font-size:13px;color:#78350F;"><strong>Nota del cliente:</strong> {_htmllib.escape(note_text)}</p>'
+                        if note_text else ''
+                    )
                     body = f"""
                     <p>El cliente <strong>{user_name}</strong> ha subido un documento a su caso:</p>
                     <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
@@ -513,6 +572,7 @@ def setup_client_endpoints(db, verify_token):
                           <p style="margin:0 0 4px;font-size:13px;color:#1E40AF;">Documento subido por el cliente</p>
                           <p style="margin:0;font-size:17px;font-weight:700;color:#0F172A;">{doc_name}</p>
                           <p style="margin:8px 0 0;font-size:13px;color:#64748B;">Archivo: {file.filename}</p>
+                          {note_html}
                         </td>
                       </tr>
                     </table>
@@ -541,6 +601,108 @@ def setup_client_endpoints(db, verify_token):
             logger.error(f"Error uploading document {document_id}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error al subir el documento: {str(e)}")
     
+    @client_router.post("/documents/{document_id}/files/{file_id}/notes")
+    async def add_file_note_client(
+        document_id: str,
+        file_id: str,
+        request: FileNoteAddRequest,
+        user_payload: dict = Depends(verify_token)
+    ):
+        """Append a client reply to a file's note thread. Notifies the
+        coordinator/advisor by email so they see the response in their inbox."""
+        try:
+            from db.supabase_client import select as sb_select, update as sb_update
+
+            text = (request.text or '').strip()
+            if not text:
+                raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
+            if len(text) > 1000:
+                raise HTTPException(status_code=400, detail="El mensaje no puede exceder 1000 caracteres")
+
+            user_id = user_payload.get('id')
+            client_name = user_payload.get('name') or 'Cliente'
+            if client_name == 'Cliente':
+                cl = sb_select("clients", filters={"id": user_id}, columns="name", single=True)
+                if cl and cl.get('name'):
+                    client_name = cl['name']
+
+            # Verify case ownership
+            cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+            case = next((c for c in cases if not c.get('is_master_case')), None)
+            if not case:
+                raise HTTPException(status_code=404, detail="No tienes un caso activo")
+
+            doc = sb_select("visa_documents", filters={"id": document_id}, single=True)
+            if not doc:
+                raise HTTPException(status_code=404, detail="Documento no encontrado")
+            if (doc.get('case_id') or doc.get('caseId')) != case.get('id'):
+                raise HTTPException(status_code=403, detail="No tienes acceso a este documento")
+
+            files = doc.get('files') or []
+            target = next((f for f in files if f.get('id') == file_id), None)
+            if not target:
+                raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            thread = _file_note_thread(target)
+            entry = {
+                'id': str(uuid.uuid4()),
+                'text': text,
+                'authorId': str(user_id),
+                'authorName': client_name,
+                'authorRole': 'client',
+                'createdAt': now_iso,
+            }
+            thread.append(entry)
+            target['noteThread'] = thread
+
+            sb_update("visa_documents", filters={"id": document_id}, data={'files': files})
+
+            # Notify coordinator + advisor
+            try:
+                from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
+                coord_id = case.get('coordinator_id') or case.get('coordinatorId')
+                advisor_id = case.get('advisor_id') or case.get('advisorId')
+                staff_to_notify = []
+                if coord_id:
+                    coord = sb_select("staff", filters={"id": coord_id}, columns="name,email", single=True)
+                    if coord and coord.get('email'):
+                        staff_to_notify.append(coord)
+                if advisor_id and advisor_id != coord_id:
+                    advisor = sb_select("staff", filters={"id": advisor_id}, columns="name,email", single=True)
+                    if advisor and advisor.get('email'):
+                        staff_to_notify.append(advisor)
+
+                if staff_to_notify:
+                    doc_name_field = doc.get('name')
+                    doc_name = (doc_name_field.get('es') if isinstance(doc_name_field, dict) else str(doc_name_field or '')) or doc.get('document_name') or 'Documento'
+                    case_id = case.get('id')
+                    subject = f"Respuesta del cliente: {client_name} en {doc_name}"
+                    import html as _htmllib
+                    body = f"""
+                    <p>El cliente <strong>{client_name}</strong> respondió en el hilo del archivo <strong>{_htmllib.escape(target.get('fileName') or '')}</strong> ({doc_name}):</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
+                      <tr>
+                        <td style="background:#FEF3C7;border-left:3px solid #F59E0B;border-radius:8px;padding:16px;">
+                          <p style="margin:0;font-size:14px;color:#78350F;white-space:pre-wrap;">{_htmllib.escape(text)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p>Ingresa al panel para revisar y responder.</p>
+                    """
+                    for staff_member in staff_to_notify:
+                        html_body = _email_wrapper(staff_member.get('name', 'Equipo'), "Respuesta del cliente", body, "Ver caso", f"{FRONTEND_URL}/admin/visa-cases/{case_id}")
+                        _send_email(staff_member['email'], subject, html_body)
+            except Exception as notif_err:
+                logger.warning(f"Client reply notification failed (non-critical): {notif_err}")
+
+            return {'success': True, 'note': entry, 'thread': thread}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Add file note (client) error: {e}")
+            raise HTTPException(status_code=500, detail=f"Error al guardar la nota: {str(e)}")
+
     @client_router.delete("/documents/{document_id}/files/{file_id}")
     async def delete_document_file(
         document_id: str,
@@ -1039,17 +1201,19 @@ def setup_client_endpoints(db, verify_token):
 
     @client_router.get("/book/preparation")
     async def get_book_preparation(user_payload: dict = Depends(verify_token)):
-        """Get current book preparation state for the client's case"""
-        user_id = user_payload.get('id') or user_payload.get('_id')
-        case = await get_client_case(db, user_id)
-        if not case:
-            raise HTTPException(status_code=404, detail="No active visa case found")
-        case_id = case.get('id') or case.get('_id')
+        """Get current book preparation state for the client's case.
 
-        prep = await db.book_preparations.find_one(
-            {"caseId": case_id},
-            {"_id": 0}
-        )
+        Called on every StageDetailPage open by the client portal, so it must
+        return quickly without 500-ing when there's no preparation yet."""
+        from db.supabase_client import select as sb_select
+
+        user_id = user_payload.get('id') or user_payload.get('_id')
+        cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+        case = next((c for c in (cases or []) if not c.get('is_master_case')), None)
+        if not case:
+            return {"preparation": None}
+
+        prep = sb_select("book_preparations", filters={"case_id": case.get('id')}, single=True)
         return {"preparation": prep}
 
     @client_router.post("/book/suggest-ideas")
@@ -1906,6 +2070,11 @@ Solo proporciona los 3 titulos numerados, nada mas."""
 
                 if sel.fileId:
                     files_arr = [f for f in files_arr if isinstance(f, dict) and f.get('id') == sel.fileId]
+
+                # Excluir borradores (published=False). Sólo aplica a entregables —
+                # los documentos requeridos los sube el cliente, no tienen este flag.
+                if sel.type == 'deliverable':
+                    files_arr = [f for f in files_arr if not (isinstance(f, dict) and f.get('published') is False)]
 
                 folder = f"Etapa {stage_num_int} - {parent_label}"
                 for f in files_arr:

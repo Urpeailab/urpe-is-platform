@@ -20,10 +20,10 @@ import logging
 import asyncio
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, BackgroundTasks, Header
 from fastapi.responses import StreamingResponse
 import json as _json
 
@@ -39,6 +39,8 @@ from permissions_system import has_permission
 from learning.config import (
     LEARNING_BUCKET,
     MAX_UPLOAD_SIZE_BYTES,
+    LEARNING_USE_ELEVENLABS,
+    RAG_LOOKUP_SECRET,
 )
 from learning.ingest import ingest_document
 from learning.extract import extract_text
@@ -50,9 +52,9 @@ from learning.llm import (
     build_module_system_prompt,
     build_rag_user_message,
     build_conversational_system_prompt,
-    is_conversational_message,
 )
 from learning.liveavatar import create_avatar_session, get_avatar_config
+from learning.elevenlabs import create_connector_session, build_dynamic_variables
 from learning.transcribe import transcribe_audio
 
 logger = logging.getLogger(__name__)
@@ -94,6 +96,31 @@ class SessionMessage(BaseModel):
     recent_messages: Optional[List[dict]] = None
 
 
+class AgentRagLookupRequest(BaseModel):
+    """Payload del tool `search_module_knowledge` que el agent de ElevenLabs
+    invoca cuando necesita info del módulo. El agent rellena estos campos a
+    partir de las dynamic_variables que le pasamos al iniciar la sesión."""
+    query: str
+    module_id: Optional[str] = None
+    top_k: Optional[int] = None  # default = RETRIEVAL_TOP_K en config
+
+
+class SessionEventLog(BaseModel):
+    """Eventos que el frontend captura del data channel de LiveKit y nos
+    reenvía para que persistamos transcripciones + estados de la sesión.
+
+    `kind` espejea (casi) los tipos de eventos del Connector:
+      - user_transcript          → mensaje del usuario completo
+      - agent_response           → mensaje del avatar completo
+      - session_stopped          → la sesión terminó del lado del agent
+    El `payload` queda como JSON crudo en metadata por si hay info útil
+    (tool_call_id, agent_text correction, etc.).
+    """
+    kind: str
+    text: Optional[str] = None
+    payload: Optional[dict] = None
+
+
 # ===================== Helpers =====================
 
 def _require_role_perm(staff_payload: dict, perm: str):
@@ -129,6 +156,55 @@ def _ensure_bucket_exists():
             logger.info(f"[learning] created bucket {LEARNING_BUCKET}")
         except Exception as e:
             logger.warning(f"[learning] could not ensure bucket: {e}")
+
+
+# ===================== Idle / orphan sweeper =====================
+
+# Una sesión "active" sin actividad por más de este tiempo se considera
+# huérfana (el usuario cerró el browser, perdió la red, etc.). El audit
+# muestra el `effective_status` derivado, y el cleanup-orphans endpoint
+# marca el status real en BD.
+SESSION_IDLE_THRESHOLD = timedelta(hours=2)
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _is_session_orphan(session: dict) -> bool:
+    """True si la sesión está 'active' pero idle por más del threshold."""
+    if (session or {}).get("status") != "active":
+        return False
+    ref = _parse_iso(session.get("last_activity_at")) or _parse_iso(session.get("started_at"))
+    if not ref:
+        return False
+    return datetime.now(timezone.utc) - ref > SESSION_IDLE_THRESHOLD
+
+
+def _effective_session_status(session: dict) -> str:
+    """Status derivado: si está 'active' pero idle, mostramos 'abandoned'."""
+    raw = (session or {}).get("status") or "active"
+    if raw == "active" and _is_session_orphan(session):
+        return "abandoned"
+    return raw
+
+
+def _touch_session_activity(session_id: str):
+    """Actualizar last_activity_at de la sesión. Silencia errores para no
+    romper el flujo principal si la columna no existe aún (migración 018)."""
+    try:
+        sb_update(
+            "learning_sessions",
+            filters={"id": session_id},
+            data={"last_activity_at": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception:
+        logger.exception("[learning] could not touch last_activity_at")
 
 
 # ===================== Router setup =====================
@@ -485,7 +561,95 @@ def setup_learning_router(db, verify_staff_token):
             order_desc=True,
             limit=limit,
         )
+        # Anotamos effective_status para que el UI muestre sesiones idle como
+        # 'abandoned' sin necesidad de correr el sweeper.
+        for s in sessions:
+            s["effective_status"] = _effective_session_status(s)
         return {"success": True, "sessions": sessions}
+
+    @router.delete("/admin/learning/sessions/{session_id}")
+    async def delete_session(
+        session_id: str,
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """Hard delete de una sesión + sus mensajes + evaluación.
+
+        Sólo para compliance/GDPR. La acción es irreversible.
+        """
+        _require_role_perm(staff_payload, "view_learning_sessions")
+        # Cascade manual (las FKs originales no tenían ON DELETE CASCADE)
+        try:
+            delete("learning_messages", filters={"session_id": session_id})
+            delete("learning_evaluations", filters={"session_id": session_id})
+            delete("learning_sessions", filters={"id": session_id})
+        except Exception as e:
+            logger.exception(f"[learning] delete session {session_id} failed")
+            raise HTTPException(status_code=500, detail=f"No se pudo eliminar: {e}")
+        return {"success": True, "session_id": session_id}
+
+    class _RedactRequest(BaseModel):
+        reason: Optional[str] = None
+
+    @router.post("/admin/learning/messages/{message_id}/redact")
+    async def redact_message(
+        message_id: str,
+        request: _RedactRequest,
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """Marca un mensaje como redactado (GDPR). El contenido se reemplaza por
+        un placeholder pero la fila se conserva para que el audit no quede roto."""
+        _require_role_perm(staff_payload, "view_learning_sessions")
+        msg = select("learning_messages", filters={"id": message_id}, single=True)
+        if not msg:
+            raise HTTPException(status_code=404, detail="Mensaje no encontrado")
+        try:
+            sb_update(
+                "learning_messages",
+                filters={"id": message_id},
+                data={
+                    "content": "[contenido redactado por compliance]",
+                    "redacted_at": datetime.now(timezone.utc).isoformat(),
+                    "redacted_by": staff_payload.get("id"),
+                    "redaction_reason": (request.reason or "").strip() or None,
+                },
+            )
+        except Exception as e:
+            logger.exception(f"[learning] redact message {message_id} failed")
+            raise HTTPException(status_code=500, detail=f"No se pudo redactar: {e}")
+        return {"success": True, "message_id": message_id}
+
+    @router.post("/admin/learning/sessions/cleanup-orphans")
+    async def cleanup_orphan_sessions(
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """Marca como 'abandoned' las sesiones 'active' sin actividad reciente."""
+        _require_role_perm(staff_payload, "view_learning_sessions")
+        active = select(
+            "learning_sessions",
+            filters={"status": "active"},
+            limit=1000,
+        )
+        now = datetime.now(timezone.utc)
+        updated = 0
+        for s in active:
+            if not _is_session_orphan(s):
+                continue
+            ref = _parse_iso(s.get("last_activity_at")) or _parse_iso(s.get("started_at")) or now
+            started = _parse_iso(s.get("started_at")) or ref
+            try:
+                sb_update(
+                    "learning_sessions",
+                    filters={"id": s["id"]},
+                    data={
+                        "status": "abandoned",
+                        "ended_at": ref.isoformat(),
+                        "duration_seconds": max(0, int((ref - started).total_seconds())),
+                    },
+                )
+                updated += 1
+            except Exception:
+                logger.exception(f"[learning] could not abandon session {s.get('id')}")
+        return {"success": True, "abandoned": updated, "scanned": len(active)}
 
     @router.get("/admin/learning/sessions/{session_id}")
     async def get_session_detail(
@@ -573,15 +737,25 @@ def setup_learning_router(db, verify_staff_token):
             avatar_session = None
             avatar_error = None
             try:
-                avatar_session = create_avatar_session(module)
+                if LEARNING_USE_ELEVENLABS:
+                    dyn_vars = build_dynamic_variables(module, staff_payload)
+                    avatar_session = create_connector_session(
+                        module=module, dynamic_variables=dyn_vars
+                    )
+                else:
+                    avatar_session = create_avatar_session(module)
             except Exception as e:
                 avatar_error = str(e)
-                logger.warning(f"[learning] LiveAvatar session error (returning session anyway): {e}")
+                logger.warning(f"[learning] avatar session error (returning session anyway): {e}")
 
             avatar = get_avatar_config()
 
+            # Con el Connector, ElevenLabs es quien dice el first_message del
+            # agent (configurado en su UI con dynamic variables). NO disparamos
+            # nuestro propio "opening" via OpenRouter — sería redundante y haría
+            # que el avatar diga dos saludos seguidos.
             opening_text = None
-            if module and module.get("mode") == "guided":
+            if not LEARNING_USE_ELEVENLABS and module and module.get("mode") == "guided":
                 try:
                     opening = chat(
                         [
@@ -650,26 +824,24 @@ def setup_learning_router(db, verify_staff_token):
                     "learning_messages",
                     {"session_id": session_id, "role": "user", "content": user_text},
                 )
+                _touch_session_activity(session_id)
             except Exception as e:
                 logger.exception("[learning] insert user message failed")
                 raise HTTPException(status_code=500, detail=f"DB insert user msg: {e}")
 
             module_id = session.get("module_id")
 
-            # Paso 1: detectar intención. Saludos, agradecimientos y preguntas sobre
-            # el avatar NO deben disparar RAG ni el corto-circuito de "sin información".
-            conversational = is_conversational_message(user_text)
-            logger.info(
-                f"[learning.intent] session={session_id} conversational={conversational} "
-                f"text={user_text[:80]!r}"
-            )
-
+            # Siempre intentamos RAG si hay módulo; el LLM decide qué hacer con el
+            # resultado (incluso si está vacío) según el prompt construido en
+            # build_rag_user_message. Antes había una heurística regex para detectar
+            # "saludos" y un cortocircuito canned "no encontré información" que rompía
+            # conversaciones naturales y follow-ups.
             chunks = []
             context = ""
             retrieval_failed = False
-            rag_skipped = conversational
+            rag_skipped = not module_id  # sin módulo = conversación libre
 
-            if not conversational:
+            if module_id:
                 try:
                     chunks = retrieve(user_text, module_id=module_id)
                     context = format_context(chunks)
@@ -677,62 +849,53 @@ def setup_learning_router(db, verify_staff_token):
                     logger.exception("[learning] RAG retrieval failed (continuing without context)")
                     retrieval_failed = True
 
-            # Cortocircuito: solo aplica a consultas técnicas que no encontraron nada.
-            # Para mensajes conversacionales nunca cortamos — dejamos que el LLM
-            # responda con el system prompt conversacional.
-            short_circuited = False
-            if not conversational and not chunks and not retrieval_failed:
-                assistant_text = (
-                    "No encontré información sobre eso en la base de conocimiento. "
-                    "Te recomiendo consultarlo con tu líder."
+            short_circuited = False  # ya no se usa el cortocircuito
+
+            try:
+                messages_db = select(
+                    "learning_messages",
+                    filters={"session_id": session_id},
+                    order="created_at",
+                    order_desc=False,
                 )
-                short_circuited = True
-                result = {"text": assistant_text, "tokens_input": None, "tokens_output": None}
+            except Exception as e:
+                logger.exception("[learning] select messages failed")
+                raise HTTPException(status_code=500, detail=f"DB select messages: {e}")
+
+            # System prompt: el persistido si existe, sino el del módulo, sino conversacional puro.
+            persisted_system = next((m for m in messages_db if m.get("role") == "system"), None)
+            if persisted_system and persisted_system.get("content"):
+                system_content = persisted_system["content"]
+            elif module_id:
+                mod_lookup = select("learning_modules", filters={"id": module_id}, single=True)
+                system_content = build_module_system_prompt(mod_lookup or {})
             else:
-                try:
-                    messages_db = select(
-                        "learning_messages",
-                        filters={"session_id": session_id},
-                        order="created_at",
-                        order_desc=False,
+                system_content = build_conversational_system_prompt()
+
+            recent = [m for m in messages_db if m.get("role") in ("user", "assistant")][-10:]
+
+            llm_messages = [{"role": "system", "content": system_content}]
+            for i, m in enumerate(recent):
+                if i == len(recent) - 1 and m.get("role") == "user" and module_id:
+                    # En el último turno inyectamos el contexto RAG (puede estar vacío).
+                    llm_messages.append(
+                        {"role": "user", "content": build_rag_user_message(m["content"], context)}
                     )
-                except Exception as e:
-                    logger.exception("[learning] select messages failed")
-                    raise HTTPException(status_code=500, detail=f"DB select messages: {e}")
-
-                # Para conversacional usamos un system prompt suave (sin grounding estricto)
-                # solo en este turno; el system message persistido sigue intacto para
-                # los próximos turnos técnicos.
-                if conversational:
-                    system_content = build_conversational_system_prompt()
                 else:
-                    persisted_system = next((m for m in messages_db if m.get("role") == "system"), None)
-                    system_content = (persisted_system or {}).get("content") or build_module_system_prompt({})
+                    llm_messages.append({"role": m["role"], "content": m["content"]})
 
-                recent = [m for m in messages_db if m.get("role") in ("user", "assistant")][-10:]
+            model = None
+            if module_id:
+                mod = select("learning_modules", filters={"id": module_id}, single=True)
+                model = (mod or {}).get("llm_model")
 
-                llm_messages = [{"role": "system", "content": system_content}]
-                for i, m in enumerate(recent):
-                    if i == len(recent) - 1 and m.get("role") == "user" and not conversational:
-                        # Solo inyectamos contexto RAG en consultas técnicas.
-                        llm_messages.append(
-                            {"role": "user", "content": build_rag_user_message(m["content"], context)}
-                        )
-                    else:
-                        llm_messages.append({"role": m["role"], "content": m["content"]})
+            try:
+                result = chat(llm_messages, model=model)
+            except Exception as e:
+                logger.exception("[learning] LLM chat failed")
+                raise HTTPException(status_code=502, detail=f"Error del modelo (OpenRouter): {e}")
 
-                model = None
-                if module_id:
-                    mod = select("learning_modules", filters={"id": module_id}, single=True)
-                    model = (mod or {}).get("llm_model")
-
-                try:
-                    result = chat(llm_messages, model=model)
-                except Exception as e:
-                    logger.exception("[learning] LLM chat failed")
-                    raise HTTPException(status_code=502, detail=f"Error del modelo (OpenRouter): {e}")
-
-                assistant_text = result.get("text", "")
+            assistant_text = result.get("text", "")
 
             chunk_ids = [c.get("id") for c in chunks]
 
@@ -805,32 +968,23 @@ def setup_learning_router(db, verify_staff_token):
             "learning_messages",
             {"session_id": session_id, "role": "user", "content": user_text},
         )
+        background_tasks.add_task(_touch_session_activity, session_id)
 
         module_id = session.get("module_id")
-        conversational = is_conversational_message(user_text)
-        logger.info(
-            f"[learning.intent] session={session_id} conversational={conversational} "
-            f"text={user_text[:80]!r}"
-        )
 
+        # Siempre intentamos RAG si hay módulo. El LLM ahora maneja contextos vacíos
+        # con gracia (saludos, follow-ups, off-topic) via build_rag_user_message,
+        # así que se eliminaron la heurística regex y el cortocircuito canned.
         chunks = []
         context = ""
         retrieval_failed = False
-        if not conversational:
+        if module_id:
             try:
                 chunks = retrieve(user_text, module_id=module_id)
                 context = format_context(chunks)
             except Exception:
                 logger.exception("[learning] RAG retrieval failed")
                 retrieval_failed = True
-
-        # Pre-armar la respuesta canned para casos sin RAG
-        canned_text = None
-        if not conversational and not chunks and not retrieval_failed:
-            canned_text = (
-                "No encontré información sobre eso en la base de conocimiento. "
-                "Te recomiendo consultarlo con tu líder."
-            )
 
         # Construcción del system prompt — cargamos el módulo una sola vez
         # y lo reusamos para system prompt + selección de modelo.
@@ -841,10 +995,10 @@ def setup_learning_router(db, verify_staff_token):
             except Exception:
                 mod = None
 
-        if conversational:
-            system_content = build_conversational_system_prompt()
+        if module_id and mod:
+            system_content = build_module_system_prompt(mod)
         else:
-            system_content = build_module_system_prompt(mod or {})
+            system_content = build_conversational_system_prompt()
 
         # Recent messages: si el cliente nos los manda evitamos el query a BD
         # (ahorra ~150-300ms). Si no, fallback al query.
@@ -870,7 +1024,9 @@ def setup_learning_router(db, verify_staff_token):
 
         llm_messages = [{"role": "system", "content": system_content}]
         for i, m in enumerate(recent):
-            if i == len(recent) - 1 and m.get("role") == "user" and not conversational:
+            if i == len(recent) - 1 and m.get("role") == "user" and module_id:
+                # En el último turno con módulo, inyectamos el contexto RAG
+                # (vacío o no — el prompt builder maneja ambos casos).
                 llm_messages.append(
                     {"role": "user", "content": build_rag_user_message(m["content"], context)}
                 )
@@ -897,31 +1053,38 @@ def setup_learning_router(db, verify_staff_token):
             # Evento meta: el frontend ya puede mostrar fuentes RAG
             yield fmt({
                 "type": "meta",
-                "rag_skipped": conversational,
+                "rag_skipped": not module_id,
                 "retrieved_chunks": retrieved_chunks_payload,
             })
 
             full_text = ""
+            stream_usage = {"tokens_input": None, "tokens_output": None}
 
-            if canned_text is not None:
-                # Cortocircuito: no llamamos al LLM, mandamos el canned como un solo bloque
-                full_text = canned_text
-                yield fmt({"type": "token", "text": canned_text})
-            else:
-                try:
-                    for delta in chat_stream(llm_messages, model=model):
-                        full_text += delta
-                        yield fmt({"type": "token", "text": delta})
-                except Exception as e:
-                    logger.exception("[learning] LLM stream failed")
-                    yield fmt({"type": "error", "detail": f"Error del modelo: {e}"})
-                    return
+            # Iteramos manualmente para capturar el `usage` que el generator
+            # devuelve via StopIteration.value (último chunk de OpenRouter).
+            gen = chat_stream(llm_messages, model=model)
+            try:
+                while True:
+                    try:
+                        delta = next(gen)
+                    except StopIteration as stop:
+                        if isinstance(stop.value, dict):
+                            stream_usage = stop.value
+                        break
+                    full_text += delta
+                    yield fmt({"type": "token", "text": delta})
+            except Exception as e:
+                logger.exception("[learning] LLM stream failed")
+                yield fmt({"type": "error", "detail": f"Error del modelo: {e}"})
+                return
 
             # Mandamos 'done' ANTES de insertar — el cliente ya tiene la
             # respuesta completa, no tiene que esperar a la BD.
             yield fmt({"type": "done", "text": full_text})
 
-            # Persistir respuesta (no bloqueante para el usuario, ya recibió 'done')
+            # Persistir respuesta + tokens (antes el endpoint de streaming no
+            # guardaba tokens, dejando el costo de la mayoría de sesiones
+            # invisible en el audit).
             try:
                 insert(
                     "learning_messages",
@@ -930,6 +1093,8 @@ def setup_learning_router(db, verify_staff_token):
                         "role": "assistant",
                         "content": full_text,
                         "retrieved_chunk_ids": chunk_ids,
+                        "tokens_input": stream_usage.get("tokens_input"),
+                        "tokens_output": stream_usage.get("tokens_output"),
                     },
                 )
             except Exception:
@@ -1003,7 +1168,13 @@ def setup_learning_router(db, verify_staff_token):
             module = select("learning_modules", filters={"id": session["module_id"]}, single=True)
 
         try:
-            avatar_session = create_avatar_session(module)
+            if LEARNING_USE_ELEVENLABS:
+                dyn_vars = build_dynamic_variables(module, staff_payload)
+                avatar_session = create_connector_session(
+                    module=module, dynamic_variables=dyn_vars
+                )
+            else:
+                avatar_session = create_avatar_session(module)
         except Exception as e:
             logger.exception("[learning] resume_avatar failed")
             raise HTTPException(status_code=502, detail=f"No se pudo reanudar el avatar: {e}")
@@ -1051,6 +1222,69 @@ def setup_learning_router(db, verify_staff_token):
 
         return {"success": True, "session_id": session_id, "evaluation": evaluation_row}
 
+    @router.post("/learning/sessions/{session_id}/event")
+    async def log_session_event(
+        session_id: str,
+        event: SessionEventLog,
+        staff_payload: dict = Depends(verify_staff_token),
+    ):
+        """Persistir un evento que el frontend captó del data channel del Connector.
+
+        Con el flujo legacy todos los mensajes los insertaba el backend porque
+        el LLM corría acá. Con el Connector, ElevenLabs emite las transcripciones
+        directamente en el data channel de LiveKit y el frontend nos las
+        reenvía aquí para mantener `learning_messages` actualizado (auditoría +
+        evaluación al final de sesión).
+        """
+        _require_role_perm(staff_payload, "consume_learning")
+
+        session = select("learning_sessions", filters={"id": session_id}, single=True)
+        if not session:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+        if session.get("staff_id") != staff_payload.get("id"):
+            raise HTTPException(status_code=403, detail="No es tu sesión")
+
+        kind = (event.kind or "").strip()
+        text = (event.text or "").strip()
+
+        if kind == "user_transcript" and text:
+            try:
+                insert(
+                    "learning_messages",
+                    {"session_id": session_id, "role": "user", "content": text},
+                )
+                _touch_session_activity(session_id)
+            except Exception:
+                logger.exception("[learning.agent] insert user transcript failed")
+        elif kind == "agent_response" and text:
+            try:
+                insert(
+                    "learning_messages",
+                    {"session_id": session_id, "role": "assistant", "content": text},
+                )
+                _touch_session_activity(session_id)
+            except Exception:
+                logger.exception("[learning.agent] insert agent response failed")
+        elif kind == "session_stopped":
+            # El agent terminó del lado del Connector (hang up). Marcamos la
+            # sesión como completed acá; el cliente igual va a llamar /end
+            # para disparar la evaluación.
+            try:
+                sb_update(
+                    "learning_sessions",
+                    {"id": session_id},
+                    {
+                        "status": "completed",
+                        "ended_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception:
+                logger.exception("[learning.agent] mark session stopped failed")
+        else:
+            logger.info(f"[learning.agent] event ignored kind={kind!r} text_len={len(text)}")
+
+        return {"success": True}
+
     @router.get("/learning/sessions/me")
     async def my_sessions(staff_payload: dict = Depends(verify_staff_token)):
         _require_role_perm(staff_payload, "consume_learning")
@@ -1062,6 +1296,60 @@ def setup_learning_router(db, verify_staff_token):
             limit=50,
         )
         return {"success": True, "sessions": sessions}
+
+    # =====================================================================
+    # PUBLIC TOOL ENDPOINT — invocado por el Agent de ElevenLabs
+    # =====================================================================
+    # No usa verify_staff_token porque quien llama es ElevenLabs, no un user.
+    # La única defensa es el bearer secret compartido (RAG_LOOKUP_SECRET) que
+    # configuramos en el tool de ElevenLabs como custom header.
+    @router.post("/learning/agent/rag_lookup")
+    async def agent_rag_lookup(
+        request: AgentRagLookupRequest,
+        authorization: Optional[str] = Header(None),
+    ):
+        if not RAG_LOOKUP_SECRET:
+            # Si la env no está seteada, NO aceptamos llamadas — preferimos
+            # romper en seguro a aceptar cualquiera.
+            raise HTTPException(status_code=503, detail="RAG lookup deshabilitado (RAG_LOOKUP_SECRET no configurado)")
+
+        expected = f"Bearer {RAG_LOOKUP_SECRET}"
+        if authorization != expected:
+            logger.warning("[learning.agent] rag_lookup: bearer mismatch")
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+        query = (request.query or "").strip()
+        if not query:
+            return {"chunks": [], "context": "", "note": "Query vacía"}
+
+        try:
+            chunks = retrieve(query, module_id=request.module_id, top_k=request.top_k or 3)
+            context = format_context(chunks)
+        except Exception as e:
+            logger.exception("[learning.agent] rag_lookup retrieval failed")
+            raise HTTPException(status_code=500, detail=f"Retrieval error: {e}")
+
+        payload_chunks = [
+            {
+                "content": c.get("content"),
+                "source": (c.get("metadata") or {}).get("source_filename") or "documento",
+                "similarity": round(c.get("similarity") or 0, 3),
+            }
+            for c in chunks
+        ]
+
+        return {
+            "chunks": payload_chunks,
+            "context": context,
+            "count": len(payload_chunks),
+            "note": (
+                "No hay resultados. Decile al usuario literalmente que no tenés esa "
+                "información en el material del módulo y que consulte con su líder."
+                if not chunks
+                else "Usá EXACTAMENTE los términos, criterios y pasos que aparecen en `context`. "
+                "No los parafrasees a conceptos genéricos."
+            ),
+        }
 
     return router
 
@@ -1115,6 +1403,27 @@ def _generate_evaluation(session_id: str, module: dict, staff_id: str) -> Option
     if not result:
         return None
 
+    # Snapshot inmutable: guardamos el TEXTO de cada objetivo al momento de la
+    # evaluación. Si después el admin edita los objetivos del módulo, esta
+    # evaluación sigue siendo legible — no quedan IDs huérfanos.
+    objectives_snapshot = [
+        {"id": o.get("id"), "text": o.get("text")}
+        for o in objectives
+    ]
+
+    # Mezclamos el texto del objetivo dentro de cada item de objectives_covered
+    # para que el frontend pueda renderizar todo sin un join contra el módulo.
+    covered_raw = result.get("objectives_covered") or []
+    text_by_id = {o.get("id"): o.get("text") for o in objectives}
+    covered_enriched = []
+    for item in covered_raw:
+        if not isinstance(item, dict):
+            continue
+        covered_enriched.append({
+            **item,
+            "text": text_by_id.get(item.get("id")) or item.get("text"),
+        })
+
     row = insert(
         "learning_evaluations",
         {
@@ -1122,7 +1431,8 @@ def _generate_evaluation(session_id: str, module: dict, staff_id: str) -> Option
             "module_id": module.get("id"),
             "staff_id": staff_id,
             "score": result.get("score"),
-            "objectives_covered": result.get("objectives_covered") or [],
+            "objectives_covered": covered_enriched,
+            "objectives_snapshot": objectives_snapshot,
             "feedback": result.get("feedback"),
             "raw_response": result,
         },

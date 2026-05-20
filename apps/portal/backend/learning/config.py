@@ -37,6 +37,31 @@ LIVEAVATAR_BASE_URL = os.environ.get(
 LIVEAVATAR_MODE = os.environ.get("LIVEAVATAR_MODE", "FULL")  # FULL o LITE
 LIVEAVATAR_SANDBOX = os.environ.get("LIVEAVATAR_SANDBOX", "false").lower() in ("1", "true", "yes")
 
+# ===== ElevenLabs Conversational AI (Connector path) =====
+# Si LEARNING_USE_ELEVENLABS=true, las sesiones de aprendizaje se crean usando
+# el Connector de LiveAvatar: ElevenLabs maneja STT+LLM+TTS, LiveAvatar
+# renderiza el video del avatar, y nuestro RAG queda expuesto como un tool HTTP
+# que el agent llama cuando necesita info del módulo.
+#
+# Si está en false (default), seguimos usando el flujo legacy FULL/LITE donde
+# nosotros orquestamos STT (Whisper) + LLM (OpenRouter) + buffering manual.
+LEARNING_USE_ELEVENLABS = os.environ.get("LEARNING_USE_ELEVENLABS", "false").lower() in ("1", "true", "yes")
+
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
+ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID")
+# secret_id que devuelve LiveAvatar después de registrar la API key de ElevenLabs
+# vía POST /v1/secrets. Lo guardamos en env para no re-registrar la key cada vez
+# que el backend arranca (los secrets en LiveAvatar son inmutables por ID).
+# Si no está seteado y LEARNING_USE_ELEVENLABS=true, el helper register_elevenlabs_secret()
+# lo crea on-demand y loguea el ID para que lo guardes en .env.
+LIVEAVATAR_ELEVENLABS_SECRET_ID = os.environ.get("LIVEAVATAR_ELEVENLABS_SECRET_ID")
+
+# Bearer secret que el Agent de ElevenLabs incluye en el header
+# `Authorization: Bearer <RAG_LOOKUP_SECRET>` al llamar a nuestro endpoint
+# /api/learning/agent/rag_lookup. Es la única defensa del endpoint público.
+# Generalo con: python -c "import secrets; print(secrets.token_urlsafe(32))"
+RAG_LOOKUP_SECRET = os.environ.get("RAG_LOOKUP_SECRET")
+
 # Supabase storage bucket for documents
 LEARNING_BUCKET = "learning-documents"
 
