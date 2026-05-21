@@ -137,6 +137,12 @@ export const VisaCaseDetailRedesign = () => {
   const [fileReplyNotify, setFileReplyNotify] = useState(false);
   const [sendingFileReply, setSendingFileReply] = useState(false);
 
+  // Per-file conversation thread reply state (deliverables — admin replies to client)
+  const [replyingDeliverableFileNote, setReplyingDeliverableFileNote] = useState(null); // { deliverableId, fileId }
+  const [delFileReplyDraft, setDelFileReplyDraft] = useState('');
+  const [delFileReplyNotify, setDelFileReplyNotify] = useState(false);
+  const [sendingDelFileReply, setSendingDelFileReply] = useState(false);
+
   // ZIP download selection state for the Documentos tab.
   // Map keyed by `${type}::${itemId}::${fileId}` → true.
   const [zipSelection, setZipSelection] = useState({});
@@ -1931,6 +1937,59 @@ export const VisaCaseDetailRedesign = () => {
       toast.error(error.response?.data?.detail || 'No se pudo enviar la respuesta');
     } finally {
       setSendingFileReply(false);
+    }
+  };
+
+  // Bidirectional thread on deliverable files. Legacy `noteEntries` are folded
+  // in as staff entries so old uploads display alongside replies.
+  const buildDeliverableThread = (file) => {
+    if (Array.isArray(file?.noteThread) && file.noteThread.length > 0) {
+      return file.noteThread;
+    }
+    if (Array.isArray(file?.noteEntries) && file.noteEntries.length > 0) {
+      return file.noteEntries
+        .filter((e) => e?.text)
+        .map((e) => ({
+          id: e.id || `legacy-${Math.random()}`,
+          text: e.text,
+          authorId: e.createdBy || e.authorId,
+          authorName: e.createdByName || e.authorName || 'Equipo',
+          authorRole: e.authorRole || 'advisor',
+          createdAt: e.createdAt,
+        }));
+    }
+    const legacyText = file?.note || file?.notes || '';
+    if (legacyText) {
+      return [{
+        id: 'legacy',
+        text: legacyText,
+        authorName: file?.uploadedByName || 'Equipo',
+        authorRole: 'advisor',
+        createdAt: file?.noteUpdatedAt || file?.uploadedAt,
+      }];
+    }
+    return [];
+  };
+
+  const handleSendDelFileReply = async (deliverableId, fileId) => {
+    const text = delFileReplyDraft.trim();
+    if (!text) return;
+    setSendingDelFileReply(true);
+    try {
+      await axios.post(
+        `${BACKEND_URL}/api/admin/deliverables/${deliverableId}/files/${fileId}/replies`,
+        { text, notifyClient: delFileReplyNotify },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success(delFileReplyNotify ? 'Respuesta enviada y notificada al cliente' : 'Respuesta enviada');
+      setReplyingDeliverableFileNote(null);
+      setDelFileReplyDraft('');
+      setDelFileReplyNotify(false);
+      fetchCaseData();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo enviar la respuesta');
+    } finally {
+      setSendingDelFileReply(false);
     }
   };
 
@@ -3912,12 +3971,104 @@ export const VisaCaseDetailRedesign = () => {
                                                 )}
                                               </div>
                                             )}
-                                            {renderNotesThread({
-                                              threadKey: `del-${del.id}-file-${fileId}`,
-                                              notes: file.noteEntries,
-                                              onAdd: () => handleOpenFileNoteEditor(del.id, file),
-                                              onDelete: (noteId) => handleDeleteFileNote(del.id, fileId, noteId),
-                                            })}
+                                            {(() => {
+                                              const thread = buildDeliverableThread(file);
+                                              const isReplying = replyingDeliverableFileNote?.deliverableId === del.id && replyingDeliverableFileNote?.fileId === fileId;
+                                              if (thread.length === 0 && !isReplying) {
+                                                return (
+                                                  <button
+                                                    onClick={() => { setReplyingDeliverableFileNote({ deliverableId: del.id, fileId }); setDelFileReplyDraft(''); setDelFileReplyNotify(false); }}
+                                                    className="mt-2 inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-blue-600 transition-colors"
+                                                  >
+                                                    <MessageSquare className="h-3 w-3" />
+                                                    Agregar nota
+                                                  </button>
+                                                );
+                                              }
+                                              return (
+                                                <div className="mt-2 space-y-2">
+                                                  {thread.map((entry) => {
+                                                    const fromClient = entry.authorRole === 'client';
+                                                    return (
+                                                      <div
+                                                        key={entry.id}
+                                                        className={`px-2.5 py-2 rounded-md border-l-2 ${
+                                                          fromClient
+                                                            ? 'bg-amber-50 border-amber-400'
+                                                            : 'bg-blue-50 border-blue-400'
+                                                        }`}
+                                                      >
+                                                        <div className={`flex items-center gap-1.5 text-[11px] mb-1 ${fromClient ? 'text-amber-700' : 'text-blue-700'}`}>
+                                                          <MessageSquare className="h-3 w-3" />
+                                                          <span className="font-semibold">{entry.authorName || (fromClient ? 'Cliente' : 'Equipo')}</span>
+                                                          <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                                                            fromClient ? 'bg-amber-200 text-amber-900' : 'bg-blue-200 text-blue-900'
+                                                          }`}>
+                                                            {fromClient ? 'Cliente' : 'Equipo'}
+                                                          </span>
+                                                          {entry.createdAt && (
+                                                            <>
+                                                              <span>·</span>
+                                                              <span>{(() => { try { return new Date(entry.createdAt).toLocaleString('es', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }); } catch { return ''; } })()}</span>
+                                                            </>
+                                                          )}
+                                                        </div>
+                                                        <p className={`text-xs whitespace-pre-wrap ${fromClient ? 'text-amber-900' : 'text-blue-900'}`}>{entry.text}</p>
+                                                      </div>
+                                                    );
+                                                  })}
+                                                  {!isReplying && (
+                                                    <button
+                                                      onClick={() => { setReplyingDeliverableFileNote({ deliverableId: del.id, fileId }); setDelFileReplyDraft(''); setDelFileReplyNotify(false); }}
+                                                      className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-blue-600 transition-colors"
+                                                    >
+                                                      <MessageSquare className="h-3 w-3" />
+                                                      Responder
+                                                    </button>
+                                                  )}
+                                                  {isReplying && (
+                                                    <div className="bg-white border border-gray-300 rounded-md p-2 space-y-2">
+                                                      <textarea
+                                                        value={delFileReplyDraft}
+                                                        onChange={(e) => setDelFileReplyDraft(e.target.value)}
+                                                        placeholder="Escribe tu respuesta para el cliente..."
+                                                        rows={3}
+                                                        maxLength={1000}
+                                                        disabled={sendingDelFileReply}
+                                                        className="w-full bg-gray-50 border border-gray-200 text-gray-900 rounded px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none resize-none"
+                                                      />
+                                                      <div className="flex items-center justify-between gap-2">
+                                                        <label className="flex items-center gap-1.5 text-[11px] text-gray-700 cursor-pointer">
+                                                          <input
+                                                            type="checkbox"
+                                                            checked={delFileReplyNotify}
+                                                            onChange={(e) => setDelFileReplyNotify(e.target.checked)}
+                                                            disabled={sendingDelFileReply}
+                                                            className="rounded border-gray-300"
+                                                          />
+                                                          Notificar al cliente por correo
+                                                        </label>
+                                                        <span className="text-[10px] text-gray-400">{delFileReplyDraft.length}/1000</span>
+                                                      </div>
+                                                      <div className="flex justify-end gap-2">
+                                                        <button
+                                                          onClick={() => { setReplyingDeliverableFileNote(null); setDelFileReplyDraft(''); setDelFileReplyNotify(false); }}
+                                                          disabled={sendingDelFileReply}
+                                                          className="text-[11px] text-gray-600 hover:text-gray-900 px-2 py-1"
+                                                        >Cancelar</button>
+                                                        <button
+                                                          onClick={() => handleSendDelFileReply(del.id, fileId)}
+                                                          disabled={sendingDelFileReply || !delFileReplyDraft.trim()}
+                                                          className="text-[11px] bg-blue-600 hover:bg-blue-700 text-white font-semibold px-3 py-1 rounded disabled:opacity-50"
+                                                        >
+                                                          {sendingDelFileReply ? 'Enviando...' : 'Enviar respuesta'}
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              );
+                                            })()}
                                           </div>
                                           );
                                         })}

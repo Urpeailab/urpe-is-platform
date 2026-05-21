@@ -9251,6 +9251,11 @@ class DeliverableFileNoteAddRequest(BaseModel):
     visibleToClient: Optional[bool] = False
 
 
+class DeliverableFileReplyRequest(BaseModel):
+    text: str
+    notifyClient: Optional[bool] = False
+
+
 class ClientDocumentNoteAddRequest(BaseModel):
     text: str
     visibleToClient: Optional[bool] = False
@@ -9592,6 +9597,145 @@ async def add_deliverable_file_note(
     except Exception as e:
         logger.error(f"Add deliverable file note error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to add note: {str(e)}")
+
+
+def _deliverable_file_thread(file_obj: dict) -> list:
+    """Bidirectional conversation thread on a deliverable file.
+
+    Falls back to legacy fields so old uploads render in the new UI:
+      noteThread → noteEntries (treated as staff entries) → file.note/notes."""
+    thread = file_obj.get('noteThread')
+    if isinstance(thread, list) and thread:
+        return list(thread)
+    legacy_entries = file_obj.get('noteEntries') or []
+    if isinstance(legacy_entries, list) and legacy_entries:
+        return [
+            {
+                'id': e.get('id') or str(uuid.uuid4()),
+                'text': e.get('text'),
+                'authorId': e.get('createdBy') or e.get('authorId'),
+                'authorName': e.get('createdByName') or e.get('authorName') or 'Equipo',
+                'authorRole': e.get('authorRole') or 'advisor',
+                'createdAt': e.get('createdAt'),
+            }
+            for e in legacy_entries
+            if e.get('text')
+        ]
+    legacy_text = file_obj.get('note') or file_obj.get('notes') or ''
+    if isinstance(legacy_text, str) and legacy_text.strip():
+        return [{
+            'id': 'legacy',
+            'text': legacy_text.strip(),
+            'authorId': file_obj.get('uploadedBy'),
+            'authorName': file_obj.get('uploadedByName') or 'Equipo',
+            'authorRole': 'advisor',
+            'createdAt': file_obj.get('noteUpdatedAt') or file_obj.get('uploadedAt'),
+        }]
+    return []
+
+
+@api_router.post("/admin/deliverables/{deliverable_id}/files/{file_id}/replies")
+async def add_deliverable_file_reply(
+    deliverable_id: str,
+    file_id: str,
+    request: DeliverableFileReplyRequest,
+    staff_payload: dict = Depends(verify_staff_token)
+):
+    """Append a staff message to a deliverable file's conversation thread.
+
+    Optionally emails the client so they see the reply in their inbox. This is
+    separate from `/notes` (internal staff notes with visibility flag)."""
+    try:
+        text = (request.text or '').strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
+        if len(text) > 1000:
+            raise HTTPException(status_code=400, detail="El mensaje no puede exceder 1000 caracteres")
+
+        deliverable = select("visa_deliverables", filters={"id": deliverable_id}, single=True)
+        if not deliverable:
+            raise HTTPException(status_code=404, detail="Entregable no encontrado")
+
+        files = deliverable.get('files') or []
+        target = next((f for f in files if f.get('id') == file_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+        staff_row = select("staff", filters={"id": staff_payload['id']}, single=True)
+        author_name = staff_payload.get('name') or (staff_row or {}).get('name') or 'Equipo'
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        thread = _deliverable_file_thread(target)
+        entry = {
+            'id': str(uuid.uuid4()),
+            'text': text,
+            'authorId': staff_payload['id'],
+            'authorName': author_name,
+            'authorRole': 'advisor',
+            'createdAt': now_iso,
+            'notifiedClient': bool(request.notifyClient),
+        }
+        thread.append(entry)
+        target['noteThread'] = thread
+
+        update("visa_deliverables", filters={"id": deliverable_id}, data={
+            'files': files,
+            'updatedAt': now_iso,
+        })
+
+        case_id = deliverable.get('case_id') or deliverable.get('caseId')
+        deliverable_label = deliverable.get('deliverableName') or deliverable.get('name') or 'Entregable'
+        if isinstance(deliverable_label, dict):
+            deliverable_label = deliverable_label.get('es') or deliverable_label.get('en') or 'Entregable'
+
+        if case_id:
+            await log_case_audit(
+                case_id=case_id,
+                action=f"Respuesta en archivo de '{deliverable_label}'",
+                action_type="deliverable_file_reply_added",
+                performed_by_id=staff_payload['id'],
+                performed_by_name=author_name,
+                performed_by_role=staff_payload.get('role', ''),
+                details={
+                    'deliverableId': deliverable_id,
+                    'fileId': file_id,
+                    'noteId': entry['id'],
+                    'notifiedClient': entry['notifiedClient'],
+                },
+            )
+
+        if request.notifyClient and case_id:
+            try:
+                from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
+                case_row = select("visa_cases", filters={"id": case_id}, single=True)
+                client_id = (case_row or {}).get('client_id') or (case_row or {}).get('clientId')
+                client = select("clients", filters={"id": client_id}, columns="name,email", single=True) if client_id else None
+                if client and client.get('email'):
+                    import html as _htmllib
+                    subject = f"{author_name} respondió en {deliverable_label}"
+                    body = f"""
+                    <p>El equipo respondió a tu entregable <strong>{_htmllib.escape(deliverable_label)}</strong> (archivo <strong>{_htmllib.escape(target.get('fileName') or '')}</strong>):</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
+                      <tr>
+                        <td style="background:#EFF6FF;border-left:3px solid #2563EB;border-radius:8px;padding:16px;">
+                          <p style="margin:0 0 4px;font-size:12px;color:#1E40AF;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">{_htmllib.escape(author_name)}</p>
+                          <p style="margin:0;font-size:14px;color:#0F172A;white-space:pre-wrap;">{_htmllib.escape(text)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p>Ingresa al portal para ver el mensaje completo y responder.</p>
+                    """
+                    html_body = _email_wrapper(client.get('name', 'Cliente'), "Nueva respuesta del equipo", body, "Ver mi caso", f"{FRONTEND_URL}/dashboard/my-case")
+                    _send_email(client['email'], subject, html_body)
+            except Exception as notif_err:
+                logger.warning(f"Deliverable reply notification failed (non-critical): {notif_err}")
+
+        return {'success': True, 'note': entry, 'thread': thread}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Add deliverable file reply error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to add reply: {str(e)}")
 
 
 @api_router.delete("/admin/deliverables/{deliverable_id}/files/{file_id}/notes/{note_id}")

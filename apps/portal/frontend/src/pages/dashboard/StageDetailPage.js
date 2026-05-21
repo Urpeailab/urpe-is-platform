@@ -82,6 +82,71 @@ export const StageDetailPage = () => {
   const [replyDraft, setReplyDraft] = useState('');
   const [sendingReply, setSendingReply] = useState(false);
 
+  // Deliverable file thread reply UI (separate state so client docs + deliverables
+  // can have independent open editors)
+  const [replyingDeliverableFileId, setReplyingDeliverableFileId] = useState(null);
+  const [deliverableReplyDraft, setDeliverableReplyDraft] = useState('');
+  const [sendingDeliverableReply, setSendingDeliverableReply] = useState(false);
+
+  // Build the bidirectional thread for a deliverable file, folding legacy
+  // `noteEntries` (staff-only) and the single `note` field into uniform shape.
+  const buildDeliverableThread = (file) => {
+    if (Array.isArray(file?.noteThread) && file.noteThread.length > 0) {
+      return file.noteThread;
+    }
+    if (Array.isArray(file?.noteEntries) && file.noteEntries.length > 0) {
+      // Legacy staff entries: only show those marked visible to the client so
+      // internal `visibleToClient=false` notes stay hidden.
+      return file.noteEntries
+        .filter((e) => e?.text && e?.visibleToClient !== false)
+        .map((e) => ({
+          id: e.id || `legacy-${Math.random()}`,
+          text: e.text,
+          authorId: e.createdBy || e.authorId,
+          authorName: e.createdByName || e.authorName || 'Equipo',
+          authorRole: e.authorRole || 'advisor',
+          createdAt: e.createdAt,
+        }));
+    }
+    const legacyText = file?.note || file?.notes || '';
+    if (legacyText) {
+      return [{
+        id: 'legacy',
+        text: legacyText,
+        authorName: file?.uploadedByName || 'Equipo',
+        authorRole: 'advisor',
+        createdAt: file?.noteUpdatedAt || file?.uploadedAt,
+      }];
+    }
+    return [];
+  };
+
+  const handleSendDeliverableReply = async (deliverableId, fileId) => {
+    const text = deliverableReplyDraft.trim();
+    if (!text) return;
+    setSendingDeliverableReply(true);
+    try {
+      const userDataStr = localStorage.getItem('urpe_user');
+      const userData = userDataStr ? JSON.parse(userDataStr) : null;
+      const token = userData?.token;
+
+      await axios.post(
+        `${BACKEND_URL}/api/client/deliverables/${deliverableId}/files/${fileId}/notes`,
+        { text },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast.success('Respuesta enviada');
+      setReplyingDeliverableFileId(null);
+      setDeliverableReplyDraft('');
+      fetchStageData();
+    } catch (error) {
+      console.error('Error sending deliverable reply:', error);
+      toast.error(error.response?.data?.detail || 'Error al enviar la respuesta');
+    } finally {
+      setSendingDeliverableReply(false);
+    }
+  };
+
   // Fold legacy `clientNote` into a thread so the new UI renders both old and
   // new uploads uniformly.
   const buildNoteThread = (file) => {
@@ -1059,22 +1124,94 @@ export const StageDetailPage = () => {
                                   <Lock className="h-4 w-4 text-[#475569]" />
                                 )}
                               </div>
-                              {(file.noteEntries && file.noteEntries.length > 0
-                                ? file.noteEntries
-                                : fileNote
-                                  ? [{ id: 'legacy', text: fileNote, createdAt: null }]
-                                  : []
-                              ).map((noteEntry) => (
-                                <div key={noteEntry.id} className="px-3 py-2 bg-[#1E293B] rounded-lg border border-[#C9A96A]/30">
-                                  <div className="flex items-center justify-between gap-2 mb-1">
-                                    <p className="text-[10px] uppercase tracking-wider text-[#C9A96A] font-medium">Nota del equipo</p>
-                                    {noteEntry.createdAt && (
-                                      <p className="text-[10px] text-[#94A3B8]">{new Date(noteEntry.createdAt).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                              {(() => {
+                                const thread = buildDeliverableThread(file);
+                                const isReplying = replyingDeliverableFileId === file.id;
+                                if (thread.length === 0 && !isReplying) {
+                                  return canDownload ? (
+                                    <button
+                                      onClick={() => { setReplyingDeliverableFileId(file.id); setDeliverableReplyDraft(''); }}
+                                      className="mt-2 inline-flex items-center gap-1 text-[11px] text-[#64748B] hover:text-[#C9A96A] transition-colors"
+                                    >
+                                      <MessageSquare className="h-3 w-3" />
+                                      Agregar nota
+                                    </button>
+                                  ) : null;
+                                }
+                                return (
+                                  <div className="mt-2 space-y-2">
+                                    {thread.map((entry) => {
+                                      const fromClient = entry.authorRole === 'client';
+                                      return (
+                                        <div
+                                          key={entry.id}
+                                          className={`px-2.5 py-2 rounded-md border-l-2 ${
+                                            fromClient
+                                              ? 'bg-[#1E293B] border-[#C9A96A]'
+                                              : 'bg-[#0F2540] border-[#3B82F6]'
+                                          }`}
+                                        >
+                                          <div className="flex items-center gap-1.5 text-[10px] text-[#94A3B8] mb-1">
+                                            <MessageSquare className="h-3 w-3" />
+                                            <span className="font-medium">{entry.authorName || (fromClient ? 'Cliente' : 'Equipo')}</span>
+                                            <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                                              fromClient ? 'bg-[#C9A96A]/20 text-[#C9A96A]' : 'bg-[#3B82F6]/20 text-[#60A5FA]'
+                                            }`}>
+                                              {fromClient ? 'Tú' : 'Equipo'}
+                                            </span>
+                                            {entry.createdAt && (
+                                              <>
+                                                <span>·</span>
+                                                <span>{new Date(entry.createdAt).toLocaleString('es-ES', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                                              </>
+                                            )}
+                                          </div>
+                                          <p className="text-xs text-[#E2E8F0] whitespace-pre-wrap">{entry.text}</p>
+                                        </div>
+                                      );
+                                    })}
+                                    {canDownload && !isReplying && (
+                                      <button
+                                        onClick={() => { setReplyingDeliverableFileId(file.id); setDeliverableReplyDraft(''); }}
+                                        className="inline-flex items-center gap-1 text-[11px] text-[#64748B] hover:text-[#C9A96A] transition-colors"
+                                      >
+                                        <MessageSquare className="h-3 w-3" />
+                                        Responder
+                                      </button>
+                                    )}
+                                    {isReplying && (
+                                      <div className="bg-[#0F172A] border border-[#334155] rounded-md p-2 space-y-2">
+                                        <textarea
+                                          value={deliverableReplyDraft}
+                                          onChange={(e) => setDeliverableReplyDraft(e.target.value)}
+                                          placeholder="Escribe tu respuesta..."
+                                          rows={3}
+                                          maxLength={1000}
+                                          disabled={sendingDeliverableReply}
+                                          className="w-full bg-[#1E293B] border border-[#334155] text-[#F8FAFC] rounded px-2 py-1.5 text-xs focus:border-[#C9A96A] focus:outline-none resize-none"
+                                        />
+                                        <div className="flex items-center justify-between">
+                                          <span className="text-[10px] text-[#64748B]">{deliverableReplyDraft.length}/1000</span>
+                                          <div className="flex gap-2">
+                                            <button
+                                              onClick={() => { setReplyingDeliverableFileId(null); setDeliverableReplyDraft(''); }}
+                                              disabled={sendingDeliverableReply}
+                                              className="text-[11px] text-[#94A3B8] hover:text-[#F8FAFC] px-2 py-1"
+                                            >Cancelar</button>
+                                            <button
+                                              onClick={() => handleSendDeliverableReply(deliverable._id || deliverable.id, file.id)}
+                                              disabled={sendingDeliverableReply || !deliverableReplyDraft.trim()}
+                                              className="text-[11px] bg-[#C9A96A] hover:bg-[#B8956A] text-[#0F172A] font-semibold px-3 py-1 rounded disabled:opacity-50"
+                                            >
+                                              {sendingDeliverableReply ? 'Enviando...' : 'Enviar'}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
                                     )}
                                   </div>
-                                  <p className="text-xs text-[#E2E8F0] whitespace-pre-wrap">{noteEntry.text}</p>
-                                </div>
-                              ))}
+                                );
+                              })()}
                             </div>
                             );
                           })}

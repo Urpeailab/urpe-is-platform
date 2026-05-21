@@ -79,6 +79,42 @@ def _file_note_thread(file_obj: dict) -> list:
     return []
 
 
+def _deliverable_file_thread(file_obj: dict) -> list:
+    """Bidirectional thread on a deliverable file (admin uploads).
+
+    Older uploads only have `noteEntries` (staff-authored) or the single legacy
+    `note`/`notes` text — fold either into the new thread shape so they show up
+    in the client UI without backfill."""
+    thread = file_obj.get('noteThread')
+    if isinstance(thread, list) and thread:
+        return list(thread)
+    legacy_entries = file_obj.get('noteEntries') or []
+    if isinstance(legacy_entries, list) and legacy_entries:
+        return [
+            {
+                'id': e.get('id') or str(uuid.uuid4()),
+                'text': e.get('text'),
+                'authorId': e.get('createdBy') or e.get('authorId'),
+                'authorName': e.get('createdByName') or e.get('authorName') or 'Equipo',
+                'authorRole': e.get('authorRole') or 'advisor',
+                'createdAt': e.get('createdAt'),
+            }
+            for e in legacy_entries
+            if e.get('text')
+        ]
+    legacy_text = file_obj.get('note') or file_obj.get('notes') or ''
+    if isinstance(legacy_text, str) and legacy_text.strip():
+        return [{
+            'id': 'legacy',
+            'text': legacy_text.strip(),
+            'authorId': file_obj.get('uploadedBy'),
+            'authorName': file_obj.get('uploadedByName') or 'Equipo',
+            'authorRole': 'advisor',
+            'createdAt': file_obj.get('noteUpdatedAt') or file_obj.get('uploadedAt'),
+        }]
+    return []
+
+
 async def get_client_case(db, user_id: str):
     """Get the active visa case for a client"""
     from bson import ObjectId
@@ -701,6 +737,109 @@ def setup_client_endpoints(db, verify_token):
             raise
         except Exception as e:
             logger.error(f"Add file note (client) error: {e}")
+            raise HTTPException(status_code=500, detail=f"Error al guardar la nota: {str(e)}")
+
+    @client_router.post("/deliverables/{deliverable_id}/files/{file_id}/notes")
+    async def add_deliverable_file_note_client(
+        deliverable_id: str,
+        file_id: str,
+        request: FileNoteAddRequest,
+        user_payload: dict = Depends(verify_token)
+    ):
+        """Append a client reply to a deliverable file's conversation thread.
+
+        Notifies the coordinator/advisor by email so they see the response."""
+        try:
+            from db.supabase_client import select as sb_select, update as sb_update
+
+            text = (request.text or '').strip()
+            if not text:
+                raise HTTPException(status_code=400, detail="El mensaje no puede estar vacío")
+            if len(text) > 1000:
+                raise HTTPException(status_code=400, detail="El mensaje no puede exceder 1000 caracteres")
+
+            user_id = user_payload.get('id')
+            client_name = user_payload.get('name') or 'Cliente'
+            if client_name == 'Cliente':
+                cl = sb_select("clients", filters={"id": user_id}, columns="name", single=True)
+                if cl and cl.get('name'):
+                    client_name = cl['name']
+
+            cases = sb_select("visa_cases", filters={"client_id": user_id}, order="created_at", order_desc=True)
+            case = next((c for c in cases if not c.get('is_master_case')), None)
+            if not case:
+                raise HTTPException(status_code=404, detail="No tienes un caso activo")
+
+            deliverable = sb_select("visa_deliverables", filters={"id": deliverable_id}, single=True)
+            if not deliverable:
+                raise HTTPException(status_code=404, detail="Entregable no encontrado")
+            if (deliverable.get('case_id') or deliverable.get('caseId')) != case.get('id'):
+                raise HTTPException(status_code=403, detail="No tienes acceso a este entregable")
+
+            files = deliverable.get('files') or []
+            target = next((f for f in files if f.get('id') == file_id), None)
+            if not target:
+                raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            thread = _deliverable_file_thread(target)
+            entry = {
+                'id': str(uuid.uuid4()),
+                'text': text,
+                'authorId': str(user_id),
+                'authorName': client_name,
+                'authorRole': 'client',
+                'createdAt': now_iso,
+            }
+            thread.append(entry)
+            target['noteThread'] = thread
+
+            sb_update("visa_deliverables", filters={"id": deliverable_id}, data={'files': files})
+
+            # Notify coordinator + advisor
+            try:
+                from services.case_notifications import _send_email, _email_wrapper, FRONTEND_URL
+                coord_id = case.get('coordinator_id') or case.get('coordinatorId')
+                advisor_id = case.get('advisor_id') or case.get('advisorId')
+                staff_to_notify = []
+                if coord_id:
+                    coord = sb_select("staff", filters={"id": coord_id}, columns="name,email", single=True)
+                    if coord and coord.get('email'):
+                        staff_to_notify.append(coord)
+                if advisor_id and advisor_id != coord_id:
+                    advisor = sb_select("staff", filters={"id": advisor_id}, columns="name,email", single=True)
+                    if advisor and advisor.get('email'):
+                        staff_to_notify.append(advisor)
+
+                if staff_to_notify:
+                    deliverable_label = deliverable.get('deliverableName') or deliverable.get('name') or 'Entregable'
+                    if isinstance(deliverable_label, dict):
+                        deliverable_label = deliverable_label.get('es') or deliverable_label.get('en') or 'Entregable'
+                    case_id = case.get('id')
+                    subject = f"Respuesta del cliente: {client_name} en {deliverable_label}"
+                    import html as _htmllib
+                    body = f"""
+                    <p>El cliente <strong>{client_name}</strong> respondió en el archivo <strong>{_htmllib.escape(target.get('fileName') or '')}</strong> del entregable <strong>{_htmllib.escape(deliverable_label)}</strong>:</p>
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;">
+                      <tr>
+                        <td style="background:#FEF3C7;border-left:3px solid #F59E0B;border-radius:8px;padding:16px;">
+                          <p style="margin:0;font-size:14px;color:#78350F;white-space:pre-wrap;">{_htmllib.escape(text)}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    <p>Ingresa al panel para revisar y responder.</p>
+                    """
+                    for staff_member in staff_to_notify:
+                        html_body = _email_wrapper(staff_member.get('name', 'Equipo'), "Respuesta del cliente", body, "Ver caso", f"{FRONTEND_URL}/admin/visa-cases/{case_id}")
+                        _send_email(staff_member['email'], subject, html_body)
+            except Exception as notif_err:
+                logger.warning(f"Client deliverable reply notification failed (non-critical): {notif_err}")
+
+            return {'success': True, 'note': entry, 'thread': thread}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Add deliverable file note (client) error: {e}")
             raise HTTPException(status_code=500, detail=f"Error al guardar la nota: {str(e)}")
 
     @client_router.delete("/documents/{document_id}/files/{file_id}")
