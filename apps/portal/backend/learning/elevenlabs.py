@@ -138,29 +138,42 @@ def create_connector_session(
         # el wrapper de LiveAvatar las propaga si se incluyen acá.
         connector_config["dynamic_variables"] = dynamic_variables
 
-    body = {
+    # LiveAvatar usa flujo de DOS pasos incluso para el connector — no acepta
+    # POST /v1/sessions directo (la doc miente). El patrón es:
+    #   1) POST /v1/sessions/token (con X-API-KEY) → devuelve session_token
+    #   2) POST /v1/sessions/start (con Bearer session_token) → devuelve LiveKit creds
+    # El `elevenlabs_agent_config` va en el body del paso 1.
+    token_body = {
         "mode": "LITE",
         "avatar_id": avatar_id,
         "is_sandbox": LIVEAVATAR_SANDBOX,
         "elevenlabs_agent_config": connector_config,
     }
-
-    data = _post(
-        "/v1/sessions",
+    token_data = _post(
+        "/v1/sessions/token",
         headers={"X-API-KEY": LIVEAVATAR_API_KEY},
-        json_body=body,
+        json_body=token_body,
+    )
+    session_id = token_data.get("session_id")
+    session_token = token_data.get("session_token")
+    if not session_id or not session_token:
+        raise RuntimeError(f"LiveAvatar /v1/sessions/token incompleto: {token_data}")
+
+    start_data = _post(
+        "/v1/sessions/start",
+        headers={"Authorization": f"Bearer {session_token}"},
     )
 
-    livekit_url = data.get("livekit_url")
-    client_token = data.get("livekit_client_token") or data.get("livekit_token")
+    livekit_url = start_data.get("livekit_url")
+    client_token = start_data.get("livekit_client_token") or start_data.get("livekit_token")
     if not livekit_url or not client_token:
-        raise RuntimeError(f"LiveAvatar /v1/sessions sin credenciales LiveKit: {data}")
+        raise RuntimeError(f"LiveAvatar /v1/sessions/start sin credenciales LiveKit: {start_data}")
 
     return {
-        "session_id": data.get("session_id"),
+        "session_id": start_data.get("session_id") or session_id,
         "livekit_url": livekit_url,
         "livekit_token": client_token,
-        "max_duration_sec": data.get("max_session_duration"),
+        "max_duration_sec": start_data.get("max_session_duration"),
         "provider": "elevenlabs_connector",
     }
 
