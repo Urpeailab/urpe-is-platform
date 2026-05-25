@@ -227,6 +227,26 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 					return;
 				}
 				setAvatarStatus("ready");
+
+				// UX natural: si el navegador YA tiene permiso de mic concedido
+				// (de una sesión anterior), prendemos el mic automáticamente.
+				// Eso permite barge-in (interrumpir al avatar hablando) desde el
+				// primer segundo sin que el usuario tenga que clickear nada.
+				// Si está "prompt" (primera vez) o "denied", no tocamos — esperamos
+				// el clic en el botón para no disparar el prompt sin gesto.
+				try {
+					const status = await navigator.permissions?.query?.({
+						name: "microphone",
+					});
+					if (status?.state === "granted" && !cancelled) {
+						await room.localParticipant.setMicrophoneEnabled(true);
+						setMicEnabled(true);
+					}
+				} catch {
+					// navigator.permissions.query no soportado en Safari viejo o
+					// algunos navegadores — silenciamos. El usuario igual puede
+					// clickear el botón manualmente.
+				}
 			} catch (err) {
 				console.error("[connector] connect failed", err);
 				setAvatarError(err.message || String(err));
