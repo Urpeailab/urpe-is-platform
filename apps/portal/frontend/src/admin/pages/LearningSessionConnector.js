@@ -83,7 +83,13 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 	const [avatarError, setAvatarError] = useState(null);
 	const [chatOpen, setChatOpen] = useState(false);
 	const [messages, setMessages] = useState([]);
-	const [micEnabled, setMicEnabled] = useState(true);
+	// Mic arranca DESHABILITADO. La habilitación dispara el prompt de permiso
+	// del navegador, que solo se puede gatillar en respuesta a un gesto del
+	// usuario (click en el botón) — si lo hacemos automático en el connect,
+	// algunos navegadores (Safari, Chrome en iframes) lo bloquean silenciosamente
+	// o lo loguean como "Permission dismissed".
+	const [micEnabled, setMicEnabled] = useState(false);
+	const [micPermissionNeeded, setMicPermissionNeeded] = useState(false);
 	const [ending, setEnding] = useState(false);
 	const [evaluation, setEvaluation] = useState(null);
 
@@ -220,10 +226,6 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 					room.disconnect();
 					return;
 				}
-				// CRÍTICO: en este flujo el agent de ElevenLabs escucha el audio
-				// del room directamente. Publicamos el mic con canPublish=true
-				// del token (LiveAvatar lo setea por defecto en el client_token).
-				await room.localParticipant.setMicrophoneEnabled(true);
 				setAvatarStatus("ready");
 			} catch (err) {
 				console.error("[connector] connect failed", err);
@@ -253,9 +255,26 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 		try {
 			await room.localParticipant.setMicrophoneEnabled(next);
 			setMicEnabled(next);
+			setMicPermissionNeeded(false);
 		} catch (err) {
 			console.error("[connector] toggleMic failed", err);
-			toast.error("No se pudo cambiar el micrófono");
+			// Errores típicos de permiso del navegador:
+			//   - "Permission dismissed" (Chrome: usuario cerró el prompt)
+			//   - "NotAllowedError: Permission denied" (usuario click "Block")
+			//   - "NotAllowedError: Permission dismissed"
+			// En todos los casos, el avatar sigue funcionando — sólo no podemos
+			// publicar audio nuestro. Mostramos un banner explícito y no rompemos
+			// el resto de la UI.
+			const msg = String(err?.message || err);
+			if (/permission|notallowed|denied|dismissed/i.test(msg)) {
+				setMicPermissionNeeded(true);
+				toast.error(
+					"Permite el micrófono en el navegador (ícono de candado junto a la URL → Micrófono → Permitir), después recargá.",
+					{ duration: 8000 },
+				);
+			} else {
+				toast.error("No se pudo cambiar el micrófono: " + msg);
+			}
 		}
 	};
 
@@ -519,11 +538,19 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 						<button
 							type="button"
 							onClick={toggleMic}
-							title={micEnabled ? "Silenciar micrófono" : "Activar micrófono"}
+							title={
+								micPermissionNeeded
+									? "Necesitás permitir el micrófono en el navegador"
+									: micEnabled
+										? "Silenciar micrófono"
+										: "Activar micrófono"
+							}
 							className={`h-20 w-20 flex items-center justify-center rounded-full shadow-2xl transition-all ${
-								micEnabled
-									? "bg-gradient-to-br from-yellow-500 to-yellow-600 text-black ring-4 ring-yellow-500/30 hover:ring-yellow-500/60"
-									: "bg-gray-800 text-red-400 ring-4 ring-red-500/40"
+								micPermissionNeeded
+									? "bg-red-600 text-white ring-4 ring-red-500/50 animate-pulse"
+									: micEnabled
+										? "bg-gradient-to-br from-yellow-500 to-yellow-600 text-black ring-4 ring-yellow-500/30 hover:ring-yellow-500/60"
+										: "bg-gray-800 text-yellow-500 ring-4 ring-yellow-500/30 hover:ring-yellow-500/60"
 							}`}
 						>
 							{micEnabled ? (
@@ -533,11 +560,31 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 							)}
 						</button>
 						<div className="text-xs font-semibold uppercase tracking-widest text-white/90 bg-gray-900/70 backdrop-blur-sm px-3 py-1 rounded-full border border-gray-700">
-							{micEnabled
-								? avatarStatus === "speaking"
-									? "Hablando — podés interrumpir"
-									: "Hablá cuando quieras"
-								: "Micrófono silenciado"}
+							{micPermissionNeeded
+								? "Permiso de micrófono requerido"
+								: micEnabled
+									? avatarStatus === "speaking"
+										? "Hablando — podés interrumpir"
+										: "Hablá cuando quieras"
+									: "Clic para activar el micrófono"}
+						</div>
+					</div>
+				)}
+
+				{/* Banner cuando el navegador rechazó el permiso del micrófono.
+				    No es un error del avatar (que sigue conectado), sino del browser. */}
+				{micPermissionNeeded && (
+					<div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 max-w-2xl w-[90%] bg-yellow-950/95 border border-yellow-700 rounded-lg px-4 py-3 flex items-start gap-2 backdrop-blur-sm shadow-xl">
+						<AlertCircle className="h-5 w-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+						<div className="flex-1 min-w-0 text-sm">
+							<div className="font-semibold text-yellow-200">
+								Permití el micrófono para hablar con el avatar
+							</div>
+							<div className="text-yellow-100/80 text-xs mt-1 leading-relaxed">
+								Clic en el ícono de candado (o "i") junto a la URL → buscá
+								"Micrófono" → cambialo a <strong>Permitir</strong> → recargá la página
+								con Cmd+Shift+R. El avatar sigue conectado mientras tanto.
+							</div>
 						</div>
 					</div>
 				)}
