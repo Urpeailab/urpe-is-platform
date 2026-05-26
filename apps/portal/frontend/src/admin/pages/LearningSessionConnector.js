@@ -90,6 +90,12 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 	// o lo loguean como "Permission dismissed".
 	const [micEnabled, setMicEnabled] = useState(false);
 	const [micPermissionNeeded, setMicPermissionNeeded] = useState(false);
+	// Cuando el navegador bloquea autoplay del audio del avatar (común en
+	// sesiones nuevas, donde no hay gesto de usuario antes de que llegue el
+	// primer audio del room), LiveKit expone room.canPlaybackAudio=false y
+	// emite AudioPlaybackStatusChanged. Mostramos un overlay para que el
+	// usuario tape la pantalla y llamamos room.startAudio() en ese gesto.
+	const [audioBlocked, setAudioBlocked] = useState(false);
 	const [ending, setEnding] = useState(false);
 	const [evaluation, setEvaluation] = useState(null);
 
@@ -218,6 +224,9 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 		room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
 			handleDataChannel(payload, topic);
 		});
+		room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+			setAudioBlocked(!room.canPlaybackAudio);
+		});
 
 		(async () => {
 			try {
@@ -227,6 +236,13 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 					return;
 				}
 				setAvatarStatus("ready");
+
+				// Si el navegador ya bloqueó el audio (autoplay policy), avisar
+				// inmediatamente — el evento AudioPlaybackStatusChanged sólo
+				// dispara cuando cambia el estado, no en el conectado inicial.
+				if (!room.canPlaybackAudio) {
+					setAudioBlocked(true);
+				}
 
 				// UX natural: si el navegador YA tiene permiso de mic concedido
 				// (de una sesión anterior), prendemos el mic automáticamente.
@@ -268,9 +284,25 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 	}, [messages]);
 
+	// Llamada idempotente para destrabar autoplay en cualquier user gesture.
+	// La llamamos desde toggleMic y desde el overlay "Tocá para escuchar".
+	const unblockAudio = async () => {
+		const room = roomRef.current;
+		if (!room) return;
+		try {
+			await room.startAudio();
+		} catch (err) {
+			console.warn("[connector] startAudio failed", err);
+		}
+		setAudioBlocked(false);
+	};
+
 	const toggleMic = async () => {
 		const room = roomRef.current;
 		if (!room) return;
+		// Aprovechamos el click como gesto para destrabar el audio del avatar
+		// (si el navegador lo había bloqueado por autoplay policy).
+		await unblockAudio();
 		const next = !micEnabled;
 		try {
 			await room.localParticipant.setMicrophoneEnabled(next);
@@ -589,6 +621,28 @@ export const LearningSessionConnector = ({ sessionData, onEnd }) => {
 									: "Clic para activar el micrófono"}
 						</div>
 					</div>
+				)}
+
+				{/* Overlay para destrabar autoplay. Aparece cuando el navegador
+				    bloqueó el audio del avatar (común en la primera visita, donde
+				    no hay user gesture antes de que llegue el primer audio track).
+				    Cualquier click llama room.startAudio() y la reproducción arranca. */}
+				{audioBlocked && avatarStatus !== "connecting" && avatarStatus !== "error" && (
+					<button
+						type="button"
+						onClick={unblockAudio}
+						className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-gray-950/70 backdrop-blur-sm text-white"
+					>
+						<div className="bg-yellow-500 text-black rounded-full h-20 w-20 flex items-center justify-center shadow-2xl mb-4">
+							<svg className="h-10 w-10" fill="currentColor" viewBox="0 0 20 20">
+								<path d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" />
+							</svg>
+						</div>
+						<div className="text-lg font-semibold">Tocá para escuchar al tutor</div>
+						<div className="text-sm text-gray-300 mt-1">
+							El navegador bloqueó el audio hasta tu primera interacción
+						</div>
+					</button>
 				)}
 
 				{/* Banner cuando el navegador rechazó el permiso del micrófono.
