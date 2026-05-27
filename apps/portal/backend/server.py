@@ -13377,6 +13377,7 @@ from routes.auth_admin import router as auth_admin_router
 from routes.users_admin import router as users_admin_router
 from routes.staff_admin import router as staff_admin_router
 from routes.cases_admin import router as cases_admin_router
+from routes.print_layout import router as print_layout_router
 from routes.payments_admin import router as payments_admin_router
 from routes.uscis_forms import router as uscis_forms_router
 from routes.audit import router as audit_router
@@ -13394,6 +13395,7 @@ app.include_router(auth_admin_router, prefix="/api")
 app.include_router(users_admin_router, prefix="/api")
 app.include_router(staff_admin_router, prefix="/api")
 app.include_router(cases_admin_router, prefix="/api")
+app.include_router(print_layout_router, prefix="/api")
 app.include_router(payments_admin_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
 

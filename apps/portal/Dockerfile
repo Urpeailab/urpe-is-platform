@@ -12,9 +12,12 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
-# System deps for PyMuPDF, reportlab, Pillow, cryptography
+# System deps for PyMuPDF, reportlab, Pillow, cryptography.
+# libreoffice-writer + fonts: convierte DOCX a PDF (módulo de Impresión) vía
+# `soffice --headless --convert-to pdf`. Suma ~400MB pero es la conversión fiel.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ libffi-dev libssl-dev libmupdf-dev libjpeg-dev zlib1g-dev \
+    libreoffice-writer fonts-dejavu fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps
