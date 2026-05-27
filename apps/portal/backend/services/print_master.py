@@ -19,6 +19,7 @@ import io
 import os
 import math
 import uuid
+import zipfile
 import logging
 import subprocess
 import tempfile
@@ -40,6 +41,9 @@ PAGE_W, PAGE_H = letter
 MARGIN = 72  # 1 pulgada
 GOLD = (0.83, 0.69, 0.22)
 DARK = (0.1, 0.1, 0.1)
+DEFAULT_ADDRESS = "3235 North Point Pkwy, Suite 101, Alpharetta, GA. 30005"
+# Opacidad del fondo de marca (0 = invisible, 1 = sólido). Tipo marca de agua.
+BG_OPACITY = 0.2
 
 # Paginación determinística del índice (debe coincidir simulación vs render).
 TOC_ROWS_FIRST = 24
@@ -48,8 +52,9 @@ TOC_ROWS_REST = 32
 
 # ============= helpers de texto =============
 
-def _text(val, lang="es"):
-    """Resuelve un título que puede ser str o dict bilingüe {es,en}."""
+def _text(val, lang="en"):
+    """Resuelve un título que puede ser str o dict bilingüe {es,en}.
+    El documento maestro es en inglés, así que priorizamos 'en'."""
     if isinstance(val, dict):
         return val.get(lang) or val.get("en") or val.get("es") or ""
     return str(val or "")
@@ -116,10 +121,39 @@ def _placeholder_pdf(title):
     c = canvas.Canvas(buf, pagesize=letter)
     c.setFont("Helvetica-Oblique", 12)
     c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawCentredString(PAGE_W / 2, PAGE_H / 2, f"[No se pudo incluir: {title}]")
+    c.drawCentredString(PAGE_W / 2, PAGE_H / 2, f"[Could not include: {title}]")
     c.showPage()
     c.save()
     return buf.getvalue()
+
+
+def _zip_to_pdf(content):
+    """Descomprime un .zip y concatena en un solo PDF cada archivo convertible
+    (imágenes, PDFs, DOCX) en orden alfabético por nombre. Ignora lo que no se
+    puede convertir. Soporta carpetas anidadas."""
+    writer = PdfWriter()
+    added = 0
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        names = sorted(n for n in zf.namelist() if not n.endswith("/"))
+        for name in names:
+            base = name.rsplit("/", 1)[-1]
+            if base.startswith(".") or base.startswith("__MACOSX"):
+                continue  # archivos ocultos / metadata de macOS
+            try:
+                data = zf.read(name)
+                if not data:
+                    continue
+                pdf = _file_to_pdf(data, base)
+                for page in PdfReader(io.BytesIO(pdf)).pages:
+                    writer.add_page(page)
+                added += 1
+            except Exception as e:
+                logger.warning(f"[print_master] entrada '{name}' del zip omitida: {e}")
+    if added == 0:
+        raise ValueError("zip sin archivos convertibles")
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
 
 
 def _file_to_pdf(content, filename, mime=None):
@@ -134,6 +168,8 @@ def _file_to_pdf(content, filename, mime=None):
             ext = "docx"
         elif "image" in mime:
             ext = mime.split("/")[-1]
+        elif "zip" in mime:
+            ext = "zip"
 
     if ext == "pdf":
         return content
@@ -141,29 +177,33 @@ def _file_to_pdf(content, filename, mime=None):
         return _docx_to_pdf(content, ext)
     if ext in ("png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff"):
         return _image_to_pdf(content, "jpeg" if ext == "jpg" else ext)
+    if ext == "zip":
+        return _zip_to_pdf(content)
     raise ValueError(f"formato no soportado: {ext or mime}")
 
 
 # ============= páginas generadas (reportlab) =============
 
-def _draw_branding(c, img_bytes, y_center, max_w=260, max_h=120):
+def _draw_page_bg(c, img_bytes, alpha=BG_OPACITY):
+    """Dibuja la imagen de marca como fondo a página completa (full-bleed) con
+    opacidad reducida (marca de agua). El texto se dibuja DESPUÉS, por encima,
+    a opacidad sólida (el save/restore aísla el alpha)."""
     if not img_bytes:
         return
     try:
-        reader = ImageReader(io.BytesIO(img_bytes))
-        iw, ih = reader.getSize()
-        ratio = min(max_w / iw, max_h / ih)
-        w, h = iw * ratio, ih * ratio
-        c.drawImage(reader, (PAGE_W - w) / 2, y_center - h / 2, w, h,
-                    preserveAspectRatio=True, mask="auto")
+        c.saveState()
+        c.setFillAlpha(alpha)
+        c.drawImage(ImageReader(io.BytesIO(img_bytes)), 0, 0, PAGE_W, PAGE_H,
+                    preserveAspectRatio=False, mask="auto")
+        c.restoreState()
     except Exception as e:
-        logger.warning(f"[print_master] no se pudo dibujar branding: {e}")
+        logger.warning(f"[print_master] no se pudo dibujar fondo: {e}")
 
 
 def _build_cover(title, client_name, address, branding_bytes):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
-    _draw_branding(c, branding_bytes, PAGE_H - 180, max_w=300, max_h=140)
+    _draw_page_bg(c, branding_bytes)
     c.setFillColorRGB(*DARK)
     c.setFont("Helvetica-Bold", 26)
     for i, line in enumerate(_wrap(title, "Helvetica-Bold", 26, PAGE_W - 2 * MARGIN)):
@@ -184,7 +224,7 @@ def _build_cover(title, client_name, address, branding_bytes):
 def _build_separator(section_title, sub_title, branding_bytes):
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
-    _draw_branding(c, branding_bytes, PAGE_H - 140, max_w=220, max_h=90)
+    _draw_page_bg(c, branding_bytes)
     c.setFillColorRGB(*DARK)
     c.setFont("Helvetica-Bold", 24)
     y = PAGE_H / 2 + 30
@@ -221,12 +261,13 @@ def _build_toc(entries, branding_bytes):
         nonlocal y, rows_on_page, rows_limit
         if not first:
             c.showPage()
+        _draw_page_bg(c, branding_bytes)
         y = PAGE_H - MARGIN
         rows_on_page = 0
         rows_limit = TOC_ROWS_REST
         c.setFillColorRGB(*DARK)
         c.setFont("Helvetica-Bold", 20)
-        c.drawString(MARGIN, y, "Contenido" if first else "Contenido (cont.)")
+        c.drawString(MARGIN, y, "Table of Contents" if first else "Table of Contents (cont.)")
         y -= 34
 
     new_page(first=True)
@@ -285,8 +326,10 @@ def _stamp_page_numbers(merged_bytes):
 
 # ============= resolución de archivos =============
 
-def _resolve_files(item, deliverables_by_id):
-    d = deliverables_by_id.get(item.get("deliverableId"))
+def _resolve_files(item, deliverables_by_id, documents_by_id):
+    src = item.get("source", "deliverable")
+    table = documents_by_id if src == "document" else deliverables_by_id
+    d = table.get(item.get("deliverableId"))
     if not d:
         return []
     files = d.get("files") or []
@@ -300,8 +343,12 @@ def _resolve_files(item, deliverables_by_id):
 
 
 def _download(url):
+    if not url:
+        raise ValueError("sin URL de archivo")
     resp = requests.get(url, timeout=90)
     resp.raise_for_status()
+    if not resp.content:
+        raise ValueError("archivo vacío (0 bytes)")
     return resp.content
 
 
@@ -324,6 +371,8 @@ def generate_master_pdf(case_id: str) -> dict:
 
     deliverables = select("visa_deliverables", filters={"case_id": case_id}, limit=500)
     deliverables_by_id = {d.get("id"): d for d in deliverables}
+    documents = select("visa_documents", filters={"case_id": case_id}, limit=500)
+    documents_by_id = {d.get("id"): d for d in documents}
 
     # --- Paso 1: armar el cuerpo (separadoras + contenido) y registrar entradas ---
     body_chunks = []
@@ -332,7 +381,18 @@ def generate_master_pdf(case_id: str) -> dict:
 
     def add_chunk(pdf_bytes):
         nonlocal body_pages
-        n = _count_pages(pdf_bytes)
+        # Blindaje: el chunk DEBE ser un PDF legible y no vacío, porque el merge
+        # final lo lee con PdfReader (que tira EmptyFileError si está vacío).
+        try:
+            if not pdf_bytes:
+                raise ValueError("vacío")
+            n = len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+            if n == 0:
+                raise ValueError("sin páginas")
+        except Exception as e:
+            logger.warning(f"[print_master] chunk inválido ({e}); reemplazo por placeholder")
+            pdf_bytes = _placeholder_pdf("unreadable file")
+            n = len(PdfReader(io.BytesIO(pdf_bytes)).pages)
         start = body_pages + 1
         body_chunks.append(pdf_bytes)
         body_pages += n
@@ -340,7 +400,7 @@ def generate_master_pdf(case_id: str) -> dict:
 
     def add_items(items, level):
         for item in sorted(items, key=lambda x: x.get("order", 0)):
-            files = _resolve_files(item, deliverables_by_id)
+            files = _resolve_files(item, deliverables_by_id, documents_by_id)
             if not files:
                 continue
             item_start = item_end = None
@@ -356,8 +416,9 @@ def generate_master_pdf(case_id: str) -> dict:
                 if item_start is None:
                     item_start = cs
                 item_end = ce
-            d = deliverables_by_id.get(item.get("deliverableId"), {})
-            item_title = item.get("title") or d.get("name") or "Entregable"
+            table = documents_by_id if item.get("source") == "document" else deliverables_by_id
+            d = table.get(item.get("deliverableId"), {})
+            item_title = item.get("title") or d.get("name") or d.get("documentName") or "Document"
             entries.append({"level": level, "title": item_title,
                             "start": item_start, "end": item_end})
 
@@ -386,11 +447,19 @@ def generate_master_pdf(case_id: str) -> dict:
 
     # --- Paso 3: portada + índice ---
     case = select("visa_cases", filters={"id": case_id}, single=True) or {}
-    cover_title = layout.get("brandingClientName") or "Documento Maestro de Visa"
+    # Fallback: si no se guardó el nombre del cliente, lo tomamos del caso; la
+    # dirección por default es la de URPE.
+    client_name = layout.get("brandingClientName")
+    if not client_name:
+        cid = case.get("clientId") or case.get("userId") or case.get("client_id")
+        if cid:
+            u = select("users", filters={"id": cid}, single=True)
+            client_name = (u or {}).get("name")
+    address = layout.get("brandingAddress") or DEFAULT_ADDRESS
     cover = _build_cover(
-        cover_title,
-        layout.get("brandingClientName"),
-        layout.get("brandingAddress"),
+        client_name or "Visa Master Document",
+        client_name,
+        address,
         branding_bytes,
     )
     toc = _build_toc(entries, branding_bytes)

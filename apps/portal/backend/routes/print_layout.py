@@ -162,5 +162,5 @@ async def generate_master(case_id: str, authorization: Annotated[str, Header()])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"[print_layout] generate error case={case_id}: {e}")
+        logger.error(f"[print_layout] generate error case={case_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generando el PDF maestro: {e}")

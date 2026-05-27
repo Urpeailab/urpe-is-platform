@@ -30,6 +30,8 @@ import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
 import { ActionHeader } from '../components/visa-case/ActionHeader';
 import { StatCard } from '../components/visa-case/StatCard';
 import { VisaTimeline } from '../components/visa-case/VisaTimeline';
+import { PrintLayoutTab } from '../components/visa-case/PrintLayoutTab';
+import { Printer } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -2319,13 +2321,21 @@ export const VisaCaseDetailRedesign = () => {
                 <span className="hidden sm:inline">Notas</span>
                 <span className="sm:hidden">✎</span>
               </TabsTrigger>
-              <TabsTrigger 
+              <TabsTrigger
                 value="history"
                 className="data-[state=active]:bg-blue-600 data-[state=active]:text-white rounded-lg px-4 sm:px-6 whitespace-nowrap"
               >
                 <History className="h-4 w-4 mr-1 sm:mr-2" />
                 <span className="hidden sm:inline">Historial</span>
                 <span className="sm:hidden">Log</span>
+              </TabsTrigger>
+              <TabsTrigger
+                value="print"
+                className="data-[state=active]:bg-blue-600 data-[state=active]:text-white rounded-lg px-4 sm:px-6 whitespace-nowrap"
+              >
+                <Printer className="h-4 w-4 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">Impresión</span>
+                <span className="sm:hidden">Print</span>
               </TabsTrigger>
               </>
               )}
@@ -4863,6 +4873,15 @@ export const VisaCaseDetailRedesign = () => {
                     </div>
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* PRINT / IMPRESIÓN TAB */}
+          <TabsContent value="print" className="space-y-4">
+            <Card className="bg-white border-gray-200 shadow-sm">
+              <CardContent className="p-6">
+                <PrintLayoutTab caseId={caseId} deliverables={deliverables} documents={documents} token={token} clientName={caseData?.user?.name || ''} />
               </CardContent>
             </Card>
           </TabsContent>

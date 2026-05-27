@@ -24,9 +24,12 @@ class PrintItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    # Origen del archivo: "deliverable" (visa_deliverables) o "document"
+    # (visa_documents, documentos requeridos del cliente).
+    source: str = "deliverable"
     deliverableId: str
-    # fileId opcional: si se especifica, solo ese archivo del entregable entra al
-    # maestro; si es None, entran todos los archivos publicados del entregable.
+    # fileId opcional: si se especifica, solo ese archivo entra al maestro;
+    # si es None, entran todos los archivos publicados.
     fileId: Optional[str] = None
     title: Optional[BilingualText] = None
     order: int = 0
@@ -64,11 +67,11 @@ class PrintLayoutUpdate(BaseModel):
 
 # ============= PLANTILLA BASE =============
 
-def _section(es: str, en: str, *, branding: bool = False,
+def _section(title: str, *, branding: bool = False,
              subsections: Optional[List[dict]] = None) -> dict:
     return {
         "id": str(uuid.uuid4()),
-        "title": {"es": es, "en": en},
+        "title": title,
         "order": 0,
         "includeBranding": branding,
         "items": [],
@@ -76,10 +79,10 @@ def _section(es: str, en: str, *, branding: bool = False,
     }
 
 
-def _subsection(es: str, en: str) -> dict:
+def _subsection(title: str) -> dict:
     return {
         "id": str(uuid.uuid4()),
-        "title": {"es": es, "en": en},
+        "title": title,
         "order": 0,
         "items": [],
     }
@@ -88,32 +91,27 @@ def _subsection(es: str, en: str) -> dict:
 def default_print_template() -> List[dict]:
     """Plantilla base editable, basada en la estructura típica de un paquete NIW.
 
-    El admin arranca de acá y arrastra los entregables del caso a cada sección /
-    subsección. Las secciones de portada llevan branding por default.
+    El documento maestro es en inglés (es lo que recibe USCIS), así que los
+    títulos de secciones/subsecciones van en inglés. El admin arranca de acá y
+    arrastra los entregables a cada sección. Las portadas llevan branding.
     """
     sections = [
-        _section("Certificación de Fotocopias", "Photocopy Certification"),
-        _section("Formularios y Tarifa", "Forms and Fee"),
-        _section("Documentos Migratorios Históricos", "Historical Immigration Documents"),
-        _section("Petición de Exención por Interés Nacional",
-                 "Petition for National Interest Waiver", branding=True),
+        _section("Photocopy Certification"),
+        _section("Forms and Fee"),
+        _section("Historical Immigration Documents"),
+        _section("Petition for National Interest Waiver", branding=True),
         _section(
-            "Lista de Exhibits", "List of Exhibits", branding=True,
+            "List of Exhibits", branding=True,
             subsections=[
-                _subsection("Exhibit 1: Proyecto", "Exhibit 1: Project"),
-                _subsection("Exhibit 2: Estudios de Soporte", "Exhibit 2: Supporting Studies"),
-                _subsection("Exhibit 3: Currículum Vitae (CV)", "Exhibit 3: Curriculum Vitae (CV)"),
-                _subsection("Exhibit 4: Certificados de Estudio", "Exhibit 4: Certificates of Study"),
-                _subsection("Exhibit 5: Cartas de Intención de Inversión",
-                            "Exhibit 5: Letters of Intent to Invest"),
-                _subsection("Exhibit 6: Carta de Evaluación de Experto",
-                            "Exhibit 6: Expert Evaluation Letter"),
-                _subsection("Exhibit 7: Recomendaciones de Expertos",
-                            "Exhibit 7: Recommendation from Experts"),
-                _subsection("Exhibit 8: Cartas de Certificación Laboral",
-                            "Exhibit 8: Employment Certificate Letters"),
-                _subsection("Exhibit 9: Documentos de mi Familia",
-                            "Exhibit 9: Documents of my Family"),
+                _subsection("Exhibit 1: Project"),
+                _subsection("Exhibit 2: Supporting Studies"),
+                _subsection("Exhibit 3: Curriculum Vitae (CV)"),
+                _subsection("Exhibit 4: Certificates of Study"),
+                _subsection("Exhibit 5: Letters of Intent to Invest"),
+                _subsection("Exhibit 6: Expert Evaluation Letter"),
+                _subsection("Exhibit 7: Recommendation from Experts"),
+                _subsection("Exhibit 8: Employment Certificate Letters"),
+                _subsection("Exhibit 9: Documents of my Family"),
             ],
         ),
     ]
