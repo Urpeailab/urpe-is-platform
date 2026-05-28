@@ -14,7 +14,13 @@ from typing import Optional
 import docx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from PyPDF2 import PdfReader
+from PyPDF2 import PdfReader  # noqa: F401 — kept for backward import compat
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pdf_extractor import (
+    extract_text_from_bytes as _shared_extract_from_bytes,
+    validate_signer_name_in_cv,
+)
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -33,16 +39,24 @@ _get_current_user = None
 _call_openai_gpt4o = None
 _call_gemini_flash_lite = None
 _call_openai_gpt5 = None
+_call_openai_gpt4o_vision = None  # opcional — para OCR de PDFs vectorizados
 
 
 def init_router(db, get_current_user_fn, call_openai_gpt4o_fn,
-                call_gemini_flash_lite_fn, call_openai_gpt5_fn):
+                call_gemini_flash_lite_fn, call_openai_gpt5_fn,
+                call_openai_gpt4o_vision_fn=None):
     global _db, _get_current_user, _call_openai_gpt4o, _call_gemini_flash_lite, _call_openai_gpt5
+    global _call_openai_gpt4o_vision
     _db = db
     _get_current_user = get_current_user_fn
     _call_openai_gpt4o = call_openai_gpt4o_fn
     _call_gemini_flash_lite = call_gemini_flash_lite_fn
     _call_openai_gpt5 = call_openai_gpt5_fn
+    _call_openai_gpt4o_vision = call_openai_gpt4o_vision_fn
+    logger.info(
+        f"✅ Intent Letters Router initialized | vision_ocr="
+        f"{'available' if call_openai_gpt4o_vision_fn else 'NOT available'}"
+    )
 
 
 def _get_db():
@@ -57,17 +71,19 @@ async def get_current_user_wrapper(credentials: HTTPAuthorizationCredentials = D
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _extract_text(content: bytes, filename: str) -> str:
-    """Extract plain text from PDF, DOCX or TXT bytes."""
-    fn = filename.lower()
-    if fn.endswith(".pdf"):
-        reader = PdfReader(io.BytesIO(content))
-        return "\n".join(p.extract_text() or "" for p in reader.pages)
-    elif fn.endswith(".docx"):
-        doc = docx.Document(io.BytesIO(content))
-        return "\n".join(p.text for p in doc.paragraphs)
-    else:
-        return content.decode("utf-8", errors="ignore")
+async def _extract_text(content: bytes, filename: str, file_label: str = "") -> str:
+    """Extract plain text via the shared 5-engine + Vision OCR cascade.
+
+    See pdf_extractor.py for the cascade order and rationale (2026-05-28 bug
+    where PyPDF2 alone returned "" for vectorized Canva-style CVs and the LLM
+    then hallucinated a generic signer).
+    """
+    return await _shared_extract_from_bytes(
+        content,
+        filename,
+        vision_fn=_call_openai_gpt4o_vision,
+        file_label=file_label or filename,
+    )
 
 
 def _parse_json_safe(text: str) -> dict:
@@ -132,10 +148,24 @@ async def _generate_intent_letter_background(
     try:
         # ── Step 1: Extract text ────────────────────────────────────────────────
         await _update(10, "Extrayendo texto de los documentos...")
-        cv_text = _extract_text(cv_bytes, cv_filename)
-        project_text = _extract_text(project_bytes, project_filename)
-        support_text = _extract_text(support_bytes, support_filename) if support_bytes else ""
-        signer_text = _extract_text(signer_bytes, signer_filename) if signer_bytes else ""
+        cv_text = await _extract_text(cv_bytes, cv_filename, file_label="petitioner_cv")
+        project_text = await _extract_text(project_bytes, project_filename, file_label="project_info")
+        support_text = await _extract_text(support_bytes, support_filename, file_label="support_doc") if support_bytes else ""
+        signer_text = await _extract_text(signer_bytes, signer_filename, file_label="signer_cv") if signer_bytes else ""
+
+        # ── Hard fail if the petitioner CV came back empty (PDF imagen / problema) ─
+        if len(cv_text.strip()) < 100:
+            raise ValueError(
+                "No se pudo extraer texto del CV del peticionario. "
+                "Verificá que el PDF no sea escaneado (imagen) y que tenga "
+                "texto seleccionable."
+            )
+        if signer_bytes and len(signer_text.strip()) < 100:
+            raise ValueError(
+                "No se pudo extraer texto del CV del firmante. "
+                "Verificá que el PDF no sea escaneado (imagen) y que tenga "
+                "texto seleccionable."
+            )
 
         # ── Step 2: Analyze all documents ──────────────────────────────────────
         await _update(25, "Analizando perfil y proyecto con IA...")
@@ -218,6 +248,21 @@ Return this JSON structure:
         signer_credentials = extracted.get("signer_credentials", "") or ""
         signer_relationship = (extracted.get("signer_relationship") or "investor").strip().lower()
         signer_commitment = extracted.get("signer_commitment", "") or ""
+
+        # ── Anti-hallucination guards ──────────────────────────────────────────
+        # El peticionario DEBE aparecer en su propio CV. El firmante (si hay
+        # signer_cv) también — para evitar "Dr. Emily Thompson, MIT" alucinado.
+        logger.info(
+            f"🧑‍⚖️ Intent extraído | petitioner={petitioner_name!r} "
+            f"signer={signer_name!r} signer_title={signer_title!r}"
+        )
+        validate_signer_name_in_cv(
+            petitioner_name, cv_text, role_label="peticionario"
+        )
+        if signer_text:
+            validate_signer_name_in_cv(
+                signer_name, signer_text, role_label="firmante"
+            )
         # A Letter of Intent is most commonly signed by an INVESTOR committing
         # capital to the petitioner's endeavor. If the analysis yields an
         # ambiguous relationship ("self"/"petitioner"/empty), default to

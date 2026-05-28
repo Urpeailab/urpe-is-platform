@@ -134,7 +134,11 @@
       "Bash(awk 'NR>=37449 && NR<=37800 && \\(/recommender_name|recommender_title|recommender_org|signature|sign_off|signer/\\) {print NR\": \"$0}' apps/redactora/backend/server.py)",
       "Bash(awk 'NR>=36856 && NR<=37100 && /recommender_name\\\\|extracted_data/' apps/redactora/backend/server.py)",
       "Bash(awk 'NR>=36856 && NR<=37100 && \\(/recommender_name|recommender_title|recommender_org|extracted_data\\\\[/\\) {print NR\": \"$0}' apps/redactora/backend/server.py)",
-      "Bash(awk 'NR>=37090 && NR<=37260 && \\(/recommender_name|recommender_organization|recommender_title|update_one|set_one/\\) {print NR\": \"$0}' apps/redactora/backend/server.py)"
+      "Bash(awk 'NR>=37090 && NR<=37260 && \\(/recommender_name|recommender_organization|recommender_title|update_one|set_one/\\) {print NR\": \"$0}' apps/redactora/backend/server.py)",
+      "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/routers/expert_letters_router.py\")",
+      "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py\")",
+      "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/pdf_extractor.py\")",
+      "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/routers/intent_letters_router.py\")"
     ],
     "additionalDirectories": [
       "C:\\Temp"
