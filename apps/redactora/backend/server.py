@@ -41022,10 +41022,24 @@ async def start_trash_cleanup_scheduler():
             name='Detección automática de libros atascados',
             replace_existing=True
         )
-        
+
+        # Portal cliente (Fases 2-3): cada 2 minutos revisamos publicaciones
+        # con ventana de comentarios vencida y disparamos al agente LLM.
+        # Granularidad de 2 min = retraso aceptable para el cliente que espera
+        # ver sus correcciones aplicadas (~2-5 min después de los 60 min del window).
+        scheduler.add_job(
+            _portal_correction_agent,
+            CronTrigger(minute='*/2'),
+            id='portal_correction_agent',
+            name='Agente de corrección — portal cliente NIW',
+            replace_existing=True,
+            max_instances=1,  # nunca dos ticks corriendo a la vez
+        )
+
         scheduler.start()
         logger.info("✅ Scheduler de limpieza de papelera iniciado (ejecuta diariamente a las 3:00 AM)")
         logger.info("✅ Scheduler de detección de libros atascados iniciado (ejecuta cada 10 minutos)")
+        logger.info("✅ Agente de corrección portal cliente iniciado (revisa cada 2 minutos)")
         logger.info("📋 Retención configurada: 30 días")
         
         # Migration: Fix econometric studies with incorrect status (non-blocking)
@@ -44142,6 +44156,544 @@ async def download_self_petition_letter_docx(
         is_html=_looks_like_html(content),
         add_cover=False,
     )
+
+
+# ============================================================
+# CLIENT PORTAL — Fase 1: publicar + visor público (solo lectura)
+# ============================================================
+# Renderiza el NIW completo en un link público (/p/{slug}?token=...) con
+# diseño "editorial elite" (sidebar TOC + secciones colapsables + watermark).
+# Adaptado de niw_gen_publish.py del jefe: el renderer está en
+# `portal_publish.py` y vive aislado del resto del backend.
+#
+# Fase 1 expone SOLO:
+#   - POST /api/business-plans/{niw_id}/publish  (auth) → crea publicación
+#   - GET  /p/{slug}?token=...                   (público) → muestra el HTML
+#
+# Los botones "Comentar"/"Solicitar cambios"/"Aprobar" se renderizan
+# deshabilitados (can_comment=False) porque los endpoints públicos que los
+# atienden viven en Fases 2-3.
+import hmac
+from fastapi.responses import HTMLResponse as _HTMLResponse
+from portal_publish import (
+    make_slug as _portal_make_slug,
+    make_token as _portal_make_token,
+    make_fingerprint as _portal_make_fingerprint,
+    section_slug as _portal_section_slug,
+    niw_to_sections as _portal_niw_to_sections,
+    render_portal_html as _portal_render_html,
+)
+
+
+# ---------- State machine de rondas (Fase 2) ----------
+# Flujo:
+#   draft_published
+#     └─(primer comentario)→ round1_collecting (window de 1h desde el 1er comment)
+#                              └─(1h elapsed)→ round1_correcting (agente LLM corrigiendo)
+#                                                 └─(termina)→ round1_done
+#                                                                 └─(nuevo comentario)→ round2_collecting
+#                                                                                          └─(1h)→ round2_correcting → closed
+#   `approved` y `closed` son terminales; `approved` se alcanza desde
+#   cualquier estado no-correcting cuando el cliente aprueba.
+PORTAL_WINDOW_HOURS = 1
+PORTAL_CORRECTING_STATES = {"round1_correcting", "round2_correcting"}
+PORTAL_TERMINAL_STATES = {"closed", "approved"}
+
+
+def _portal_status_view(status: str):
+    """(can_comment, status_label, round_banner) para el render del visor."""
+    table = {
+        "draft_published": (
+            True,
+            "Borrador",
+            "Esta es la versión inicial del documento. Comenta por sección o solicita cambios globales antes de aprobar.",
+        ),
+        "round1_collecting": (
+            True,
+            "Comentarios — ronda 1",
+            "Tienes hasta 1 hora desde tu primer comentario para terminar de comentar la ronda 1. Después aplicamos los cambios automáticamente.",
+        ),
+        "round1_correcting": (
+            False,
+            "Aplicando ronda 1",
+            "Estamos aplicando tus comentarios. Vuelve a abrir este link en unos minutos.",
+        ),
+        "round1_done": (
+            True,
+            "Ronda 1 aplicada",
+            "Tus comentarios de la ronda 1 ya están aplicados. Revisa los cambios; puedes pedir una segunda y última ronda, o aprobar.",
+        ),
+        "round2_collecting": (
+            True,
+            "Comentarios — ronda 2 (final)",
+            "Esta es la última ronda. Tienes hasta 1 hora desde tu primer comentario.",
+        ),
+        "round2_correcting": (
+            False,
+            "Aplicando ronda 2",
+            "Estamos aplicando los últimos comentarios. Vuelve a abrir este link en unos minutos.",
+        ),
+        "closed": (
+            False,
+            "Comentarios cerrados",
+            "Se completaron las dos rondas de revisión. Si necesitas más cambios, contacta al equipo URPE IS.",
+        ),
+        "approved": (
+            False,
+            "Aprobado",
+            "Aprobaste este borrador. El equipo URPE IS procede con la siguiente fase. ¡Gracias!",
+        ),
+    }
+    return table.get(status, (False, status or "Estado desconocido", ""))
+
+
+def _portal_next_state_on_comment(current_state: str):
+    """Decide la transición al recibir un comentario.
+
+    Retorna (new_state, round_num, set_window_now, accept). Si accept=False
+    el caller debe rechazar con 409 (no se admiten comentarios en este estado).
+    """
+    if current_state == "draft_published":
+        return ("round1_collecting", 1, True, True)
+    if current_state == "round1_collecting":
+        return ("round1_collecting", 1, False, True)
+    if current_state == "round1_done":
+        return ("round2_collecting", 2, True, True)
+    if current_state == "round2_collecting":
+        return ("round2_collecting", 2, False, True)
+    return (current_state, 0, False, False)
+
+
+async def _portal_get_pub_or_403(slug: str, token: str):
+    """Lookup público + verificación constant-time del token. Lanza HTTP."""
+    pub = await db.portal_publications.find_one({"slug": slug}, {"_id": 0})
+    if not pub:
+        raise HTTPException(status_code=404, detail="Publicación no encontrada")
+    expected = pub.get("token") or ""
+    if not token or not hmac.compare_digest(token, expected):
+        raise HTTPException(status_code=403, detail="Token inválido")
+    return pub
+
+
+class PublishNIWInput(BaseModel):
+    """Metadatos que el operador puede sobreescribir al publicar."""
+    client_name: Optional[str] = None
+    client_email: Optional[str] = None
+    case_id: Optional[str] = ""
+    attorney: Optional[str] = "Angelica Monrroy"
+    version: Optional[int] = 1
+
+
+@api_router.post("/business-plans/{niw_id}/publish")
+async def publish_niw_for_client(
+    niw_id: str,
+    payload: PublishNIWInput,
+    current_user: User = Depends(get_current_user),
+):
+    """Crea una publicación pública del NIW y devuelve el link compartible.
+
+    Busca el NIW en `business_plans` (completado) y, si no aparece, en
+    `business_plans_in_progress`. Genera slug+token y guarda los metadatos
+    de cliente/caso/abogado en el JSONB `data` para que el visor los lea
+    sin volver a leer el NIW completo en cada request.
+    """
+    niw = await db.business_plans.find_one({"id": niw_id}, {"_id": 0})
+    collection_name = "business_plans"
+    if not niw:
+        niw = await db.niw_in_progress.find_one({"id": niw_id}, {"_id": 0})
+        collection_name = "business_plans_in_progress"
+    if not niw:
+        raise HTTPException(status_code=404, detail="NIW not found")
+
+    # Verificar pertenencia (el operador solo publica NIWs propios o si es admin)
+    is_owner = niw.get("user_id") == current_user.id
+    is_admin = (current_user.role or "").upper() == "ADMIN"
+    if not (is_owner or is_admin):
+        raise HTTPException(status_code=403, detail="No autorizado para publicar este NIW")
+
+    if not (niw.get("sections") or []):
+        raise HTTPException(status_code=400, detail="El NIW no tiene secciones para publicar")
+
+    client_name = (payload.client_name or niw.get("applicant_name") or "Cliente").strip()
+    client_email = (payload.client_email or "").strip()
+    case_id = (payload.case_id or "").strip()
+    attorney = (payload.attorney or "Angelica Monrroy").strip()
+    version = int(payload.version or 1)
+
+    slug = _portal_make_slug(client_name)
+    token = _portal_make_token()
+    pub_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    pub_doc = {
+        "id": pub_id,
+        "niw_id": niw_id,
+        "doc_collection": collection_name,
+        "slug": slug,
+        "token": token,
+        "status": "draft_published",
+        "round": 0,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        # Campos no-surface: van a `data` JSONB por el split de mongo_compat
+        "client_name": client_name,
+        "client_email": client_email,
+        "case_id": case_id,
+        "attorney": attorney,
+        "version": version,
+        "published_by": current_user.id,
+    }
+    await db.portal_publications.insert_one(pub_doc)
+
+    return {
+        "id": pub_id,
+        "slug": slug,
+        "token": token,
+        "url": f"/p/{slug}?token={token}",
+        "status": "draft_published",
+    }
+
+
+@app.get("/p/{slug}")
+async def view_portal_publication(slug: str, token: str = ""):
+    """Visor público del NIW.
+
+    El SPA catch-all está registrado más abajo y excluye explícitamente
+    `api/`, `health`, `static/`, `static-backend/` — para que el path
+    `/p/...` caiga aquí en vez del SPA, esta ruta debe registrarse ANTES
+    del catch-all (lo está: este bloque vive antes de `@app.get('/{full_path:path}')`).
+    `can_comment` y el banner se derivan del estado actual de la
+    publicación; los botones se deshabilitan automáticamente durante
+    correcciones o tras aprobar/cerrar.
+    """
+    pub = await _portal_get_pub_or_403(slug, token)
+
+    collection_name = pub.get("doc_collection") or "business_plans"
+    target = db.business_plans if collection_name == "business_plans" else db.niw_in_progress
+    niw = await target.find_one({"id": pub["niw_id"]}, {"_id": 0})
+    if not niw:
+        raise HTTPException(status_code=404, detail="Documento NIW de origen no disponible")
+
+    sections_en = _portal_niw_to_sections(niw, "en")
+    sections_es = _portal_niw_to_sections(niw, "es")
+    if not any(s["body_paragraphs"] for s in sections_es):
+        sections_es = []
+
+    client_email = pub.get("client_email") or ""
+    version = pub.get("version") or 1
+    fingerprint = _portal_make_fingerprint(client_email, version)
+
+    can_comment, status_label, round_banner = _portal_status_view(pub.get("status") or "")
+
+    html_body = _portal_render_html(
+        sections_en=sections_en,
+        sections_es=sections_es,
+        client_name=pub.get("client_name") or niw.get("applicant_name") or "Cliente",
+        client_email=client_email,
+        case_id=pub.get("case_id") or "",
+        version=version,
+        attorney=pub.get("attorney") or "Angelica Monrroy",
+        fingerprint=fingerprint,
+        slug=slug,
+        token=token,
+        can_comment=can_comment,
+        status_label=status_label,
+        round_banner=round_banner,
+    )
+    return _HTMLResponse(content=html_body, status_code=200)
+
+
+# ============================================================
+# CLIENT PORTAL — Fase 2: endpoints públicos (comment / approve / download)
+# ============================================================
+# Estos viven en `app` (no `api_router`) porque el path `/api/portal/...`
+# NO usa el JWT del operador — la única credencial es el `?token=` del link
+# compartido. Por eso van fuera del prefijo `/api` controlado por auth
+# y validamos con `_portal_get_pub_or_403`.
+
+class PortalCommentInput(BaseModel):
+    """Payload que envía el visor cliente al backend (definido por el JS de portal_publish.render_portal_html)."""
+    kind: str = "section"              # 'section' | 'global'
+    section_id: Optional[str] = None   # slug devuelto por _portal_section_slug
+    lang: Optional[str] = "en"
+    comment: str
+
+
+@app.post("/api/portal/{slug}/comment")
+async def portal_post_comment(slug: str, payload: PortalCommentInput, token: str = ""):
+    pub = await _portal_get_pub_or_403(slug, token)
+
+    comment_text = (payload.comment or "").strip()
+    min_len = 10 if payload.kind == "global" else 5
+    if len(comment_text) < min_len:
+        raise HTTPException(status_code=400, detail=f"Escribe al menos {min_len} caracteres")
+    if payload.kind not in ("section", "global"):
+        raise HTTPException(status_code=400, detail="Tipo de comentario inválido")
+    if payload.kind == "section" and not payload.section_id:
+        raise HTTPException(status_code=400, detail="Falta section_id")
+
+    current_state = pub.get("status") or ""
+    new_state, round_num, set_window, accept = _portal_next_state_on_comment(current_state)
+    if not accept:
+        raise HTTPException(status_code=409, detail="No se admiten más comentarios en este estado")
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    comment_doc = {
+        "id": str(uuid.uuid4()),
+        "publication_id": pub["id"],
+        "niw_id": pub["niw_id"],
+        "round": round_num,
+        "kind": payload.kind,
+        "section_id": payload.section_id if payload.kind == "section" else None,
+        "lang": (payload.lang or "en").lower(),
+        "comment": comment_text,
+        "status": "pending",
+        "created_at": now_iso,
+    }
+    await db.portal_comments.insert_one(comment_doc)
+
+    update: dict = {"updated_at": now_iso}
+    if current_state != new_state:
+        update["status"] = new_state
+        update["round"] = round_num
+    if set_window:
+        # round1_started_at / round2_started_at viven en `data` JSONB
+        update[f"round{round_num}_started_at"] = now_iso
+
+    await db.portal_publications.update_one({"slug": slug}, {"$set": update})
+    return {"ok": True, "round": round_num, "state": new_state}
+
+
+@app.post("/api/portal/{slug}/approve")
+async def portal_post_approve(slug: str, token: str = ""):
+    pub = await _portal_get_pub_or_403(slug, token)
+    current_state = pub.get("status") or ""
+    if current_state == "approved":
+        return {"ok": True, "state": "approved", "already": True}
+    if current_state in PORTAL_CORRECTING_STATES:
+        raise HTTPException(status_code=409, detail="Hay correcciones en curso. Intenta de nuevo en unos minutos.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.portal_publications.update_one(
+        {"slug": slug},
+        {"$set": {"status": "approved", "updated_at": now_iso, "approved_at": now_iso}},
+    )
+    return {"ok": True, "state": "approved"}
+
+
+@app.get("/api/portal/{slug}/download.pdf")
+async def portal_download_pdf(slug: str, token: str = "", language: str = "en"):
+    """Sirve el PDF del NIW al cliente.
+
+    Delega al endpoint interno `download_business_plan_pdf`, que ya no
+    requiere JWT (ya es público por diseño del módulo). Aquí solo validamos
+    el token del portal antes de delegar.
+    """
+    pub = await _portal_get_pub_or_403(slug, token)
+    lang = (language or "en").lower()
+    if lang not in ("es", "en"):
+        lang = "en"
+    return await download_business_plan_pdf(pub["niw_id"], language=lang)
+
+
+# ============================================================
+# CLIENT PORTAL — Fase 3: agente de corrección por LLM
+# ============================================================
+# El job corre cada 2 minutos. Cuando una publicación lleva más de
+# PORTAL_WINDOW_HOURS en `round{N}_collecting` la mueve a `round{N}_correcting`,
+# aplica los comentarios pendientes de esa ronda con `call_openai_gpt5` y la
+# finaliza (`round1_done` o `closed`). Si el LLM falla en alguna sección, esa
+# sección queda intacta y el comentario se marca `error` (no bloquea el resto
+# ni deja al cliente atascado en "correcting").
+
+async def _portal_apply_comments_to_section(target_collection, niw_id, niw_section, comments):
+    """Aplica TODOS los comentarios de una sección con UNA sola llamada LLM.
+
+    `niw_section` viene del documento NIW. `comments` es la lista de
+    comments dicts (`kind='section'`) que apuntan a esta sección. Si todos
+    están en EN editamos `content_en`; si están en ES editamos `content_es`;
+    si están mezclados editamos el idioma mayoritario y dejamos el otro
+    intacto (la regeneración bilingüe canónica vive en otra parte del módulo).
+    """
+    sec_number = niw_section.get("number")
+    sec_title = niw_section.get("title") or f"Section {sec_number}"
+
+    es_count = sum(1 for c in comments if (c.get("lang") or "en") == "es")
+    en_count = len(comments) - es_count
+    lang_pref = "es" if es_count > en_count else "en"
+    content_field = "content_es" if lang_pref == "es" else "content_en"
+    current_content = (
+        niw_section.get(content_field)
+        or niw_section.get("content")
+        or niw_section.get("content_en" if lang_pref == "es" else "content_es")
+        or ""
+    )
+
+    instructions = "\n".join(f"- {c.get('comment', '').strip()}" for c in comments if c.get("comment"))
+    prompt = (
+        f"Rewrite the following section of the EB-2 NIW proposal applying these client comments.\n\n"
+        f"CLIENT COMMENTS:\n{instructions}\n\n"
+        f"CURRENT SECTION TITLE: {sec_title}\n\n"
+        f"CURRENT SECTION CONTENT:\n{current_content}\n\n"
+        f"Output ONLY the rewritten section content (no preamble, no markdown fences, "
+        f"keep the same language and professional tone, maintain USCIS compliance, "
+        f"preserve the section's purpose and structure)."
+    )
+    system_msg = (
+        "You are a senior EB-2 NIW editor. Apply client comments to a single section "
+        "verbatim and surgically — change only what the comments request, keep everything else."
+    )
+    new_content = await call_openai_gpt5(system_msg, prompt, temperature=0.3, max_tokens=4000)
+
+    # Guardar la nueva versión. Solo tocamos el content_field elegido; el
+    # otro idioma queda como estaba (la traducción se regenera por separado).
+    update_doc = {
+        f"sections.$.{content_field}": new_content,
+        "sections.$.content": new_content,   # campo legacy
+        "sections.$.approved": False,
+    }
+    await target_collection.update_one(
+        {"id": niw_id, "sections.number": sec_number},
+        {"$set": update_doc},
+    )
+    return new_content
+
+
+async def _portal_apply_round(pub, round_num: int):
+    """Aplica todos los comments pendientes de `round_num` al NIW."""
+    pub_id = pub["id"]
+    niw_id = pub["niw_id"]
+    collection_name = pub.get("doc_collection") or "business_plans"
+    target = db.business_plans if collection_name == "business_plans" else db.niw_in_progress
+
+    niw = await target.find_one({"id": niw_id}, {"_id": 0})
+    if not niw:
+        logging.warning(f"[portal] NIW {niw_id} no existe al aplicar ronda {round_num}")
+        return
+
+    comments = await db.portal_comments.find(
+        {"publication_id": pub_id, "round": round_num, "status": "pending"},
+        {"_id": 0},
+    ).to_list(length=500)
+
+    if not comments:
+        logging.info(f"[portal] {pub['slug']} ronda {round_num}: 0 comentarios pendientes")
+        return
+
+    # Los comentarios `global` v1 NO se aplican automáticamente: requieren
+    # criterio del operador (qué secciones tocar, cómo). Los marcamos para
+    # revisión manual en la bandeja del operador.
+    section_comments = [c for c in comments if c.get("kind") == "section"]
+    global_comments = [c for c in comments if c.get("kind") == "global"]
+
+    for gc in global_comments:
+        await db.portal_comments.update_one(
+            {"id": gc["id"]},
+            {"$set": {"status": "pending_manual"}},
+        )
+    if global_comments:
+        logging.info(
+            f"[portal] {pub['slug']} ronda {round_num}: {len(global_comments)} comentario(s) global(es) → revisión manual"
+        )
+
+    # Agrupar comentarios por section_id para hacer UNA llamada LLM por sección
+    by_section: dict = {}
+    for c in section_comments:
+        sid = c.get("section_id") or ""
+        by_section.setdefault(sid, []).append(c)
+
+    sections = niw.get("sections") or []
+    by_slug = {_portal_section_slug(s.get("title") or "", s.get("number", 0)): s for s in sections}
+
+    for sid, cs in by_section.items():
+        sec = by_slug.get(sid)
+        if not sec:
+            logging.warning(f"[portal] {pub['slug']} sección {sid!r} no encontrada en NIW {niw_id}; skip")
+            for c in cs:
+                await db.portal_comments.update_one(
+                    {"id": c["id"]},
+                    {"$set": {"status": "error", "error": "section_not_found"}},
+                )
+            continue
+
+        try:
+            await _portal_apply_comments_to_section(target, niw_id, sec, cs)
+            for c in cs:
+                await db.portal_comments.update_one({"id": c["id"]}, {"$set": {"status": "applied"}})
+            logging.info(
+                f"[portal] {pub['slug']} aplicó {len(cs)} comentario(s) a sección {sec.get('number')} ({sec.get('title')!r})"
+            )
+        except Exception as e:
+            logging.error(
+                f"[portal] {pub['slug']} fallo LLM en sección {sec.get('number')} ({sec.get('title')!r}): {e}"
+            )
+            for c in cs:
+                await db.portal_comments.update_one(
+                    {"id": c["id"]},
+                    {"$set": {"status": "error", "error": str(e)[:300]}},
+                )
+
+
+async def _portal_correction_agent():
+    """Job APScheduler: detecta windows cerrados y dispara correcciones.
+
+    Idempotente: solo mueve a `correcting` después de validar tiempo, y solo
+    procesa publications que NO están ya en correcting. Tolerante a fallos:
+    si LLM falla en algunas secciones de una ronda, la ronda igual se cierra
+    para que el cliente no quede esperando para siempre.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        candidates = await db.portal_publications.find(
+            {"status": {"$in": ["round1_collecting", "round2_collecting"]}},
+            {"_id": 0},
+        ).to_list(length=200)
+
+        for pub in candidates:
+            current_round = pub.get("round") or (1 if pub.get("status") == "round1_collecting" else 2)
+            window_key = f"round{current_round}_started_at"
+            started_raw = pub.get(window_key)
+            if not started_raw:
+                continue
+            try:
+                started_dt = datetime.fromisoformat(str(started_raw).replace("Z", "+00:00"))
+            except Exception:
+                logging.warning(f"[portal] {pub['slug']} {window_key} inválido: {started_raw!r}")
+                continue
+            if started_dt.tzinfo is None:
+                started_dt = started_dt.replace(tzinfo=timezone.utc)
+
+            elapsed_h = (now - started_dt).total_seconds() / 3600.0
+            if elapsed_h < PORTAL_WINDOW_HOURS:
+                continue  # ventana abierta todavía
+
+            correcting_state = f"round{current_round}_correcting"
+            transition = await db.portal_publications.update_one(
+                # Re-leemos status como guard para evitar doble disparo si dos
+                # ticks corren concurrentes (raro con APScheduler async, pero
+                # cinturón-y-tirantes).
+                {"slug": pub["slug"], "status": pub.get("status")},
+                {"$set": {"status": correcting_state, "updated_at": now.isoformat()}},
+            )
+            if not getattr(transition, "modified_count", 0):
+                continue  # otro tick se la llevó
+
+            logging.info(f"[portal] {pub['slug']} ventana ronda {current_round} cerrada — aplicando comentarios")
+            try:
+                await _portal_apply_round(pub, current_round)
+            except Exception as e:
+                logging.exception(f"[portal] {pub['slug']} _portal_apply_round fallo: {e}")
+
+            next_state = "round1_done" if current_round == 1 else "closed"
+            await db.portal_publications.update_one(
+                {"slug": pub["slug"]},
+                {"$set": {"status": next_state, "updated_at": datetime.now(timezone.utc).isoformat()}},
+            )
+            logging.info(f"[portal] {pub['slug']} ronda {current_round} cerrada → {next_state}")
+    except Exception as e:
+        logging.exception(f"[portal] correction_agent error: {e}")
 
 
 # Include the router in the main app (MUST be after all endpoints are defined)

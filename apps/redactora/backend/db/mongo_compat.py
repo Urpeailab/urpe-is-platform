@@ -158,6 +158,10 @@ SURFACE_COLUMNS: Dict[str, set] = {
                            "created_at", "updated_at"},
     "patent_evaluations": {"id", "patent_id", "score", "feedback",
                            "created_at", "updated_at"},
+    "portal_publications": {"id", "niw_id", "doc_collection", "slug", "token",
+                            "status", "round", "created_at", "updated_at"},
+    "portal_comments": {"id", "publication_id", "niw_id", "round", "kind",
+                        "section_id", "lang", "comment", "status", "created_at"},
 }
 
 

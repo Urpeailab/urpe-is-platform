@@ -9,7 +9,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { toast } from 'sonner';
-import { FileText, Download, Loader2, ArrowLeft, Save, Edit, RefreshCw, CheckCircle, Copy, Sparkles, Languages, History, MessageSquare, Briefcase, Wand2, AlertTriangle, Play, AlertCircle } from 'lucide-react';
+import { FileText, Download, Loader2, ArrowLeft, Save, Edit, RefreshCw, CheckCircle, Copy, Sparkles, Languages, History, MessageSquare, Briefcase, Wand2, AlertTriangle, Play, AlertCircle, Share2, ExternalLink } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -120,6 +120,14 @@ const ViewBusinessPlan = () => {
   const [aiEditProgressMsg, setAiEditProgressMsg] = useState('');
   const [showAIEditResults, setShowAIEditResults] = useState(false);
   const [aiEditResults, setAiEditResults] = useState(null);
+
+  // 🔗 Portal cliente: publicar borrador en link público (Fase 1)
+  // `publishedUrl` es el absoluto que se copia al cliente; lo guardamos para
+  // que abrir el modal de nuevo (incluso después de cerrar) muestre el mismo
+  // link generado, no uno nuevo cada vez.
+  const [publishing, setPublishing] = useState(false);
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [publishedUrl, setPublishedUrl] = useState('');
   
   const pathParts = window.location.pathname.split('/');
   const id = pathParts[pathParts.length - 1];
@@ -535,6 +543,40 @@ const ViewBusinessPlan = () => {
       toast.error('Error al descargar PDF');
     } finally {
       setDownloading(false);
+    }
+  };
+
+  // 🔗 Portal cliente: genera el link público y abre el modal.
+  // El backend NO reusa publicaciones — cada llamada crea una nueva
+  // (slug + token nuevo). Para evitar regenerar mientras el modal está
+  // abierto, mostramos el último `publishedUrl` si ya existe.
+  const publishForClient = async () => {
+    if (publishedUrl) {
+      // Ya hay un link en memoria — solo reabrimos el modal sin generar otro.
+      setShowPublishModal(true);
+      return;
+    }
+    setPublishing(true);
+    try {
+      const { data } = await axios.post(
+        `${API}/business-plans/${id}/publish`,
+        {
+          client_name: plan?.applicant_name || '',
+          client_email: '',
+          version: 1,
+        }
+      );
+      // El backend devuelve URL relativa (`/p/{slug}?token=...`) — la
+      // convertimos a absoluta para que el operador la copie tal cual.
+      const absolute = `${window.location.origin}${data.url}`;
+      setPublishedUrl(absolute);
+      setShowPublishModal(true);
+      toast.success('🔗 Link de cliente generado');
+    } catch (error) {
+      const detail = error?.response?.data?.detail || 'Error al generar el link';
+      toast.error(detail);
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -987,6 +1029,17 @@ const ViewBusinessPlan = () => {
                 {commentStats.open}
               </span>
             )}
+          </Button>
+          <Button
+            onClick={publishForClient}
+            variant="outline"
+            className="bg-amber-50 border-amber-300 hover:bg-amber-100"
+            disabled={publishing}
+            data-testid="publish-for-client-btn"
+            title="Genera un link público para que el cliente revise este borrador"
+          >
+            {publishing ? <Loader2 className="mr-2 animate-spin" size={18} /> : <Share2 className="mr-2" size={18} />}
+            🔗 Compartir con cliente
           </Button>
         </div>
       </div>
@@ -1846,6 +1899,69 @@ const ViewBusinessPlan = () => {
             >
               <CheckCircle className="mr-2" size={18} />
               Entendido, Continuar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 🔗 Modal: link público generado para el cliente (Fase 1 — solo lectura) */}
+      <Dialog open={showPublishModal} onOpenChange={setShowPublishModal}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Share2 size={20} className="text-amber-600" />
+              Link para revisión del cliente
+            </DialogTitle>
+            <DialogDescription>
+              Copia este link y envíalo al cliente. Ve el documento completo en formato
+              de revisión (sin login). En esta versión inicial es <strong>solo lectura</strong>;
+              los botones de comentar y aprobar aparecen deshabilitados.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="flex items-stretch gap-2">
+              <Input
+                value={publishedUrl}
+                readOnly
+                className="font-mono text-xs"
+                data-testid="publish-url-input"
+                onFocus={(e) => e.target.select()}
+              />
+              <Button
+                onClick={() => {
+                  navigator.clipboard.writeText(publishedUrl);
+                  toast.success('Link copiado al portapapeles');
+                }}
+                variant="outline"
+                data-testid="copy-publish-url-btn"
+              >
+                <Copy className="mr-1" size={16} />
+                Copiar
+              </Button>
+              <Button
+                onClick={() => window.open(publishedUrl, '_blank', 'noopener,noreferrer')}
+                variant="outline"
+                data-testid="open-publish-url-btn"
+              >
+                <ExternalLink className="mr-1" size={16} />
+                Abrir
+              </Button>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-900">
+              <p className="font-semibold mb-1">⚠️ Importante</p>
+              <ul className="list-disc list-inside space-y-1 text-xs">
+                <li>El token va en la URL — quien tenga el link, ve el documento. No lo publiques en canales abiertos.</li>
+                <li>Cada vez que regeneres el link se crea uno nuevo; los anteriores siguen activos hasta que cerremos la sesión del modal o el cliente apruebe.</li>
+                <li>Próximamente: comentarios por sección y aprobación desde el mismo link.</li>
+              </ul>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPublishModal(false)}>
+              Cerrar
             </Button>
           </DialogFooter>
         </DialogContent>
