@@ -7534,10 +7534,13 @@ async def create_user_with_case(
             sb.table("visa_documents").insert(doc_row).execute()
         logger.info(f"✅ Created {len(master_documents)} required documents")
         
-        # Generate magic link for the new user
+        # Generate magic link for the new user.
+        # `phone` es obligatorio: /auth/validate-magic-link busca el cliente
+        # por magic_links.phone, así que sin él el link no valida.
         magic_token = secrets.token_urlsafe(16)
         magic_link_row = {
             "client_id": user_id,
+            "phone": request.phone,
             "token": magic_token,
             "expires_at": (datetime.now(timezone.utc) + timedelta(days=365 * 10)).isoformat(),
         }
@@ -7545,7 +7548,7 @@ async def create_user_with_case(
         # Check if magic link already exists for this user
         existing_link = select("magic_links", filters={"client_id": user_id}, single=True)
         if existing_link:
-            update("magic_links", filters={"client_id": user_id}, data={"token": magic_token})
+            update("magic_links", filters={"client_id": user_id}, data={"token": magic_token, "phone": request.phone})
             logger.info(f"🔄 Updated magic link for user: {user_id}")
         else:
             insert("magic_links", magic_link_row)
@@ -8004,21 +8007,32 @@ async def create_visa_case(
         except Exception:
             pass
 
-        # Auto-generate magic link if user doesn't have one
+        # Auto-generate magic link if user doesn't have one.
+        # `phone` es obligatorio: /auth/validate-magic-link busca el cliente
+        # por magic_links.phone, así que sin él el link no valida. Si el
+        # cliente no tiene phone, no podemos emitir un link funcional.
         magic_link_url = None
+        client_row = select("clients", filters={"id": request.userId}, single=True)
+        client_phone = (client_row or {}).get('phone')
         existing_link = select("magic_links", filters={"client_id": request.userId}, single=True)
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:8002')
         if not existing_link:
-            magic_token = secrets.token_urlsafe(16)
-            insert("magic_links", {
-                "client_id": request.userId,
-                "token": magic_token,
-                "expires_at": (datetime.now(timezone.utc) + timedelta(days=365 * 10)).isoformat(),
-            })
-            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:8002')
-            magic_link_url = f"{frontend_url}/welcome/{magic_token}"
-            logger.info(f"✅ Auto-generated magic link for user {request.userId}")
+            if client_phone:
+                magic_token = secrets.token_urlsafe(16)
+                insert("magic_links", {
+                    "client_id": request.userId,
+                    "phone": client_phone,
+                    "token": magic_token,
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(days=365 * 10)).isoformat(),
+                })
+                magic_link_url = f"{frontend_url}/welcome/{magic_token}"
+                logger.info(f"✅ Auto-generated magic link for user {request.userId}")
+            else:
+                logger.warning(f"⚠️  Skipping magic link for {request.userId}: client has no phone")
         else:
-            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:8002')
+            # Backfill phone on legacy rows so the existing link starts working.
+            if client_phone and not existing_link.get('phone'):
+                update("magic_links", filters={"client_id": request.userId}, data={"phone": client_phone})
             magic_link_url = f"{frontend_url}/welcome/{existing_link.get('token')}"
 
         return {
@@ -13057,6 +13071,14 @@ classic_cases_router = setup_classic_cases_router(db, verify_staff_token)
 from services.visa_cases_migration import setup_visa_cases_migration_router
 visa_cases_migration_router = setup_visa_cases_migration_router(verify_staff_token)
 
+# Payment Authorizations Migration (import from legacy instance)
+from services.payment_auth_migration import setup_payment_auth_migration_router
+payment_auth_migration_router = setup_payment_auth_migration_router(verify_staff_token)
+
+# Staff Migration (import from legacy instance — only inserts missing emails)
+from services.staff_migration import setup_staff_migration_router
+staff_migration_router = setup_staff_migration_router(verify_staff_token)
+
 # Setup manual payments endpoints
 from manual_payments_endpoints import setup_manual_payments_router
 manual_payments_router = setup_manual_payments_router(db, verify_staff_token)
@@ -13408,6 +13430,8 @@ app.include_router(uscis_tracker_router, prefix="/api")
 app.include_router(payment_auth_router, prefix="/api")
 app.include_router(classic_cases_router, prefix="/api")
 app.include_router(visa_cases_migration_router, prefix="/api")
+app.include_router(payment_auth_migration_router, prefix="/api")
+app.include_router(staff_migration_router, prefix="/api")
 app.include_router(manual_payments_router, prefix="/api")
 app.include_router(webinars_router, prefix="/api")
 app.include_router(legal_library_router, prefix="/api")

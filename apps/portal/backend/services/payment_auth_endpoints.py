@@ -24,7 +24,7 @@ class PaymentAuthSubmission(BaseModel):
     payerPhone: str
     payerEmail: Optional[str] = None
     # Payment method
-    paymentMethod: str = "card"  # "card" or "ach"
+    paymentMethod: str = "card"  # "card" | "ach" | "claritypay"
     # Card fields (only when paymentMethod == "card")
     cardType: Optional[str] = None  # "credit" or "debit"
     cardLastFour: Optional[str] = None
@@ -69,6 +69,11 @@ def setup_payment_auth_router(db):
                 raise HTTPException(status_code=400, detail="Nombre del banco requerido")
             if not data.accountLastFour or len(data.accountLastFour) != 4:
                 raise HTTPException(status_code=400, detail="Ingrese los ultimos 4 digitos de la cuenta")
+        elif data.paymentMethod == "claritypay":
+            # No instrument fields to verify — only amount + signed declaration.
+            pass
+        else:
+            raise HTTPException(status_code=400, detail="Metodo de pago invalido")
 
         from db.supabase_client import get_supabase
         sb = get_supabase()
@@ -133,6 +138,8 @@ def setup_payment_auth_router(db):
             from services.case_notifications import _send_email, _email_wrapper
             if data.paymentMethod == "ach":
                 method_label = f"ACH - {data.bankName} ({data.accountType or 'Checking'}) ****{data.accountLastFour}"
+            elif data.paymentMethod == "claritypay":
+                method_label = "Financiación ClarityPay"
             else:
                 card_label = "Crédito" if data.cardType == "credit" else "Débito"
                 method_label = f"Tarjeta {card_label} ****{data.cardLastFour}"
@@ -328,6 +335,14 @@ def _generate_authorization_pdf(data: dict) -> bytes:
         account_type = "Checking" if data.get("accountType") == "checking" else "Savings"
         acct_last4 = data.get("accountLastFour", "XXXX")
         payment_clause = f"<b>1. PAYMENT AUTHORIZATION:</b> I expressly and fully authorize the ACH transfer from my {account_type} account at <b>{bank_name}</b>, ending in <b>{acct_last4}</b>, for the amount of <b>${amount:,.2f} {currency}</b>."
+    elif payment_method == "claritypay":
+        payment_clause = (
+            f"<b>1. FINANCING DECLARATION (CLARITYPAY):</b> I acknowledge that the payment for the immigration services, "
+            f"in the amount of <b>${amount:,.2f} {currency}</b>, has been processed through ClarityPay financing. "
+            f"I understand that the financing approval, interest rates, payment terms, and monthly installments are determined "
+            f"by ClarityPay and/or its financial partners. I also acknowledge that I have voluntarily accepted the financing "
+            f"terms before completing this authorization."
+        )
     else:
         payment_clause = f"<b>1. PAYMENT AUTHORIZATION:</b> I expressly and fully authorize the charge made to my {card_label} card ending in the last four digits <b>{last4}</b>, through the FANBASIS platform, for the amount of <b>${amount:,.2f} {currency}</b>."
 

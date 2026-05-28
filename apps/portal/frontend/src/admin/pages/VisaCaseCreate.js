@@ -17,6 +17,19 @@ import { toast } from 'sonner';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
+// Reemplaza el origin de una URL por el de la página actual, preservando el
+// resto. Así el link de acceso que se muestra/copia usa el dominio en el que
+// el admin está navegando (el backend mantiene su FRONTEND_URL para emails).
+const withCurrentOrigin = (u) => {
+  if (!u) return u;
+  try {
+    const url = new URL(u);
+    return `${window.location.origin}${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return u;
+  }
+};
+
 export const VisaCaseCreate = () => {
   const navigate = useNavigate();
   const { admin } = useAdminAuth();
@@ -971,7 +984,7 @@ export const VisaCaseCreate = () => {
               
               <div className="bg-white border border-blue-200 rounded-md p-3 mb-3">
                 <code className="text-sm text-blue-800 break-all font-mono">
-                  {magicLinkData?.magicLink}
+                  {withCurrentOrigin(magicLinkData?.magicLink)}
                 </code>
               </div>
 
@@ -979,7 +992,7 @@ export const VisaCaseCreate = () => {
                 <Button
                   onClick={async () => {
                     try {
-                      await navigator.clipboard.writeText(magicLinkData?.magicLink);
+                      await navigator.clipboard.writeText(withCurrentOrigin(magicLinkData?.magicLink));
                       setCopied(true);
                       toast.success('Link copiado al portapapeles');
                       setTimeout(() => setCopied(false), 2000);
@@ -1004,7 +1017,7 @@ export const VisaCaseCreate = () => {
                 
                 <Button
                   onClick={() => {
-                    window.open(magicLinkData?.magicLink, '_blank');
+                    window.open(withCurrentOrigin(magicLinkData?.magicLink), '_blank');
                   }}
                   variant="outline"
                   className="flex-1"

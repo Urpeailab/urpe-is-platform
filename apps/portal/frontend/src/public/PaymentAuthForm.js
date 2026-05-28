@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { CheckCircle2, Loader2, CreditCard, User, FileText, Pen, Building2 } from 'lucide-react';
+import { CheckCircle2, Loader2, CreditCard, User, FileText, Pen, Building2, Landmark } from 'lucide-react';
 import { toast } from 'sonner';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -93,6 +93,8 @@ const PaymentAuthForm = () => {
   };
 
   const isCard = form.paymentMethod === 'card';
+  const isAch = form.paymentMethod === 'ach';
+  const isClarityPay = form.paymentMethod === 'claritypay';
   const cardLabel = form.cardType === 'credit' ? 'Credito' : 'Debito';
 
   if (step === 4 && result) {
@@ -165,12 +167,12 @@ const PaymentAuthForm = () => {
             {/* Payment Method Selector */}
             <div>
               <label className="text-xs font-semibold text-gray-600 mb-2 block">Metodo de pago *</label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <button
                   type="button"
                   data-testid="method-card-btn"
                   onClick={() => set('paymentMethod', 'card')}
-                  className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 text-sm font-semibold transition-all ${
+                  className={`flex flex-col items-center justify-center gap-1 py-3 rounded-xl border-2 text-xs font-semibold transition-all ${
                     isCard ? 'border-[#1C3A6B] bg-[#EBF0F7]' : 'border-gray-200 hover:border-gray-300'
                   }`}
                   style={isCard ? { color: '#1C3A6B' } : { color: '#6B7280' }}
@@ -182,19 +184,33 @@ const PaymentAuthForm = () => {
                   type="button"
                   data-testid="method-ach-btn"
                   onClick={() => set('paymentMethod', 'ach')}
-                  className={`flex items-center justify-center gap-2 py-3 rounded-xl border-2 text-sm font-semibold transition-all ${
-                    !isCard ? 'border-[#1C3A6B] bg-[#EBF0F7]' : 'border-gray-200 hover:border-gray-300'
+                  className={`flex flex-col items-center justify-center gap-1 py-3 rounded-xl border-2 text-xs font-semibold transition-all ${
+                    isAch ? 'border-[#1C3A6B] bg-[#EBF0F7]' : 'border-gray-200 hover:border-gray-300'
                   }`}
-                  style={!isCard ? { color: '#1C3A6B' } : { color: '#6B7280' }}
+                  style={isAch ? { color: '#1C3A6B' } : { color: '#6B7280' }}
                 >
                   <Building2 className="h-4 w-4" />
                   ACH
+                </button>
+                <button
+                  type="button"
+                  data-testid="method-claritypay-btn"
+                  onClick={() => set('paymentMethod', 'claritypay')}
+                  className={`flex flex-col items-center justify-center gap-1 py-3 rounded-xl border-2 text-xs font-semibold transition-all ${
+                    isClarityPay ? 'border-[#1C3A6B] bg-[#EBF0F7]' : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                  style={isClarityPay ? { color: '#1C3A6B' } : { color: '#6B7280' }}
+                >
+                  <Landmark className="h-4 w-4" />
+                  ClarityPay
                 </button>
               </div>
             </div>
 
             <p className="text-xs text-gray-500">
-              {isCard ? 'Titular de la tarjeta con la que se realizo el pago' : 'Titular de la cuenta bancaria desde la que se realizo la transferencia'}
+              {isCard && 'Titular de la tarjeta con la que se realizo el pago'}
+              {isAch && 'Titular de la cuenta bancaria desde la que se realizo la transferencia'}
+              {isClarityPay && 'Titular del financiamiento aprobado por ClarityPay'}
             </p>
 
             <div>
@@ -251,7 +267,7 @@ const PaymentAuthForm = () => {
             )}
 
             {/* ACH-specific fields */}
-            {!isCard && (
+            {isAch && (
               <>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -284,6 +300,18 @@ const PaymentAuthForm = () => {
               </>
             )}
 
+            {/* ClarityPay-specific fields */}
+            {isClarityPay && (
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-1 block">Monto financiado ($) *</label>
+                <input value={form.amount} onChange={e => set('amount', e.target.value)} type="number"
+                  className={inputCls} placeholder="0.00" />
+                <p className="text-xs text-gray-500 mt-2">
+                  Las cuotas, tipos de interes y condiciones de pago las define ClarityPay y/o sus socios financieros.
+                </p>
+              </div>
+            )}
+
             {/* Procedure type */}
             <div>
               <label className="text-xs font-semibold text-gray-600 mb-1 block">Tipo de tramite *</label>
@@ -303,7 +331,7 @@ const PaymentAuthForm = () => {
               if (isCard && (!form.cardLastFour || form.cardLastFour.length !== 4)) {
                 toast.error('Ingresa los ultimos 4 digitos de la tarjeta'); return;
               }
-              if (!isCard && (!form.bankName || !form.accountLastFour || form.accountLastFour.length !== 4)) {
+              if (isAch && (!form.bankName || !form.accountLastFour || form.accountLastFour.length !== 4)) {
                 toast.error('Completa los datos bancarios'); return;
               }
               setStep(2);
@@ -388,10 +416,14 @@ const PaymentAuthForm = () => {
 
             <div className="bg-gray-50 rounded-xl p-4 text-xs text-gray-700 leading-relaxed space-y-2 max-h-60 overflow-y-auto border border-gray-200">
               <p>Yo, <strong>{form.payerName}</strong>, con domicilio en <strong>{form.payerAddress}, {form.payerZip}</strong>, por medio de la presente declaro voluntariamente:</p>
-              {isCard ? (
+              {isCard && (
                 <p><strong>1.</strong> Autorizo el cargo a mi tarjeta de {cardLabel} terminada en <strong>****{form.cardLastFour}</strong>, por el monto de <strong>${parseFloat(form.amount || 0).toLocaleString()} {form.currency}</strong>.</p>
-              ) : (
+              )}
+              {isAch && (
                 <p><strong>1.</strong> Autorizo la transferencia ACH desde mi cuenta {form.accountType === 'checking' ? 'Checking' : 'Savings'} en <strong>{form.bankName}</strong>, terminada en <strong>****{form.accountLastFour}</strong>, por el monto de <strong>${parseFloat(form.amount || 0).toLocaleString()} {form.currency}</strong>.</p>
+              )}
+              {isClarityPay && (
+                <p><strong>1. DECLARACION DE FINANCIACION (CLARITYPAY):</strong> Reconozco que el pago de los servicios de inmigracion, por el monto de <strong>${parseFloat(form.amount || 0).toLocaleString()} {form.currency}</strong>, se ha tramitado a traves de la financiacion de ClarityPay. Entiendo que la aprobacion de la financiacion, los tipos de interes, las condiciones de pago y las cuotas mensuales son determinados por ClarityPay y/o sus socios financieros. Asimismo, reconozco que he aceptado voluntariamente las condiciones de financiacion antes de completar esta autorizacion.</p>
               )}
               <p><strong>2.</strong> El pago cubre los honorarios del proceso migratorio <strong>{form.procedureType}</strong> de <strong>{form.beneficiaryName}</strong>.</p>
               <p><strong>3.</strong> Tengo pleno conocimiento de los terminos de URPE INTEGRAL SERVICES.</p>

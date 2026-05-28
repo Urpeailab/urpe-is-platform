@@ -133,9 +133,20 @@ export const UserDetail = () => {
   };
 
   const buildMagicLinkUrl = (link) => {
-    if (link?.magicLinkUrl) return link.magicLinkUrl;
+    // Siempre forzamos el dominio de la página actual: el backend arma la URL
+    // con su FRONTEND_URL configurado, que puede no coincidir con donde el
+    // admin está navegando.
+    const origin = window.location.origin;
+    if (link?.magicLinkUrl) {
+      try {
+        const u = new URL(link.magicLinkUrl);
+        return `${origin}${u.pathname}${u.search}${u.hash}`;
+      } catch {
+        return link.magicLinkUrl;
+      }
+    }
     const token = link?.magicToken || '';
-    return `${window.location.origin}/welcome/${token}`;
+    return `${origin}/welcome/${token}`;
   };
 
   if (loading) {
