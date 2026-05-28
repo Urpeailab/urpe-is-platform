@@ -114,7 +114,8 @@ async def _generate_intent_letter_background(
     project_bytes: bytes, project_filename: str,
     support_bytes: Optional[bytes], support_filename: Optional[str],
     signer_bytes: Optional[bytes], signer_filename: Optional[str],
-    today_str: str, client_id: Optional[str], user_id: str
+    today_str: str, client_id: Optional[str], user_id: str,
+    relationship_context: str = "",
 ):
     db = _get_db()
 
@@ -148,6 +149,20 @@ async def _generate_intent_letter_background(
             if signer_text else ""
         )
 
+        # Bloque opcional con contexto operador-provisto sobre la relación
+        # firmante↔peticionario. Cuando está presente, el LLM lo usa como
+        # fuente autoritativa para `signer_relationship` y para el párrafo
+        # de "Specific Commitment". Si está vacío, no agregamos nada para no
+        # inducir al LLM a inventarse contexto.
+        relationship_block = (
+            f"\n**OPERATOR-PROVIDED RELATIONSHIP CONTEXT (signer ↔ petitioner):**\n"
+            f"Direct context from the URPE IS team about how the signer and the "
+            f"petitioner know each other (nature, duration, projects together, "
+            f"concrete commitments). Treat as authoritative for `signer_relationship` "
+            f"AND for the commitment language. Overrides inferences from the CVs.\n\n"
+            f"{relationship_context[:3000]}\n"
+        ) if relationship_context else ""
+
         analysis_prompt = f"""Analyze the following documents and extract structured information
 for an EB-2 NIW personal statement (intent letter). Return ONLY valid JSON.
 
@@ -159,7 +174,7 @@ for an EB-2 NIW personal statement (intent letter). Return ONLY valid JSON.
 
 **SUPPORTING DOCUMENTS (if any):**
 {support_text[:4000]}
-{signer_block}
+{signer_block}{relationship_block}
 Return this JSON structure:
 {{
   "petitioner_name": "Full name",
@@ -270,6 +285,18 @@ enclosure — reference it at the end of the letter as
         )
         paragraph_count_hint = "8-11 flowing paragraphs (LOIs are focused and concise)"
 
+        # Precomputed (NO inline en la f-string): Python < 3.12 no permite
+        # backslashes en expresiones dentro de f-strings.
+        relationship_block_generation = (
+            "\n## OPERATOR-PROVIDED RELATIONSHIP CONTEXT (signer ↔ petitioner):\n"
+            "Verified context from the URPE IS team describing how the signer and "
+            "petitioner know each other. Use it as the SOURCE OF TRUTH for Paragraph 3 "
+            "(Relationship & How the Signer Knows the Petitioner) and for Paragraph 6 "
+            "(Specific Commitment — quote concrete details from this context: dates, "
+            "amounts, projects, prior interactions). Do NOT contradict it.\n\n"
+            f"{relationship_context}\n"
+        ) if relationship_context else ""
+
         generation_prompt = f"""Generate a complete, professional EB-2 NIW Letter of Intent (third-party)
 following the Matter of Dhanasar framework. The letter is SIGNED BY A THIRD PARTY
 (employer/investor/client/collaborator) who SUPPORTS the petitioner.
@@ -308,6 +335,7 @@ following the Matter of Dhanasar framework. The letter is SIGNED BY A THIRD PART
 - Prong 2 Evidence: {extracted.get('prong2_evidence')}
 - Prong 3 Argument: {extracted.get('prong3_argument')}
 {signer_section}
+{relationship_block_generation}
 ---
 ## VOICE & PERSPECTIVE:
 {voice_instructions}
@@ -358,6 +386,8 @@ Paragraph 9 (Conclusion + Exhibit List): Strong endorsement: "Based on {signer_n
             system_prompt=INTENT_LETTER_SYSTEM_PROMPT + ANTI_PLACEHOLDER_RULE,
             user_prompt=generation_prompt,
             primary_gemini_fn=_call_gemini_flash_lite,
+            # OpenAI-directo como último escalón cuando OpenRouter está caído.
+            openai_gpt4o_fn=_call_openai_gpt4o,
             temperature=gen_temperature,
             max_tokens=10000,
             min_chars=500,
@@ -471,6 +501,12 @@ async def generate_intent_letter(
     signer_cv: UploadFile = File(..., description="CV del Firmante (obligatorio) — empleador, inversor, cliente o colaborador que apoya al peticionario"),
     support_document: Optional[UploadFile] = File(None, description="Documento de apoyo (opcional: patente, publicación, etc.)"),
     client_id: Optional[str] = Form(None),
+    # Texto libre con el contexto de la relación signer ↔ petitioner provisto
+    # por el operador. Cuando está presente, sobreescribe la inferencia
+    # automática del `signer_relationship` (investor/employer/etc.) y se
+    # inyecta como contexto en el prompt de generación para que el párrafo
+    # de "Specific Commitment" use detalles reales.
+    relationship_context: Optional[str] = Form(""),
     current_user=Depends(get_current_user_wrapper)
 ):
     """
@@ -497,6 +533,8 @@ async def generate_intent_letter(
     support_bytes = await support_document.read() if support_document else None
     support_filename = support_document.filename if support_document else None
 
+    relationship_context = (relationship_context or "").strip()
+
     letter_doc = {
         "id": letter_id,
         "user_id": current_user.id,
@@ -509,6 +547,7 @@ async def generate_intent_letter(
         "signer_name": "",
         "signer_title": "",
         "signer_relationship": "",
+        "relationship_context": relationship_context,  # auditoría
         "content_en": "",
         "content_es": "",
         "status": "generating",
@@ -526,7 +565,8 @@ async def generate_intent_letter(
         project_bytes, project_info.filename,
         support_bytes, support_filename,
         signer_bytes, signer_filename,
-        today_str, client_id, current_user.id
+        today_str, client_id, current_user.id,
+        relationship_context,
     )
 
     return {
