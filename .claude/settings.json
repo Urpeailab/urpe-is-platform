@@ -96,7 +96,8 @@
       "Bash(grep -v \"SyntaxWarning\\\\|DECLARACI\\\\|I\\\\\\\\\\\\\\\\+D\")",
       "Bash(python _tmp_test_header.py)",
       "Bash(rm -f _tmp_test_header.py)",
-      "Bash(python -m py_compile server.py docx_utils.py)"
+      "Bash(python -m py_compile server.py docx_utils.py)",
+      "Bash(python -m py_compile routers/clients_router.py)"
     ],
     "additionalDirectories": [
       "C:\\Temp"

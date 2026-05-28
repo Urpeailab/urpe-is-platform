@@ -18,22 +18,42 @@ const LOCAL_URL = process.env.REACT_APP_REDACCION_URL_LOCAL || 'http://localhost
 const CACHE_KEY = 'redactora_iframe_cache_v1';
 const TOKEN_TTL_MS = 20 * 60 * 60 * 1000;
 
-const loadCache = () => {
+// Derive a stable fingerprint from the admin JWT (id/email/sub) so the cache
+// is scoped to the CURRENT panel user. Without this, when admin A logs out
+// and admin B logs in, B would reuse A's cached iframe URL (and therefore
+// A's identity inside Redactora). Decodes only the payload (no signature
+// verification — only used as a "did the user change?" marker).
+const adminFingerprint = (adminToken) => {
+  if (!adminToken) return '';
+  try {
+    const b64 = adminToken.split('.')[1] || '';
+    const padded = b64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64.length + 3) % 4);
+    const payload = JSON.parse(atob(padded));
+    return String(payload.id || payload.sub || payload.email || payload.staff_id || '');
+  } catch (_) {
+    return '';
+  }
+};
+
+const loadCache = (fp) => {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const cache = JSON.parse(raw);
     if (!cache?.url || !cache?.stamp) return null;
     if (Date.now() - cache.stamp >= TOKEN_TTL_MS) return null;
+    // Cache belongs to a different panel user → ignore it so we generate a
+    // fresh token for the current user.
+    if (fp && cache.fp && cache.fp !== fp) return null;
     return cache;
   } catch (_) {
     return null;
   }
 };
 
-const saveCache = (url, devUrl) => {
+const saveCache = (url, devUrl, fp) => {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ url, devUrl, stamp: Date.now() }));
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ url, devUrl, fp: fp || '', stamp: Date.now() }));
   } catch (_) {}
 };
 
@@ -44,16 +64,17 @@ const saveCache = (url, devUrl) => {
  * letter generation, chats) is preserved across navigation.
  */
 export const PersistentRedactoraIframe = ({ visible }) => {
-  const [iframeUrl, setIframeUrl] = useState(() => loadCache()?.url || '');
+  const adminToken = localStorage.getItem('admin_token');
+  const adminFp = adminFingerprint(adminToken);
+
+  const [iframeUrl, setIframeUrl] = useState(() => loadCache(adminFp)?.url || '');
   const [devUrl, setDevUrl] = useState(() => {
-    const cached = loadCache();
+    const cached = loadCache(adminFp);
     if (cached?.devUrl) return cached.devUrl;
     return localStorage.getItem('redac_dev_url') || LOCAL_URL;
   });
-  const [loading, setLoading] = useState(!loadCache());
+  const [loading, setLoading] = useState(!loadCache(adminFp));
   const [generating, setGenerating] = useState(false);
-
-  const adminToken = localStorage.getItem('admin_token');
 
   const requestNewToken = useCallback(async (baseUrl) => {
     const { data } = await axios.post(
@@ -63,9 +84,22 @@ export const PersistentRedactoraIframe = ({ visible }) => {
     );
     const url = `${baseUrl}?token=${data.token}`;
     setIframeUrl(url);
-    saveCache(url, baseUrl);
+    saveCache(url, baseUrl, adminFp);
     return url;
-  }, [adminToken]);
+  }, [adminToken, adminFp]);
+
+  // If the panel user changes mid-session (different admin logs in without a
+  // hard remount), the cached iframe URL no longer belongs to the current
+  // user — drop it so the effect below regenerates a fresh token. Compares
+  // against the cached fingerprint instead of forcing a regen on every mount.
+  useEffect(() => {
+    if (!iframeUrl) return;
+    const cached = loadCache(adminFp);
+    if (!cached) {
+      setIframeUrl('');
+      setLoading(true);
+    }
+  }, [adminFp, iframeUrl]);
 
   // Initial token generation — only fires if cache is missing/expired
   useEffect(() => {

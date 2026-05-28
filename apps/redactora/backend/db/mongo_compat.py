@@ -237,12 +237,42 @@ def _apply_filter(q, filt: Dict[str, Any], table: str):
     surface = SURFACE_COLUMNS.get(canonical, set())
     for key, val in filt.items():
         if key == "$or":
-            # PostgREST .or_ wants a string like "col.eq.val,col.eq.val"
+            # PostgREST .or_ wants a string like "col.eq.val,col.ilike.*pat*".
+            # Each sub-clause is a Mongo-style filter; translate the operator
+            # to its PostgREST equivalent. Without this, dict values like
+            # {"$regex": "lui"} were stringified and compared with .eq.,
+            # which broke the "Clientes de la Empresa" search.
             parts = []
             for sub in val:
                 for k, v in sub.items():
                     col = k if k in surface else f"data->>{k!r}"
-                    parts.append(f"{col}.eq.{v}")
+                    if isinstance(v, dict):
+                        if "$regex" in v:
+                            pat = v["$regex"].lstrip("^").rstrip("$")
+                            op = "ilike" if "i" in (v.get("$options") or "") else "like"
+                            # PostgREST .or_ uses '*' as the wildcard inside or-strings.
+                            parts.append(f"{col}.{op}.*{pat}*")
+                        elif "$eq" in v:
+                            parts.append(f"{col}.eq.{v['$eq']}")
+                        elif "$ne" in v:
+                            parts.append(f"{col}.neq.{v['$ne']}")
+                        elif "$in" in v:
+                            inner = ",".join(str(x) for x in v["$in"])
+                            parts.append(f"{col}.in.({inner})")
+                        elif "$gt" in v:
+                            parts.append(f"{col}.gt.{v['$gt']}")
+                        elif "$gte" in v:
+                            parts.append(f"{col}.gte.{v['$gte']}")
+                        elif "$lt" in v:
+                            parts.append(f"{col}.lt.{v['$lt']}")
+                        elif "$lte" in v:
+                            parts.append(f"{col}.lte.{v['$lte']}")
+                        else:
+                            raise NotImplementedError(
+                                f"$or sub-operator not supported on {col!r}: {list(v.keys())}"
+                            )
+                    else:
+                        parts.append(f"{col}.eq.{v}")
             q = q.or_(",".join(parts))
             continue
         # map to column or JSONB path
