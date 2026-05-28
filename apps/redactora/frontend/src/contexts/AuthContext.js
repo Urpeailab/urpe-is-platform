@@ -35,6 +35,10 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [token, setToken] = useState(safeGetItem('token'));
   const ssoInProgress = useRef(false);
+  // Last panel-iframe token we successfully exchanged for a redactora session.
+  // When the panel user changes, the new `?token=` differs from this value
+  // and we re-SSO instead of silently reusing the previous user's session.
+  const lastSSOTokenRef = useRef(safeGetItem('redac_last_sso_token') || '');
 
   const API = `${window.location.origin}/api`;
 
@@ -48,6 +52,23 @@ export const AuthProvider = ({ children }) => {
 
   // Main auth effect
   useEffect(() => {
+    const urlToken = new URLSearchParams(window.location.search).get('token');
+
+    // If the panel iframe handed us a token that differs from the one we last
+    // SSO'd with, the panel user changed — drop the stale local session and
+    // re-SSO with the fresh iframe token. Without this, a leftover
+    // localStorage['token'] from a previous panel user would silently win and
+    // the redactora UI would keep showing that previous user's data.
+    if (urlToken && urlToken !== lastSSOTokenRef.current && !ssoInProgress.current) {
+      window.__IFRAME_TOKEN__ = urlToken;
+      ssoInProgress.current = true;
+      safeRemoveItem('token');
+      delete axios.defaults.headers.common['Authorization'];
+      setUser(null);
+      autoSSOFromIframe(urlToken);
+      return;
+    }
+
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       // Only fetch user if we don't already have one
@@ -92,6 +113,11 @@ export const AuthProvider = ({ children }) => {
       const { access_token, user: userData } = response.data;
 
       safeSetItem('token', access_token);
+      // Remember which panel-iframe token gave us this session so a later
+      // arrival of a DIFFERENT iframe token triggers a fresh SSO (instead of
+      // reusing this session for a different panel user).
+      lastSSOTokenRef.current = externalToken;
+      safeSetItem('redac_last_sso_token', externalToken);
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
       setUser(userData);
       setToken(access_token);
@@ -166,6 +192,8 @@ export const AuthProvider = ({ children }) => {
       const response = await axios.post(`${API}/auth/sso`, { external_token: externalToken });
       const { access_token, user: u } = response.data;
       safeSetItem('token', access_token);
+      lastSSOTokenRef.current = externalToken;
+      safeSetItem('redac_last_sso_token', externalToken);
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
       setUser(u);
       setToken(access_token);
@@ -179,6 +207,8 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     safeRemoveItem('token');
+    safeRemoveItem('redac_last_sso_token');
+    lastSSOTokenRef.current = '';
     setToken(null);
     setUser(null);
     delete axios.defaults.headers.common['Authorization'];

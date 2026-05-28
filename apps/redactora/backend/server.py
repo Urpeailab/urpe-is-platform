@@ -13,7 +13,7 @@ import threading
 import subprocess
 import shutil
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict, EmailStr
+from pydantic import BaseModel, Field, ConfigDict, EmailStr, field_validator
 from typing import List, Optional, Dict
 import uuid
 import math
@@ -3836,7 +3836,7 @@ security = HTTPBearer()
 # Define Models
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     email: EmailStr
     full_name: str
@@ -3844,6 +3844,14 @@ class User(BaseModel):
     status: str = "active"  # active, suspended, inactive, deleted
     permissions: List[str] = []
     language_preference: str = "es"  # es, en
+
+    @field_validator("permissions", mode="before")
+    @classmethod
+    def _coerce_permissions_none(cls, v):
+        # Supabase returns NULL (None) for users that have never had permissions
+        # explicitly set; pydantic v2 doesn't fall back to the default in that
+        # case (only when the field is missing entirely). Coerce to [].
+        return [] if v is None else v
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     created_by: Optional[str] = None
     deleted_at: Optional[datetime] = None  # Para soft delete

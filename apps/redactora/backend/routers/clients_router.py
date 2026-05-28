@@ -419,29 +419,66 @@ async def search_clients(
     db = get_db()
     try:
         query = {"status": status}
-        
+
         if q:
             query["$or"] = [
                 {"name": {"$regex": q, "$options": "i"}},
                 {"email": {"$regex": q, "$options": "i"}},
                 {"company": {"$regex": q, "$options": "i"}}
             ]
-        
+
         skip = (page - 1) * limit
-        
-        clients = await db.clients.find(
-            query,
-            {"_id": 0}
-        ).skip(skip).limit(limit).to_list(length=limit)
-        
-        for client in clients:
+
+        # Run the main find() and the total count() in parallel — one fewer
+        # serial round-trip per request.
+        clients, total = await asyncio.gather(
+            db.clients.find(query, {"_id": 0}).skip(skip).limit(limit).to_list(length=limit),
+            db.clients.count_documents(query),
+        )
+
+        # ── Batched document counts (same pattern as GET /clients) ────────
+        # Replaces the previous N+1 loop that issued ~18 HTTP calls PER client
+        # (with limit=100, ~1,800 sequential round-trips). Here we fetch each
+        # collection once, in parallel, and group counts in memory by client_id.
+        client_ids = [c["id"] for c in clients]
+
+        async def _counts(collection_name: str, extra_filter: dict | None = None):
+            if not client_ids:
+                return Counter()
+            qry = {"client_id": {"$in": client_ids}}
+            if extra_filter:
+                qry.update(extra_filter)
             try:
-                client["documents_count"] = await get_client_documents_count(client.get("id", ""))
-            except:
-                client["documents_count"] = 0
-        
-        total = await db.clients.count_documents(query)
-        
+                rows = await db[collection_name].find(
+                    qry, {"_id": 0, "client_id": 1}
+                ).to_list(length=None)
+            except Exception as e:
+                logger.warning(f"count fetch failed for {collection_name}: {e}")
+                return Counter()
+            return Counter(r["client_id"] for r in rows if r.get("client_id"))
+
+        completed = {"status": "completed"}
+        (niw_counts, bp_counts, patent_prog_counts, patent_counts,
+         book_prog_counts, book_counts, case_study_counts, letter_counts) = await asyncio.gather(
+            _counts("niw_in_progress", completed),
+            _counts("business_plans", completed),
+            _counts("patents_in_progress", completed),
+            _counts("patents"),
+            _counts("books_in_progress", completed),
+            _counts("books"),
+            _counts("case_studies", completed),
+            _counts("self_petition_letters", completed),
+        )
+
+        for client in clients:
+            cid = client["id"]
+            client["documents_count"] = (
+                niw_counts[cid] + bp_counts[cid]
+                + patent_prog_counts[cid] + patent_counts[cid]
+                + book_prog_counts[cid] + book_counts[cid]
+                + case_study_counts[cid] + letter_counts[cid]
+            )
+
         return {
             "clients": clients,
             "total": total,
