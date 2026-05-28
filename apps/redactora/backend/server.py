@@ -36881,22 +36881,40 @@ async def _generate_recommendation_letter_background(
 
     try:
         from recommendation_letter_endpoints import RECOMMENDATION_ANTI_PLACEHOLDER_RULE
-        import io as _io
-
-        def _extract_bytes(content: bytes, filename: str) -> str:
-            if filename.lower().endswith('.pdf'):
-                reader = PdfReader(_io.BytesIO(content))
-                return "\n".join(p.extract_text() or "" for p in reader.pages)
-            elif filename.lower().endswith('.docx'):
-                doc = docx.Document(_io.BytesIO(content))
-                return "\n".join(p.text for p in doc.paragraphs)
-            else:
-                return content.decode('utf-8', errors='ignore')
+        # Shared 5-engine + Vision OCR extractor (2026-05-28 fix for Canva-style
+        # vectorized CVs that returned 0c via PyPDF2 and made the LLM hallucinate
+        # signers like "Dr. Emily Thompson, MIT"). See pdf_extractor.py.
+        from pdf_extractor import (
+            extract_text_from_bytes as _shared_extract_from_bytes,
+            validate_signer_name_in_cv,
+        )
 
         await _update(15, "Extrayendo texto de los documentos...")
-        candidate_cv_text = _extract_bytes(candidate_cv_bytes, candidate_cv_filename)
-        project_info_text = _extract_bytes(project_info_bytes, project_info_filename)
-        recommender_cv_text = _extract_bytes(recommender_cv_bytes, recommender_cv_filename)
+        candidate_cv_text = await _shared_extract_from_bytes(
+            candidate_cv_bytes, candidate_cv_filename,
+            vision_fn=call_openai_gpt4o_vision, file_label="candidate_cv",
+        )
+        project_info_text = await _shared_extract_from_bytes(
+            project_info_bytes, project_info_filename,
+            vision_fn=call_openai_gpt4o_vision, file_label="project_info",
+        )
+        recommender_cv_text = await _shared_extract_from_bytes(
+            recommender_cv_bytes, recommender_cv_filename,
+            vision_fn=call_openai_gpt4o_vision, file_label="recommender_cv",
+        )
+
+        if len(candidate_cv_text.strip()) < 100:
+            raise ValueError(
+                "No se pudo extraer texto del CV del candidato. "
+                "Verificá que el PDF no sea escaneado (imagen) y que tenga "
+                "texto seleccionable."
+            )
+        if len(recommender_cv_text.strip()) < 100:
+            raise ValueError(
+                "No se pudo extraer texto del CV del recomendador. "
+                "Verificá que el PDF no sea escaneado (imagen) y que tenga "
+                "texto seleccionable."
+            )
 
         await _update(30, "Analizando documentos con IA...")
 
@@ -36937,14 +36955,26 @@ Extract and return ONLY a JSON object with this structure:
   "project_geographic_reach": "Number of states, organizations, or people affected by this project",
   "project_economic_impact": "Economic value, cost savings, revenue, or jobs created/supported",
   "project_federal_alignment": "Which federal laws or policies this project aligns with",
-  "recommender_name": "Full name from recommender CV",
-  "recommender_title": "Professional title/position",
-  "recommender_organization": "Current institution/organization",
-  "recommender_credentials": "Key qualifications, publications, years of experience, awards",
+  "recommender_name": "Full name from DOCUMENT 3 — copy it EXACTLY as it appears in the CV, including accents and capitalization",
+  "recommender_title": "Professional title/position from DOCUMENT 3 ONLY",
+  "recommender_organization": "Current institution/organization from DOCUMENT 3 ONLY",
+  "recommender_credentials": "Key qualifications, publications, years of experience, awards — from DOCUMENT 3 ONLY",
   "recommender_relationship": "How the recommender knows the candidate, duration, nature of collaboration",
-  "recommender_email": "Email if available",
-  "recommender_phone": "Phone if available"
+  "recommender_email": "Email from DOCUMENT 3 if present, else empty string",
+  "recommender_phone": "Phone from DOCUMENT 3 if present, else empty string"
 }}
+
+🚨 ABSOLUTE RULES FOR THE RECOMMENDER FIELDS — ZERO TOLERANCE FOR HALLUCINATION:
+- The recommender is the PERSON WHO SIGNS THE LETTER. Their name, title, organization,
+  credentials, email and phone MUST come **exclusively** from DOCUMENT 3.
+- DO NOT invent generic recommenders like "Dr. Emily Thompson", "Dr. John Smith",
+  "Professor Sarah Johnson", "MIT", "Harvard", "Stanford" unless those literal
+  strings appear in DOCUMENT 3.
+- If DOCUMENT 3 looks empty, unclear, or doesn't seem to be a CV, return an
+  EMPTY STRING ("") for any recommender_* field you cannot find with certainty.
+  NEVER fall back to a plausible-sounding name.
+- The `recommender_name` you return MUST appear verbatim somewhere in DOCUMENT 3.
+
 IMPORTANT: Extract real, specific information from all three documents. Be thorough and precise."""
 
         analysis_raw = await asyncio.wait_for(
@@ -36957,6 +36987,24 @@ IMPORTANT: Extract real, specific information from all three documents. Be thoro
             if analysis_raw.startswith('json'):
                 analysis_raw = analysis_raw[4:]
         extracted_data = json.loads(analysis_raw.strip())
+
+        # ── Anti-hallucination guards ──────────────────────────────────────────
+        # Tanto el candidato como el recomendador DEBEN aparecer en sus
+        # respectivos CVs. Bug histórico 2026-05-28: con extracción de PDF
+        # fallida el LLM alucinaba "Dr. Emily Thompson, MIT".
+        extracted_candidate_name = (extracted_data.get('candidate_name') or '').strip()
+        extracted_recommender_name = (extracted_data.get('recommender_name') or '').strip()
+        logging.info(
+            f"🧑‍⚖️ Recomendación extraído | candidate={extracted_candidate_name!r} "
+            f"recommender={extracted_recommender_name!r} "
+            f"recommender_org={extracted_data.get('recommender_organization')!r}"
+        )
+        validate_signer_name_in_cv(
+            extracted_candidate_name, candidate_cv_text, role_label="candidato"
+        )
+        validate_signer_name_in_cv(
+            extracted_recommender_name, recommender_cv_text, role_label="recomendador"
+        )
 
         # Select profile based on recommender's credentials.
         # 60/40 weighted picker: usually the voice that matches the recommender's
@@ -43785,7 +43833,9 @@ if EXPERT_LETTERS_ROUTER_AVAILABLE:
             database=db,
             get_current_user_func=get_current_user,
             call_openai_gpt4o_func=call_openai_gpt4o,
-            call_gemini_flash_lite_func=call_gemini_flash_lite
+            call_gemini_flash_lite_func=call_gemini_flash_lite,
+            # Vision OCR fallback para CVs con texto vectorizado (Canva, etc.):
+            call_openai_gpt4o_vision_func=call_openai_gpt4o_vision,
         )
         api_router.include_router(expert_letters_router_module)
         logging.info("✅ Expert Letters Router initialized and INCLUDED in API")
@@ -43799,7 +43849,9 @@ if INTENT_LETTERS_ROUTER_AVAILABLE:
             get_current_user_fn=get_current_user,
             call_openai_gpt4o_fn=call_openai_gpt4o,
             call_gemini_flash_lite_fn=call_gemini_flash_lite,
-            call_openai_gpt5_fn=call_openai_gpt5
+            call_openai_gpt5_fn=call_openai_gpt5,
+            # Vision OCR fallback para CVs con texto vectorizado (Canva, etc.):
+            call_openai_gpt4o_vision_fn=call_openai_gpt4o_vision,
         )
         api_router.include_router(intent_letters_router_module)
         logging.info("✅ Intent Letters Router initialized and INCLUDED in API")

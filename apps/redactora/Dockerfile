@@ -11,11 +11,15 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
-# System deps for lxml, matplotlib, pdfminer, Pillow, reportlab, playwright
+# System deps for lxml, matplotlib, pdfminer, Pillow, reportlab, playwright.
+# tesseract-ocr (+ eng/spa lang packs) provides local OCR fallback for PDFs
+# whose text layer is vectorized (Canva / Adobe Express exports) — see the
+# cascade in backend/pdf_extractor.py.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ libffi-dev libssl-dev libxml2-dev libxslt1-dev \
     libjpeg-dev zlib1g-dev libfreetype6-dev \
     libcairo2-dev pkg-config \
+    tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps
