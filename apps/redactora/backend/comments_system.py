@@ -527,28 +527,30 @@ class CommentsManager:
             'status': 'resolved'
         })
         
-        # Comentarios por sección
-        pipeline = [
-            {'$match': {'document_id': document_id}},
-            {'$group': {
-                '_id': '$section_number',
-                'count': {'$sum': 1},
-                'open': {
-                    '$sum': {'$cond': [{'$eq': ['$status', 'open']}, 1, 0]}
-                }
-            }},
-            {'$sort': {'_id': 1}}
+        # Comentarios por sección.
+        # CompatCollection (Supabase) no implementa aggregate(); traemos los
+        # comentarios del documento y agrupamos por sección en Python.
+        all_comments = await self.comments_collection.find(
+            {'document_id': document_id}
+        ).to_list(None)
+
+        by_section = {}
+        for c in all_comments:
+            sec = c.get('section_number')
+            bucket = by_section.setdefault(sec, {'total': 0, 'open': 0})
+            bucket['total'] += 1
+            if c.get('status') == 'open':
+                bucket['open'] += 1
+
+        # Orden estable por número de sección; las secciones None van al final.
+        sections_stats = [
+            {'section_number': sec, 'total': v['total'], 'open': v['open']}
+            for sec, v in sorted(
+                by_section.items(),
+                key=lambda kv: (kv[0] is None, kv[0] if kv[0] is not None else 0),
+            )
         ]
-        
-        sections_cursor = self.comments_collection.aggregate(pipeline)
-        sections_stats = []
-        async for section in sections_cursor:
-            sections_stats.append({
-                'section_number': section['_id'],
-                'total': section['count'],
-                'open': section['open']
-            })
-        
+
         return {
             'total': total,
             'open': open_count,

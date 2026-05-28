@@ -33,11 +33,15 @@ async def load_module_overrides(module_id: str, db) -> Dict[str, str]:
 
 async def get_next_version(module_id: str, key: str, db) -> int:
     """Get the next version number for a prompt key."""
-    last = await db.prompt_history.find_one(
-        {"module_id": module_id, "key": key},
-        sort=[("version", -1)],
-        projection={"_id": 0, "version": 1}
+    # CompatCollection.find_one() no acepta sort/projection; usamos find().sort().limit(1).
+    _rows = await (
+        db.prompt_history
+        .find({"module_id": module_id, "key": key})
+        .sort("version", -1)
+        .limit(1)
+        .to_list(1)
     )
+    last = _rows[0] if _rows else None
     return (last["version"] + 1) if last else 1
 
 

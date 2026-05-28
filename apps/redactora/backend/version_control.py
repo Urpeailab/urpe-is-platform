@@ -182,11 +182,15 @@ class VersionManager:
     
     async def get_latest_version(self, document_id: str) -> Optional[Dict]:
         """Obtiene la última versión de un documento"""
-        version = await self.versions_collection.find_one(
-            {'document_id': document_id},
-            sort=[('version_number', -1)]
+        # find_one no acepta sort en CompatCollection; usamos find().sort().limit(1).
+        rows = await (
+            self.versions_collection
+            .find({'document_id': document_id})
+            .sort('version_number', -1)
+            .limit(1)
+            .to_list(1)
         )
-        return version
+        return rows[0] if rows else None
     
     async def get_version_history(
         self,

@@ -11,8 +11,8 @@ This helper wraps the primary Gemini call and, on empty/short/error
 output, transparently falls back through OpenRouter in this order:
 
    1. anthropic/claude-sonnet-4.6   (latest Sonnet, best instruction-following)
-   2. anthropic/claude-opus-4-6     (most powerful fallback)
-   3. anthropic/claude-sonnet-4-5   (last resort)
+   2. anthropic/claude-opus-4.7     (most powerful fallback)
+   3. anthropic/claude-sonnet-4.5   (last resort)
 
 Only after all four providers have failed do we raise ValueError.
 """
@@ -87,8 +87,8 @@ async def call_llm_with_fallback(
 
     for model_id in [
         "anthropic/claude-sonnet-4.6",
-        "anthropic/claude-opus-4-6",
-        "anthropic/claude-sonnet-4-5",
+        "anthropic/claude-opus-4.7",
+        "anthropic/claude-sonnet-4.5",
     ]:
         try:
             async with httpx.AsyncClient(timeout=timeout_secs) as cli:

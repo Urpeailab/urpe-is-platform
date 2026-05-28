@@ -57,15 +57,37 @@ def _resolve_api_key(provider: str, explicit_key: Optional[str]) -> Optional[str
     return os.getenv("EMERGENT_LLM_KEY")
 
 
+import re as _re
+
+
+def _normalize_claude_id(model_id: str) -> str:
+    """
+    OpenRouter expects Claude version numbers with a DOT (claude-sonnet-4.5),
+    but the Anthropic-native SDK uses HYPHENS (claude-sonnet-4-5) and sometimes
+    a trailing date (claude-sonnet-4-5-20250929). Convert the native form to
+    the OpenRouter form so callers can keep passing native IDs to .with_model().
+
+    Examples:
+        anthropic/claude-sonnet-4-5            -> anthropic/claude-sonnet-4.5
+        anthropic/claude-opus-4-7              -> anthropic/claude-opus-4.7
+        anthropic/claude-sonnet-4-5-20250929   -> anthropic/claude-sonnet-4.5
+    """
+    return _re.sub(
+        r'(claude-(?:opus|sonnet|haiku))-(\d+)-(\d+)(?:-\d+)?',
+        r'\1-\2.\3',
+        model_id,
+    )
+
+
 def _to_openrouter_model(provider: str, model: str) -> str:
     """Map (provider, model) to an OpenRouter model id (`vendor/model`)."""
     if "/" in model:
-        return model
+        return _normalize_claude_id(model)
     p = provider.lower()
     if p == "openai":
         return f"openai/{model}"
     if p in ("anthropic", "claude"):
-        return f"anthropic/{model}"
+        return _normalize_claude_id(f"anthropic/{model}")
     if p in ("gemini", "google"):
         return f"google/{model}"
     return model

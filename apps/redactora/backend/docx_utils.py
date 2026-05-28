@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 # ── colour palette (matches PDF visual identity) ──────────────────────────
 NAVY     = RGBColor(0x1A, 0x36, 0x5D)
+BLACK    = RGBColor(0x00, 0x00, 0x00)
 GREY     = RGBColor(0x55, 0x55, 0x55)
 LIGHT_GR = RGBColor(0x88, 0x88, 0x88)
 HEADER_BG = "E2E8F0"   # light blue-grey for table header row
@@ -161,9 +162,29 @@ def _add_runs_from_inline_html(paragraph, node) -> None:
                     _add_runs_from_inline_html(paragraph, sub_node)
 
 
-def _process_block(doc: Document, element: Tag) -> None:
-    """Convert one block-level HTML element into a docx flowable."""
+def _process_block(doc: Document, element: Tag, heading_color: RGBColor = NAVY) -> None:
+    """Convert one block-level HTML element into a docx flowable.
+
+    `heading_color` is applied to heading runs (and table header text). Pass
+    BLACK for monochrome documents such as USPTO patents.
+    """
     name = (element.name or '').lower()
+
+    # ── Explicit page-break marker ──────────────────────────────────────
+    # Empty <div class="page-break"></div> (or with page-break-before/after
+    # styles) inserts a docx page break. Used by the patent Word export to
+    # start the NUMBERED DOCUMENT appendix on a fresh page.
+    if name in ('div', 'hr', 'p'):
+        _cls = element.get('class') if hasattr(element, 'get') else None
+        _cls_str = ' '.join(_cls) if isinstance(_cls, list) else (_cls or '')
+        _sty = (element.get('style') if hasattr(element, 'get') else '') or ''
+        _sty_norm = _sty.replace(' ', '').lower()
+        if ('page-break' in _cls_str
+                or 'page-break-before:always' in _sty_norm
+                or 'page-break-after:always' in _sty_norm):
+            if not (element.get_text() or '').strip():
+                _add_page_break(doc)
+                return
 
     # ── Headings ────────────────────────────────────────────────────────
     if name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
@@ -174,14 +195,14 @@ def _process_block(doc: Document, element: Tag) -> None:
         for run in list(h.runs):
             run.text = ''
         _add_runs_from_inline_html(h, element)
-        # Override colour to navy for visual consistency with PDFs.
+        # Override colour for visual consistency with the PDF identity.
         for run in h.runs:
-            run.font.color.rgb = NAVY
+            run.font.color.rgb = heading_color
         return
 
     # ── Tables ──────────────────────────────────────────────────────────
     if name == 'table':
-        _emit_table(doc, element)
+        _emit_table(doc, element, heading_color)
         return
 
     # ── Lists ───────────────────────────────────────────────────────────
@@ -210,17 +231,29 @@ def _process_block(doc: Document, element: Tag) -> None:
     # ── Pre / code block ────────────────────────────────────────────────
     if name == 'pre':
         text = element.get_text()
-        p = doc.add_paragraph()
-        run = p.add_run(text)
-        run.font.name = 'Consolas'
-        run.font.size = Pt(10)
+        # Render line-by-line in a monospace font with tight spacing so that
+        # newlines are PRESERVED (a single run would collapse them) — needed
+        # for the USPTO line-numbered patent copy and for code blocks.
+        lines = text.split('\n')
+        # Drop a single leading/trailing empty line introduced by the tag.
+        if lines and lines[0] == '':
+            lines = lines[1:]
+        if lines and lines[-1] == '':
+            lines = lines[:-1]
+        for line in (lines or ['']):
+            p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.space_before = Pt(0)
+            run = p.add_run(line)
+            run.font.name = 'Consolas'
+            run.font.size = Pt(9)
         return
 
     # ── div: recurse into children (treat as transparent wrapper) ───────
     if name == 'div':
         for child in element.children:
             if isinstance(child, Tag):
-                _process_block(doc, child)
+                _process_block(doc, child, heading_color)
             elif isinstance(child, NavigableString):
                 text = str(child).strip()
                 if text:
@@ -262,7 +295,7 @@ def _process_block(doc: Document, element: Tag) -> None:
     _add_runs_from_inline_html(p, element)
 
 
-def _emit_table(doc: Document, table_tag: Tag) -> None:
+def _emit_table(doc: Document, table_tag: Tag, heading_color: RGBColor = NAVY) -> None:
     """Convert a <table> into a real docx Table with header shading and borders."""
     # Collect rows from <thead> and <tbody> (and bare <tr>).
     rows: list[list[str]] = []
@@ -313,10 +346,10 @@ def _emit_table(doc: Document, table_tag: Tag) -> None:
                 _add_runs_from_inline_html(paragraph, cell_tags[c_idx])
             if is_hdr:
                 _set_cell_shading(cell, HEADER_BG)
-                # Bold + navy header text
+                # Bold header text (navy by default; black in monochrome mode)
                 for run in paragraph.runs:
                     run.bold = True
-                    run.font.color.rgb = NAVY
+                    run.font.color.rgb = heading_color
             _set_cell_borders(cell)
     # Trailing spacer paragraph after the table
     doc.add_paragraph()
@@ -332,6 +365,7 @@ def html_to_docx_bytes(
     cover_subtitle: Optional[str] = None,
     legal_reference: Optional[str] = None,
     add_cover: bool = True,
+    mono: bool = False,
 ) -> bytes:
     """
     Convert HTML to .docx bytes.
@@ -360,6 +394,10 @@ def html_to_docx_bytes(
     """
     doc = Document()
 
+    # Monochrome documents (e.g. USPTO patents must be strictly black & white)
+    # render headings and cover text in black instead of the navy house colour.
+    heading_color = BLACK if mono else NAVY
+
     # ── document defaults: serif body font, 11pt, 1-inch margins ────────
     style = doc.styles['Normal']
     style.font.name = 'Calibri'
@@ -387,7 +425,7 @@ def html_to_docx_bytes(
         run = banner.add_run((doc_type or 'Document').upper())
         run.bold = True
         run.font.size = Pt(22)
-        run.font.color.rgb = NAVY
+        run.font.color.rgb = heading_color
 
         # Title
         if title:
@@ -396,7 +434,7 @@ def html_to_docx_bytes(
             run = title_p.add_run(title)
             run.bold = True
             run.font.size = Pt(16)
-            run.font.color.rgb = NAVY
+            run.font.color.rgb = heading_color
 
         # Author / Project Proponent
         if author:
@@ -463,7 +501,7 @@ def html_to_docx_bytes(
         top_level_blocks = [c for c in soup.children if isinstance(c, Tag)]
         if top_level_blocks:
             for child in top_level_blocks:
-                _process_block(doc, child)
+                _process_block(doc, child, heading_color)
             # Also grab any trailing NavigableString text
             for child in soup.children:
                 if isinstance(child, NavigableString):
@@ -501,6 +539,8 @@ def build_docx_response(
     legal_reference: Optional[str] = None,
     add_cover: bool = True,
     is_html: bool = False,  # accepted for back-compat; ignored — see notes
+    html_passthrough: bool = False,
+    mono: bool = False,
 ):
     """
     Convenience wrapper used by every /download-docx endpoint.
@@ -521,6 +561,31 @@ def build_docx_response(
     import markdown as _md
 
     raw = content or ''
+
+    if html_passthrough:
+        # Content is ALREADY clean HTML (e.g. patents). Skip the markdown/table
+        # rewriting below — in particular the <strong>→** step, which leaves
+        # literal "**" inside HTML blocks because markdown.markdown() does not
+        # reprocess markdown inside raw HTML. Render the HTML straight through.
+        html = raw
+        docx_bytes = html_to_docx_bytes(
+            html=html,
+            title=title,
+            doc_type=doc_type,
+            author=author,
+            language=language,
+            cover_subtitle=cover_subtitle,
+            legal_reference=legal_reference,
+            add_cover=add_cover,
+            mono=mono,
+        )
+        safe_stem = re.sub(r'[^A-Za-z0-9_\-]', '_', filename_stem)[:80] or "document"
+        filename = f"{safe_stem}_{language.upper()}.docx"
+        return StreamingResponse(
+            io.BytesIO(docx_bytes),
+            media_type=DOCX_MIME,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     # 1. Unwrap pre-broken pipe-rows that got wrapped in <p> by an earlier
     #    HTML conversion (very common in econometric-study DB content).
@@ -588,6 +653,7 @@ def build_docx_response(
         cover_subtitle=cover_subtitle,
         legal_reference=legal_reference,
         add_cover=add_cover,
+        mono=mono,
     )
 
     safe_stem = re.sub(r'[^A-Za-z0-9_\-]', '_', filename_stem)[:80] or "document"

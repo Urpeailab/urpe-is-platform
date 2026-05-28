@@ -59,6 +59,11 @@ class ClientInput(BaseModel):
     industry: Optional[str] = ""
     notes: Optional[str] = ""
     tags: List[str] = []
+    # Set when the client is being imported from the Portal's panel. Used to
+    # mark the source row (visa_cases / classic_cases) with is_redactora=true
+    # so it's excluded from subsequent panel searches.
+    external_id: Optional[str] = None
+    external_source: Optional[str] = None  # "visa" | "classic"
 
 
 class ClientTransferRequest(BaseModel):
@@ -235,15 +240,46 @@ async def create_client(client_data: ClientInput, current_user = Depends(get_cur
         
         await db.clients.insert_one(client_dict)
         logger.info(f"Client created: {client_dict['id']} by operator {current_user.id}")
-        
+
+        # If this is a panel import, mark the source case row so it's
+        # excluded from future Importar del Panel searches.
+        source_marked = None
+        if client_data.external_id and client_data.external_source:
+            source_table = {
+                "visa": "visa_cases",
+                "classic": "classic_cases",
+            }.get(client_data.external_source)
+            if source_table:
+                try:
+                    from db.supabase_client import update as _sb_update
+                    updated = _sb_update(
+                        source_table,
+                        {"id": client_data.external_id},
+                        {"is_redactora": True},
+                    )
+                    source_marked = bool(updated)
+                    logger.info(
+                        f"Marked {source_table}.id={client_data.external_id} as imported into Redactora "
+                        f"({'ok' if source_marked else 'no rows matched'})"
+                    )
+                except Exception as e:
+                    # Don't fail the import if the source-mark step errors; the
+                    # local client was created successfully, the worst that
+                    # happens is the case shows up again in the search.
+                    logger.warning(
+                        f"Failed to mark {source_table}.id={client_data.external_id} as imported: "
+                        f"{type(e).__name__}: {e}"
+                    )
+
         # Remove MongoDB _id
         client_dict.pop('_id', None)
-        
+
         return {
             "message": "Cliente creado exitosamente",
             "client_id": client_dict["id"],
             "client": client_dict,
-            "supabase_linked": supabase_id is not None
+            "supabase_linked": supabase_id is not None,
+            "source_marked": source_marked,
         }
     except HTTPException:
         raise

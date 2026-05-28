@@ -34,7 +34,7 @@ async def call_claude_opus_niw(
                     "X-Title": "Monica Document Generator"
                 },
                 json={
-                    "model": "anthropic/claude-opus-4-6",
+                    "model": "anthropic/claude-opus-4.6",
                     "messages": [
                         {"role": "system", "content": system_message},
                         {"role": "user", "content": user_message}

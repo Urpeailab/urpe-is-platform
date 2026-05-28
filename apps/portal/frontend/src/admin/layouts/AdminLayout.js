@@ -50,6 +50,7 @@ import {
 } from 'lucide-react';
 import { GlobalSearch } from '../components/GlobalSearch';
 import { NotificationsPanel } from '../components/NotificationsPanel';
+import { PersistentRedactoraIframe } from '../components/PersistentRedactoraIframe';
 
 export const AdminLayout = () => {
   const { admin, signOut, hasPermission } = useAdminAuth();
@@ -507,8 +508,12 @@ export const AdminLayout = () => {
 
       {/* Main Content */}
       <div className="lg:pl-64 pt-16 min-h-screen bg-white relative z-10">
-        <main className="p-6">
+        <main className="p-6 relative" style={{ minHeight: 'calc(100vh - 64px)' }}>
           <Outlet />
+          {/* Persistent Redactora iframe — mounted once at the layout level so its
+              internal state (clients, in-flight letter generation, Mónica chat)
+              survives navigation between admin pages. Hidden when not on /admin/proposal. */}
+          <PersistentRedactoraIframe visible={location.pathname === '/admin/proposal'} />
         </main>
       </div>
 

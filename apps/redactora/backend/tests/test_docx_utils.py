@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from docx import Document  # noqa: E402
 
-from docx_utils import html_to_docx_bytes  # noqa: E402
+from docx_utils import html_to_docx_bytes, NAVY, BLACK  # noqa: E402
 
 
 SAMPLE_HTML = """
@@ -191,3 +191,54 @@ def test_handles_empty_html_safely():
     doc = _open(out)
     # Should not crash and should produce SOME content.
     assert len(doc.paragraphs) >= 1
+
+
+# ── Patent (monochrome) export: headings must be BLACK, never navy ──────────
+
+def test_mono_headings_are_black_not_navy():
+    """Patents must be strictly black & white — heading runs render in black."""
+    out = html_to_docx_bytes(
+        html="<h2>FIELD OF THE INVENTION</h2><p>Body text.</p>",
+        title="Patent", doc_type="Provisional Patent Application",
+        language="en", add_cover=False, mono=True,
+    )
+    doc = _open(out)
+    heading_runs = [
+        run for p in doc.paragraphs if (p.style.name or "").startswith("Heading")
+        for run in p.runs if run.text.strip()
+    ]
+    assert heading_runs, "no heading runs were produced"
+    for run in heading_runs:
+        col = run.font.color
+        if col is not None and col.type is not None and col.rgb is not None:
+            assert str(col.rgb) == str(BLACK), f"heading not black: {run.text!r} -> {col.rgb}"
+            assert str(col.rgb) != str(NAVY)
+
+
+def test_default_headings_stay_navy():
+    """Non-mono documents keep the navy house colour (no regression)."""
+    out = html_to_docx_bytes(
+        html="<h2>Executive Summary</h2><p>Body.</p>",
+        title="Plan", doc_type="Business Plan", language="en", add_cover=False,
+    )
+    doc = _open(out)
+    colors = [
+        str(run.font.color.rgb)
+        for p in doc.paragraphs if (p.style.name or "").startswith("Heading")
+        for run in p.runs
+        if run.font.color is not None and run.font.color.type is not None and run.font.color.rgb is not None
+    ]
+    assert any(c == str(NAVY) for c in colors), f"expected navy headings, got {colors}"
+
+
+def test_strong_renders_bold_without_markdown_artifacts():
+    """<strong> must become real bold text — never literal '**' in the doc."""
+    out = html_to_docx_bytes(
+        html="<p>This is <strong>important</strong> and <em>noted</em>.</p>",
+        title="Doc", doc_type="Doc", add_cover=False, mono=True,
+    )
+    doc = _open(out)
+    body = "\n".join(p.text for p in doc.paragraphs)
+    assert "**" not in body, f"literal markdown bold leaked: {body!r}"
+    bold_runs = [r for p in doc.paragraphs for r in p.runs if r.bold and r.text.strip()]
+    assert any("important" in r.text for r in bold_runs), "<strong> was not rendered bold"

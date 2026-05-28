@@ -11635,7 +11635,11 @@ const CreatePatentV2 = () => {
   const [cvData, setCvData] = useState({
     applicant_name: '',
     applicant_cv: '',
-    project_description: ''
+    project_description: '',
+    // Structured contact info from /upload-cv. Forwarded as
+    // cv_extracted_address so the patent's INVENTOR INFORMATION block
+    // uses CV-extracted values before falling back to the client record.
+    extracted_address: null
   });
   const [inventionSuggestions, setInventionSuggestions] = useState([]);
   const [patentRecommendation, setPatentRecommendation] = useState(null);
@@ -11742,7 +11746,8 @@ const CreatePatentV2 = () => {
       if (response.data.success) {
         setCvData({
           ...cvData,
-          applicant_cv: response.data.analyzed_cv
+          applicant_cv: response.data.analyzed_cv,
+          extracted_address: response.data.extracted_address || null
         });
         toast.success('✅ CV analizado exitosamente');
       }
@@ -11844,7 +11849,10 @@ const CreatePatentV2 = () => {
         client_id: clientId,
         applicant_cv: cvData.applicant_cv || '',  // ✅ Incluir CV
         inventor_cv: cvData.applicant_cv || '',   // ✅ También como inventor_cv
-        project_description: cvData.project_description || ''  // ✅ Incluir proyecto
+        project_description: cvData.project_description || '',  // ✅ Incluir proyecto
+        // Address resolution priority for the patent INVENTOR INFORMATION block:
+        // CV-extracted (this field) → top-level patent field → client record → [VERIFY]
+        cv_extracted_address: cvData.extracted_address || null
       };
       
       setFormData(patentData);
@@ -11929,7 +11937,10 @@ const CreatePatentV2 = () => {
         client_id: clientId,
         applicant_cv: cvData.applicant_cv || formData.applicant_cv || '',
         inventor_cv: cvData.applicant_cv || formData.inventor_cv || '',
-        project_description: cvData.project_description || formData.project_description || ''
+        project_description: cvData.project_description || formData.project_description || '',
+        // Address resolution priority for the patent INVENTOR INFORMATION block:
+        // CV-extracted (this field) → top-level patent field → client record → [VERIFY]
+        cv_extracted_address: cvData.extracted_address || null
       };
       
       const createResponse = await axios.post(
@@ -12614,7 +12625,8 @@ const CreatePatentDirect = () => {
 
       if (response.data.success) {
         const analyzedCV = response.data.analyzed_cv;
-        
+        const extractedAddress = response.data.extracted_address || null;
+
         // Extract technical field from CV using AI
         try {
           const extractResponse = await axios.post(
@@ -12624,18 +12636,20 @@ const CreatePatentDirect = () => {
               headers: { 'Authorization': `Bearer ${token}` }
             }
           );
-          
+
           if (extractResponse.data.technical_field) {
             setFormData(prev => ({
               ...prev,
               applicant_cv: analyzedCV,
+              cv_extracted_address: extractedAddress,
               technical_field: extractResponse.data.technical_field
             }));
             toast.success('✅ CV analizado y campo técnico extraído exitosamente');
           } else {
             setFormData(prev => ({
               ...prev,
-              applicant_cv: analyzedCV
+              applicant_cv: analyzedCV,
+              cv_extracted_address: extractedAddress
             }));
             toast.success('✅ CV analizado. Por favor completa el campo técnico manualmente.');
           }
@@ -12643,7 +12657,8 @@ const CreatePatentDirect = () => {
           // If extraction fails, just save the CV
           setFormData(prev => ({
             ...prev,
-            applicant_cv: analyzedCV
+            applicant_cv: analyzedCV,
+            cv_extracted_address: extractedAddress
           }));
           toast.success('✅ CV analizado. Por favor completa el campo técnico manualmente.');
         }

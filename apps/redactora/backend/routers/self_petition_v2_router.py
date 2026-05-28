@@ -1013,8 +1013,16 @@ async def download_v2_letter(
         content_proc = re.sub(r'\[Date\]', today_str, content_proc, flags=re.IGNORECASE)
         # Replace [Service Center Address] with standard label
         content_proc = re.sub(r'\[Service Center Address\]', 'USCIS Service Center', content_proc, flags=re.IGNORECASE)
-        # Replace any remaining [PLACEHOLDER] or [Something] patterns
-        content_proc = re.sub(r'\[([A-Z][A-Za-z\s/]+)\]', r'\1', content_proc)
+        # Highlight any surviving bracket placeholders ([VERIFY], [Project Name], etc.)
+        # in red+bold so reviewers can spot and fix them. Previously this regex SILENTLY
+        # stripped the brackets and left the placeholder text inline as regular prose
+        # (e.g. "[Physical Address]" → "Physical Address"), which is the bug the user
+        # was hitting. Keeping the brackets visible and red makes review trivial.
+        content_proc = re.sub(
+            r'\[([A-Z][A-Za-z0-9\s/_.-]{1,80})\]',
+            r'<font color="#B91C1C"><b>[\1]</b></font>',
+            content_proc,
+        )
 
         SKIP_TAGS = {'head', 'style', 'script', 'meta', 'title', 'link', 'noscript'}
 

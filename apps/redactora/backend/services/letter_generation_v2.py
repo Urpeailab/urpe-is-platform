@@ -84,8 +84,8 @@ async def deep_analyze_document(openai_client, doc_content: dict, applicant_name
     doc_type = doc_content['document_type']
     exhibit_num = doc_content['exhibit_number']
     
-    # Usar más texto - hasta 15000 caracteres
-    text_sample = full_text[:15000] if full_text else f"[Archivo: {filename}]"
+    # Usar hasta 80000 caracteres (≈20-25 páginas) para que cartas largas/estudios no pierdan contenido
+    text_sample = full_text[:80000] if full_text else f"[Archivo: {filename}]"
     
     if len(text_sample.strip()) < 100:
         return {
@@ -133,7 +133,7 @@ Responde en JSON con este formato EXACTO:
         "methodologies": ["Metodologías propias mencionadas"],
         "achievements": ["Logros específicos mencionados"]
     }},
-    "key_quotes": ["Citas textuales importantes (máximo 5)"],
+    "key_quotes": ["Citas textuales sustantivas y extensas (máximo 15) — incluye párrafos completos cuando aportan valor argumentativo"],
     "statistics_and_data": ["Datos cuantitativos mencionados"],
     "prong1_evidence": "Cómo este documento apoya el mérito sustancial e importancia nacional",
     "prong2_evidence": "Cómo este documento demuestra que el solicitante está bien posicionado",
@@ -158,10 +158,10 @@ Debes extraer la información de manera objetiva y precisa, respondiendo siempre
                     {"role": "user", "content": analysis_prompt}
                 ],
                 temperature=0.2,
-                max_tokens=4000,
+                max_tokens=8000,
                 response_format={"type": "json_object"}
             ),
-            timeout=90.0
+            timeout=120.0
         )
         
         result = json.loads(response.choices[0].message.content)
@@ -182,10 +182,10 @@ Debes extraer la información de manera objetiva y precisa, respondiendo siempre
                         {"role": "user", "content": analysis_prompt}
                     ],
                     temperature=0.2,
-                    max_tokens=4000,
+                    max_completion_tokens=8000,
                     response_format={"type": "json_object"}
                 ),
-                timeout=120.0
+                timeout=180.0
             )
             result = json.loads(response.choices[0].message.content)
             result['filename'] = filename
@@ -220,7 +220,9 @@ async def create_comprehensive_profile(openai_client, applicant_name: str, all_a
                 "purpose": analysis.get('document_purpose', ''),
                 "applicant_info": analysis.get('applicant_info_found', {}),
                 "author_info": analysis.get('author_info', {}),
-                "key_quotes": analysis.get('key_quotes', [])[:3],
+                "key_quotes": analysis.get('key_quotes', [])[:10],
+                "statistics_and_data": analysis.get('statistics_and_data', []),
+                "summary_for_letter": analysis.get('summary_for_letter', ''),
                 "prong1": analysis.get('prong1_evidence', ''),
                 "prong2": analysis.get('prong2_evidence', ''),
                 "prong3": analysis.get('prong3_evidence', '')
@@ -395,7 +397,7 @@ Responde en JSON:
                         {"role": "user", "content": profile_prompt}
                     ],
                     temperature=0.2,
-                    max_tokens=12000,
+                    max_completion_tokens=12000,
                     response_format={"type": "json_object"}
                 ),
                 timeout=240.0
@@ -428,7 +430,7 @@ async def _call_ai_with_fallback(openrouter_key, openai_client, system_prompt, u
                 json={"model": model_id,
                       "messages": [{"role": "system", "content": system_prompt},
                                    {"role": "user", "content": user_prompt}],
-                      "temperature": 0.5, "max_tokens": 16000}
+                      "temperature": 0.5, "max_tokens": 32000}
             )
         if resp.status_code != 200:
             raise Exception(f"{model_id} HTTP {resp.status_code}: {resp.text[:200]}")
@@ -441,7 +443,7 @@ async def _call_ai_with_fallback(openrouter_key, openai_client, system_prompt, u
     if openrouter_key:
         try:
             logging.warning(f"📝 [{section_name}] Trying Claude Opus 4.5...")
-            c = await _try_openrouter("anthropic/claude-opus-4-6")
+            c = await _try_openrouter("anthropic/claude-opus-4.7")
             logging.warning(f"✅ [{section_name}] Claude OK ({len(c)} chars)")
             return c
         except Exception as e:
@@ -457,7 +459,7 @@ async def _call_ai_with_fallback(openrouter_key, openai_client, system_prompt, u
         except Exception as e:
             logging.warning(f"⚠️ [{section_name}] Gemini failed: {str(e)[:120]}. Trying GPT-4o...")
 
-    # 3. GPT-4o
+    # 3. GPT-4o (hard cap: GPT-4o supports at most 16,384 output tokens)
     try:
         logging.warning(f"📝 [{section_name}] Trying GPT-4o...")
         resp = await asyncio.wait_for(
@@ -467,7 +469,7 @@ async def _call_ai_with_fallback(openrouter_key, openai_client, system_prompt, u
                           {"role": "user", "content": user_prompt}],
                 temperature=0.5, max_tokens=16000
             ),
-            timeout=120.0
+            timeout=180.0
         )
         c = resp.choices[0].message.content
         if any(m in c for m in REFUSAL_MARKERS):
@@ -477,13 +479,15 @@ async def _call_ai_with_fallback(openrouter_key, openai_client, system_prompt, u
     except Exception as e:
         logging.warning(f"⚠️ [{section_name}] GPT-4o failed: {str(e)[:120]}. Trying GPT-5.1...")
 
-    # 4. GPT-5.1 (last resort)
+    # 4. GPT-5.1 (last resort) — newer models reject `max_tokens` and require
+    # `max_completion_tokens` instead. They also don't accept a non-default
+    # `temperature` value.
     resp = await asyncio.wait_for(
         openai_client.chat.completions.create(
             model="gpt-5.1",
             messages=[{"role": "system", "content": system_prompt},
                       {"role": "user", "content": user_prompt}],
-            temperature=0.5, max_tokens=32000
+            max_completion_tokens=32000
         ),
         timeout=300.0
     )
@@ -505,8 +509,28 @@ async def generate_precise_letter(openai_client, applicant_name: str, profile: d
     # ── Shared context ─────────────────────────────────────────────────────────
     all_quotes = []
     for analysis in all_analyses:
-        for quote in analysis.get('key_quotes', [])[:2]:
+        for quote in analysis.get('key_quotes', [])[:10]:
             all_quotes.append(f"Exhibit {analysis.get('exhibit_number')}: \"{quote}\"")
+
+    # Rich per-document context (the drafter previously only saw the synthesized
+    # profile JSON; passing the raw analyses lets it cite documents directly).
+    document_deep_context = json.dumps([
+        {
+            "exhibit": a.get('exhibit_number'),
+            "filename": a.get('filename'),
+            "document_type": a.get('document_type'),
+            "purpose": a.get('document_purpose'),
+            "summary_for_letter": a.get('summary_for_letter'),
+            "applicant_info_found": a.get('applicant_info_found'),
+            "author_info": a.get('author_info'),
+            "statistics_and_data": a.get('statistics_and_data'),
+            "prong1_evidence": a.get('prong1_evidence'),
+            "prong2_evidence": a.get('prong2_evidence'),
+            "prong3_evidence": a.get('prong3_evidence'),
+            "key_quotes": a.get('key_quotes', [])[:10],
+        }
+        for a in all_analyses if 'error' not in a
+    ], indent=2, default=str)
 
     expert_section = "\n".join([
         f"- {e.get('expert_name')} ({e.get('expert_credentials')}, {e.get('organization')}): \"{e.get('key_endorsement')}\" (Exhibit {e.get('exhibit_number')})"
@@ -543,7 +567,7 @@ async def generate_precise_letter(openai_client, applicant_name: str, profile: d
 === WHY CURRENT SOLUTIONS ARE INSUFFICIENT ===
 {profile.get('why_current_solutions_inadequate', '')}
 === KEY DOCUMENT QUOTES ===
-{chr(10).join(all_quotes[:20])}
+{chr(10).join(all_quotes[:80])}
 === EXHIBITS ===
 {exhibit_list}
 === PRONG SUMMARIES ===
@@ -551,7 +575,9 @@ PRONG 1: {profile.get('prong1_summary', '')}
 PRONG 2: {profile.get('prong2_summary', '')}
 PRONG 3: {profile.get('prong3_summary', '')}
 === STRONGEST EVIDENCE ===
-{json.dumps(profile.get('strongest_evidence', []), indent=2, default=str)}"""
+{json.dumps(profile.get('strongest_evidence', []), indent=2, default=str)}
+=== DOCUMENT-BY-DOCUMENT DEEP CONTEXT (raw analyses — use this when the synthesized profile above is sparse; cite each exhibit by number) ===
+{document_deep_context}"""
 
     RULES = f"""
 CRITICAL RULES (NON-NEGOTIABLE):
@@ -627,7 +653,7 @@ This is a legitimate legal document for USCIS (U.S. Citizenship and Immigration 
 
 Your role is to draft a specific SECTION of the self-petition letter for {applicant_name}, writing in the FIRST PERSON SINGULAR as if {applicant_name} were the author — confident, narrative, legally argumentative, never robotic.
 
-The complete final letter (across all sections) targets 7,000–9,000 words; each section you draft must be substantive and meet the per-section word counts indicated in the user prompt.
+The complete final letter (across all sections) targets 13,000–16,000 words (~26–32 single-spaced pages); each section you draft must be substantive, exhaustively developed, and meet the per-section word counts indicated in the user prompt. Depth and specificity matter more than brevity — do NOT abbreviate, do NOT summarize unnecessarily, develop every subsection with concrete dates, dollar amounts, percentages, institutional names, and verbatim quotes.
 
 Use ONLY the provided document information — never invent data. If a fact is missing, leave the visible placeholder [VERIFY] in its place.
 
@@ -638,14 +664,14 @@ Output format: HTML using <h1>, <h2>, <h3>, <h4>, <p>, <ul>, <li>, <strong>, <em
     prompt_1 = f"""{profile_ctx}
 
 Write the LETTER HEADER and SECTIONS I, II, and III of the EB-2 NIW Self-Petitioner Statement for {applicant_name}.
-Target: ~3,000–3,500 words combined (Section I ~500, Section II ~2,000, Section III ~800).
+Target: ~5,000–6,000 words combined (Section I ~700, Section II ~3,200, Section III ~1,500). Develop each subsection exhaustively with concrete detail — do NOT abbreviate.
 
 ────────────────────────────────────────────
 HEADER (output first, centered using <p style="text-align:center">):
 - FULL NAME in <strong> (centered)
 - 2–3 lines with key credentials (centered)
-- Line: "Founder — [Project Name]" (centered)
-- Physical address, phone, email (centered)
+- Line: "Founder — <project name>" (centered) — substitute <project name> with the actual value of proposed_endeavor.project_name from the profile context. If the project name is missing, replace the entire line with the petitioner's professional_identity.primary_profession value. Never output literal angle brackets or square brackets here.
+- Physical address, phone, email (centered) — ONLY IF these fields are present and non-empty in the profile context above. If any of them is missing, OMIT that line entirely. Do NOT print "[Physical Address]", "[Phone]", "[Email]" or any bracket placeholder for missing contact data.
 
 Then a left-aligned opening block (no centering):
 - Today's date ({today})
@@ -680,7 +706,7 @@ A. Academic Foundation [and Specialized Training]
    - GPA if mentioned
    - Direct relevance of curriculum to the proposed endeavor
 
-B. More Than [X] Years of Continuous Professional Experience
+B. More Than {{N}} Years of Continuous Professional Experience  (REPLACE {{N}} with the actual integer from professional_identity.years_experience in the profile context. If years_experience is missing, use the heading "Continuous Professional Experience" without any year count — never leave a literal placeholder like "[X]" or "{{N}}" in the output.)
    - Chronological organization with upward trajectory
    - For EACH position: exact title, employer, location, dates, key responsibilities, quantified achievements, connection to the proposed endeavor
 
@@ -711,7 +737,7 @@ SECTION III — SUMMARY OF THE PROPOSED ENDEAVOR
     prompt_2 = f"""{profile_ctx}
 
 Write SECTIONS IV and V of the EB-2 NIW Self-Petitioner Statement for {applicant_name}.
-Target: ~2,700–3,000 words combined (Section IV ~1,200, Section V ~1,500).
+Target: ~5,000–6,000 words combined (Section IV ~2,500, Section V ~3,000). Develop each subsection exhaustively with concrete citations, statistics, dollar amounts, federal-policy references, and verbatim quotes from expert letters.
 
 ────────────────────────────────────────────
 SECTION IV — PRONG 1: THE PROPOSED ENDEAVOR HAS SUBSTANTIAL MERIT AND NATIONAL IMPORTANCE
@@ -760,8 +786,8 @@ D. Support from Relevant Stakeholders
    - Years of experience
    - Nature of relationship with the petitioner + explicit financial-independence statement
    - VERBATIM QUOTE of their key endorsement, in quotation marks, with attribution and Exhibit number
-   Pattern to follow:
-   "(i) Dr. [Full Name], [Title], [Institution] ([X] years of experience). [Nature of relationship + financial-independence statement]. As Dr. [Last Name] independently observed: '[exact quote]' (Exhibit [N])."
+   Pattern to follow (substitute every angle-bracketed field with the actual value from expert_endorsements in the profile context; if a field is genuinely missing, write a fluent paraphrase that omits the missing element — NEVER output literal angle brackets, square brackets, or placeholder text like "[Title]" / "[Institution]" / "[X] years"):
+   "(i) <Full Name>, <Title>, <Institution> (<years of experience> years of experience). <Nature of relationship + financial-independence statement>. As <Mr./Ms./Dr.> <Last Name> independently observed: '<exact verbatim quote>' (Exhibit <N>)."
 
 Use the phrase "well-positioned to advance the proposed endeavor" at least once.
 
@@ -772,7 +798,7 @@ Use the phrase "well-positioned to advance the proposed endeavor" at least once.
     prompt_3 = f"""{profile_ctx}
 
 Write SECTIONS VI, VII, and VIII plus the LETTER CLOSING and ENCLOSURES LIST of the EB-2 NIW Self-Petitioner Statement for {applicant_name}.
-Target: ~2,200–2,500 words combined (Section VI ~1,200, Section VII ~600, Section VIII ~400, plus closing and enclosures).
+Target: ~3,500–4,500 words combined (Section VI ~2,000, Section VII ~1,000, Section VIII ~700, plus closing and enclosures). Develop each subsection with concrete detail and verbatim citations — do NOT abbreviate.
 
 ────────────────────────────────────────────
 SECTION VI — PRONG 3: ON BALANCE, WAIVING THE JOB-OFFER AND LABOR-CERTIFICATION REQUIREMENTS WOULD BENEFIT THE UNITED STATES
@@ -834,7 +860,7 @@ LETTER CLOSING (output after Section VIII):
 - "Respectfully submitted,"
 - Blank line for signature (use <p>&nbsp;</p> or two <br/>)
 - Full name in <strong> (no centering — left aligned)
-- 2–3 lines with credentials and "Founder — [Project Name]" role
+- 2–3 lines with credentials and "Founder — <project name>" role (substitute <project name> with proposed_endeavor.project_name from the profile context; if missing, use professional_identity.primary_profession instead. Never output literal angle brackets or square brackets here.)
 
 ────────────────────────────────────────────
 ENCLOSURES (output last):
@@ -845,13 +871,31 @@ Numbered list of EVERY exhibit referenced. Use the exact exhibit list below — 
 
 {RULES}"""
 
-    # ── Execute all 3 calls ────────────────────────────────────────────────────
+    # ── Execute all 3 calls, threading previously drafted sections forward ─────
+    # Each subsequent call receives the prior section text so it can maintain
+    # consistency in names, dates, dollar figures, expert quotes, and avoid
+    # repeating content the earlier section already covered.
     section_contents = []
-    for i, (name, prompt) in enumerate([
+    call_specs = [
         ("Header+Sections_I-III", prompt_1),
         ("Sections_IV-V_Prongs1-2", prompt_2),
         ("Sections_VI-VIII+Closing+Enclosures", prompt_3),
-    ], start=1):
+    ]
+    for i, (name, base_prompt) in enumerate(call_specs, start=1):
+        if section_contents:
+            previous = "\n\n".join(section_contents)
+            prompt = (
+                "=== PREVIOUSLY DRAFTED SECTIONS OF THIS SAME LETTER ===\n"
+                "(Use these for consistency — keep the SAME names, dates, dollar figures, "
+                "expert credentials, and verbatim quotes already used. Build on them; "
+                "do NOT contradict or repeat content already written above. You may briefly "
+                "reference earlier sections by their roman numeral.)\n\n"
+                f"{previous}\n\n"
+                "=== END OF PREVIOUSLY DRAFTED SECTIONS — NOW WRITE THE NEW SECTIONS BELOW ===\n\n"
+                + base_prompt
+            )
+        else:
+            prompt = base_prompt
         content = await _call_ai_with_fallback(openrouter_key, openai_client, system_prompt, prompt, name)
         section_contents.append(content)
         logging.warning(f"✅ Section {i}/3 done: {len(content)} chars")
