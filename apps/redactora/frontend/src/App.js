@@ -3371,7 +3371,13 @@ const CreateRecommendationLetter = () => {
   const [candidateCV, setCandidateCV] = useState(null);
   const [projectInfo, setProjectInfo] = useState(null);
   const [recommenderCV, setRecommenderCV] = useState(null);
-  
+  // Texto libre con el contexto de la relación entre el firmante y el cliente
+  // (cómo se conocen, hace cuánto, en qué colaboraron, qué observó el firmante
+  // directamente). Se envía al backend en el FormData y el LLM lo usa como
+  // fuente autoritativa para el párrafo de relación profesional y los
+  // párrafos de logros verificados.
+  const [relationshipContext, setRelationshipContext] = useState('');
+
   const [generating, setGenerating] = useState(false);
   const [letterContent, setLetterContent] = useState('');
   const [letterContentEn, setLetterContentEn] = useState('');
@@ -3476,10 +3482,16 @@ const CreateRecommendationLetter = () => {
       formData.append('candidate_cv', candidateCV);
       formData.append('project_info', projectInfo);
       formData.append('recommender_cv', recommenderCV);
-      
+
       // Agregar client_id si está disponible
       if (clientId) {
         formData.append('client_id', clientId);
+      }
+
+      // Contexto opcional de la relación firmante↔candidato. Si está vacío,
+      // el backend lo trata como ausente y NO inyecta el bloque en el prompt.
+      if (relationshipContext && relationshipContext.trim()) {
+        formData.append('relationship_context', relationshipContext.trim());
       }
 
       const token = localStorage.getItem('token');
@@ -3674,7 +3686,7 @@ const CreateRecommendationLetter = () => {
     <div className="dashboard-container">
       <header className="dashboard-header">
         <div className="header-content">
-          <Button variant="ghost" onClick={() => navigate('/dashboard')} style={{ marginRight: '1rem' }}>
+          <Button variant="ghost" onClick={() => navigate(-1)} style={{ marginRight: '1rem' }}>
             <ArrowLeft className="mr-2" size={20} />
             Volver
           </Button>
@@ -3773,6 +3785,28 @@ const CreateRecommendationLetter = () => {
                 color="#00f2fe"
               />
             </div>
+
+            {/* Contexto de la relación firmante↔candidato (opcional pero recomendado) */}
+            <Card style={{ marginTop: '1.5rem', border: '1px solid #e5e7eb' }}>
+              <CardHeader style={{ paddingBottom: '0.5rem' }}>
+                <CardTitle style={{ fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  🔗 Relación entre firmante y candidato <span style={{ fontSize: '0.85rem', fontWeight: 400, color: '#6b7280' }}>(opcional, muy recomendado)</span>
+                </CardTitle>
+                <CardDescription style={{ fontSize: '0.85rem' }}>
+                  Describe cómo se conocen, hace cuánto, en qué proyectos colaboraron y qué logros del candidato observó el firmante directamente. Este contexto sustituye lo que el LLM tendría que inferir desde el CV y produce párrafos de relación profesional mucho más concretos.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Textarea
+                  value={relationshipContext}
+                  onChange={(e) => setRelationshipContext(e.target.value)}
+                  placeholder="Ej.: 'El Dr. X y yo trabajamos juntos en el proyecto Y de 2021 a 2024 en la Universidad Z. Lo supervisé directamente en el desarrollo del modelo M, donde observé cómo logró reducir el error de Q% a R% sobre N casos. También coautoreamos la patente USPTO #...'."
+                  rows={5}
+                  data-testid="recommendation-relationship-context"
+                  style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                />
+              </CardContent>
+            </Card>
 
             {/* Generate Button */}
             <div style={{ textAlign: 'center', marginTop: '1rem' }}>
@@ -3967,24 +4001,14 @@ const CreateRecommendationLetter = () => {
                 PDF (Español)
               </Button>
               
+              <WordDownloadButton
+                url={`${API}/recommendation-letters/${letterId}/download-docx`}
+                testId="download-word-en-recommendation-wizard"
+              />
+
               <Button variant="outline" onClick={() => setEditMode(!editMode)}>
                 <Edit className="mr-2" size={16} />
                 Editar Carta
-              </Button>
-              <Button variant="outline" onClick={() => {
-                setStep('upload');
-                setLetterContent('');
-                setLetterContentEn('');
-                setLetterContentEs('');
-                setLetterId(null);
-                setCurrentLanguage('en');
-                setCandidateCV(null);
-                setProjectInfo(null);
-                setRecommenderCV(null);
-                setExtractedData(null);
-              }}>
-                <Plus className="mr-2" size={16} />
-                Nueva Carta
               </Button>
             </div>
 
@@ -4243,11 +4267,13 @@ const ViewRecommendationLetter = () => {
       <header className="dashboard-header">
         <div className="header-content">
           <Button variant="ghost" onClick={() => {
-            // Si la carta tiene client_id, volver a la lista de cartas de recomendación del cliente
+            // Sin client_id, navigate(-1) suele caer en el dashboard porque
+            // el wizard hace replace al redirigir aquí — forzamos ir al
+            // wizard de creación (ver justificación en ViewExpertLetter.handleGoBack).
             if (letter.client_id) {
               navigate(`/client-documents/${letter.client_id}/recommendation`);
             } else {
-              navigate(-1);
+              navigate('/create-recommendation-letter');
             }
           }} style={{ marginRight: '1rem' }}>
             <ArrowLeft className="mr-2" size={20} />
@@ -6110,7 +6136,7 @@ const CreateSelfPetitionLetter = () => {
                     PDF (English)
                   </Button>
                   
-                  <Button 
+                  <Button
                     onClick={() => handleDownloadSpanish()}
                     variant="outline"
                     style={{ borderColor: '#10b981', color: '#10b981' }}
@@ -6118,6 +6144,11 @@ const CreateSelfPetitionLetter = () => {
                     <Download className="mr-2" size={16} />
                     PDF (Español)
                   </Button>
+
+                  <WordDownloadButton
+                    url={`${API}/self-petition-letters/${letterId}/download-docx`}
+                    testId="download-word-en-selfpetition-wizard"
+                  />
 
                   <Button variant="outline" onClick={() => {
                     // Navigate back to the correct client's selfpetition list
@@ -6129,18 +6160,6 @@ const CreateSelfPetitionLetter = () => {
                   }}>
                     <FileText className="mr-2" size={16} />
                     Volver a Cartas
-                  </Button>
-
-                  <Button variant="outline" onClick={() => {
-                    setStep('upload');
-                    setLetterContent('');
-                    setLetterContentEn('');
-                    setLetterContentEs('');
-                    setLetterId(null);
-                    setDocuments([]);
-                  }}>
-                    <Plus className="mr-2" size={16} />
-                    Nueva Carta
                   </Button>
                 </div>
 
@@ -6173,6 +6192,11 @@ const CreateIntentLetter = () => {
   const [projectInfo, setProjectInfo] = useState(null);
   const [supportDoc, setSupportDoc] = useState(null);
   const [signerCV, setSignerCV] = useState(null);
+  // Contexto libre de la relación signer↔petitioner (cómo se conocen, qué
+  // se compromete el firmante, etc.). Si está presente, el LLM lo usa como
+  // fuente autoritativa para el `signer_relationship` y el párrafo de
+  // "Specific Commitment".
+  const [relationshipContext, setRelationshipContext] = useState('');
 
   const [generating, setGenerating] = useState(false);
   const [letterContentEn, setLetterContentEn] = useState('');
@@ -6252,6 +6276,13 @@ const CreateIntentLetter = () => {
       formData.append('signer_cv', signerCV);
       if (supportDoc) formData.append('support_document', supportDoc);
       if (clientId) formData.append('client_id', clientId);
+      // Solo enviar relationship_context si el operador escribió algo.
+      // Mandar string vacío engañaría al backend (es falsy en JS pero el
+      // Form() lo recibe como "" → el if del backend filtra igual, pero
+      // evitamos overhead).
+      if (relationshipContext && relationshipContext.trim()) {
+        formData.append('relationship_context', relationshipContext.trim());
+      }
       const token = localStorage.getItem('token');
       const response = await axios.post(`${API}/intent-letters/generate`, formData, {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'multipart/form-data' }
@@ -6402,6 +6433,28 @@ const CreateIntentLetter = () => {
               <FileCard title="Documento de Apoyo (opcional)" description="Term sheet, carta de compromiso, patente, publicación u otro documento relevante" fileType="support_doc" currentFile={supportDoc} color="#059669" />
             </div>
 
+            {/* Contexto de la relación firmante↔peticionario (opcional, alta señal) */}
+            <Card style={{ marginTop: '1.5rem', border: '1px solid #e5e7eb' }}>
+              <CardHeader style={{ paddingBottom: '0.5rem' }}>
+                <CardTitle style={{ fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  🔗 Relación entre firmante y peticionario <span style={{ fontSize: '0.85rem', fontWeight: 400, color: '#6b7280' }}>(opcional, muy recomendado)</span>
+                </CardTitle>
+                <CardDescription style={{ fontSize: '0.85rem' }}>
+                  Describe cómo conoció el firmante al peticionario, qué tipo de compromiso ofrece (monto de inversión, oferta de trabajo, contrato, colaboración) y qué evaluación directa hizo del proyecto. Este contexto se vuelve la fuente autoritativa para el párrafo de relación y el párrafo de "Specific Commitment".
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Textarea
+                  value={relationshipContext}
+                  onChange={(e) => setRelationshipContext(e.target.value)}
+                  placeholder="Ej.: 'Conocí al Dr. X en 2023 durante el pitch de la ronda seed en Y Combinator. Tras revisar su prototipo en el laboratorio Z, mi fondo (ABC Ventures) se compromete a invertir USD 500K en una nota convertible para escalar el proyecto a 5 estados antes de Q4 2026...'."
+                  rows={5}
+                  data-testid="intent-relationship-context"
+                  style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                />
+              </CardContent>
+            </Card>
+
             <div style={{ display: 'flex', justifyContent: 'center', paddingTop: '1rem' }}>
               <Button onClick={handleGenerate} disabled={!petitionerCV || !projectInfo || !signerCV}
                 data-testid="generate-intent-letter-btn"
@@ -6473,6 +6526,12 @@ const CreateIntentLetter = () => {
                 style={{ background: '#0369A1', color: 'white', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Download size={16} /> Descargar PDF ({currentLanguage.toUpperCase()})
               </Button>
+              {letterId && (
+                <WordDownloadButton
+                  url={`${API}/intent-letters/${letterId}/download-docx`}
+                  testId="download-word-en-intent-wizard"
+                />
+              )}
               <Button variant="outline" onClick={() => setEditMode(!editMode)}
                 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Edit size={16} /> {editMode ? 'Cancelar edición' : 'Editar con IA'}
@@ -6599,7 +6658,7 @@ const ViewIntentLetter = () => {
     <div className="dashboard-container">
       <header className="dashboard-header">
         <div className="header-content">
-          <Button variant="ghost" onClick={() => letter.client_id ? navigate(`/client-documents/${letter.client_id}/intentletter`) : navigate(-1)} style={{ marginRight: '1rem' }}>
+          <Button variant="ghost" onClick={() => letter.client_id ? navigate(`/client-documents/${letter.client_id}/intentletter`) : navigate('/create-intent-letter')} style={{ marginRight: '1rem' }}>
             <ArrowLeft className="mr-2" size={20} /> Volver
           </Button>
           <div>
@@ -7028,7 +7087,7 @@ const CreateExpertLetter = () => {
     <div className="dashboard-container">
       <header className="dashboard-header">
         <div className="header-content">
-          <Button variant="ghost" onClick={() => navigate('/dashboard')} style={{ marginRight: '1rem' }}>
+          <Button variant="ghost" onClick={() => navigate(-1)} style={{ marginRight: '1rem' }}>
             <ArrowLeft className="mr-2" size={20} />
             Volver
           </Button>
@@ -7277,7 +7336,7 @@ const CreateExpertLetter = () => {
                 PDF (English)
               </Button>
               
-              <Button 
+              <Button
                 onClick={() => handleDownloadSpanish()}
                 variant="outline"
                 style={{ borderColor: '#10b981', color: '#10b981' }}
@@ -7286,43 +7345,16 @@ const CreateExpertLetter = () => {
                 PDF (Español)
               </Button>
 
+              {letterId && (
+                <WordDownloadButton
+                  url={`${API}/expert-letters/${letterId}/download-docx`}
+                  testId="download-word-en-expert-wizard"
+                />
+              )}
+
               <Button variant="outline" onClick={() => setEditMode(!editMode)}>
                 <Edit className="mr-2" size={16} />
                 Editar Carta
-              </Button>
-              <Button variant="outline" onClick={async () => {
-                try {
-                  const token = localStorage.getItem('token');
-                  const response = await axios.get(`${API}/clients`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                  });
-                  const clients = response.data.clients || [];
-                  if (clients.length > 0) {
-                    navigate(`/client-documents/${clients[0].id}/expert`);
-                  } else {
-                    navigate('/dashboard');
-                  }
-                } catch (error) {
-                  navigate('/dashboard');
-                }
-              }}>
-                <FileText className="mr-2" size={16} />
-                Volver a Cartas
-              </Button>
-              <Button variant="outline" onClick={() => {
-                setStep('upload');
-                setLetterContent('');
-                setLetterContentEn('');
-                setLetterContentEs('');
-                setLetterId(null);
-                setCurrentLanguage('en');
-                setClientCV(null);
-                setProjectInfo(null);
-                setExpertCV(null);
-                setExtractedData(null);
-              }}>
-                <Plus className="mr-2" size={16} />
-                Nueva Carta
               </Button>
             </div>
 
@@ -7500,11 +7532,14 @@ const ViewSelfPetitionLetter = () => {
   };
 
   const handleGoBack = () => {
-    // Navigate back to the correct client's document list
+    // Sin client_id no podemos ir a la lista del cliente; el wizard de
+    // creación es el destino "atrás" más útil (ver ViewExpertLetter.handleGoBack
+    // para la justificación completa — el wizard hace replace y el navigate(-1)
+    // termina en el dashboard, que NO es lo que el operador quiere).
     if (letter && letter.client_id) {
       navigate(`/client-documents/${letter.client_id}/selfpetition`);
     } else {
-      navigate('/dashboard');
+      navigate('/create-self-petition-letter');
     }
   };
 
@@ -7864,11 +7899,18 @@ const ViewExpertLetter = () => {
   }
 
   const handleGoBack = () => {
-    // Si la carta tiene client_id, volver a la lista de cartas de experto del cliente
+    // 1) Si la carta está asociada a un cliente, vamos a su lista de cartas
+    //    de experto (ese es el contexto "natural" desde donde se creó).
+    // 2) Si NO tiene client_id (carta creada free-form desde dashboard),
+    //    `navigate(-1)` falla porque el wizard suele hacer `replace` al
+    //    redirigir a esta view post-generación — el history queda solo
+    //    `dashboard → view` y el back vuelve al dashboard general. Forzamos
+    //    ir al wizard de creación para que el operador pueda crear otra
+    //    carta o navegar desde ahí.
     if (letter && letter.client_id) {
       navigate(`/client-documents/${letter.client_id}/expert`);
     } else {
-      navigate(-1);
+      navigate('/create-expert-letter');
     }
   };
   
