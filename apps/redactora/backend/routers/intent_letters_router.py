@@ -244,8 +244,27 @@ enclosure — reference it at the end of the letter as
             f"Refer to the petitioner as \"{petitioner_name}\" or \"Mr./Ms./Dr. [Last name]\". "
             f"Do NOT use \"I\" to mean the petitioner. Do NOT write as if the petitioner is speaking."
         )
+        # Pick a writing-style profile for the signer (60/40 weighted), plus a
+        # randomized sign-off compatible with the profile mood, a "style salt"
+        # to break LLM caching, and a randomized temperature. These four
+        # together make two letters by the same signer look distinctly
+        # different — no more "all letters read the same".
+        from letter_format_profiles import (
+            pick_profile_for_signer,
+            pick_sign_off,
+            make_style_salt,
+            pick_temperature,
+        )
+        format_profile = pick_profile_for_signer(
+            f"{signer_title} {signer_credentials}",
+            random_ratio=0.4,
+        )
+        chosen_sign_off = pick_sign_off(format_profile)
+        style_salt = make_style_salt()
+        gen_temperature = pick_temperature()
+
         signature_block = (
-            f'"Sincerely,\\n{signer_name}\\n{signer_title}\\n'
+            f'"{chosen_sign_off}\\n{signer_name}\\n{signer_title}\\n'
             f'[email/phone if present in signer CV]\\n'
             f'Enclosed: curriculum vitae of {signer_name}"'
         )
@@ -254,6 +273,10 @@ enclosure — reference it at the end of the letter as
         generation_prompt = f"""Generate a complete, professional EB-2 NIW Letter of Intent (third-party)
 following the Matter of Dhanasar framework. The letter is SIGNED BY A THIRD PARTY
 (employer/investor/client/collaborator) who SUPPORTS the petitioner.
+
+{style_salt}
+
+{format_profile['prompt_instructions']}
 
 **TODAY'S DATE:** {today_str}
 **PETITIONER:** {petitioner_name}
@@ -335,11 +358,15 @@ Paragraph 9 (Conclusion + Exhibit List): Strong endorsement: "Based on {signer_n
             system_prompt=INTENT_LETTER_SYSTEM_PROMPT + ANTI_PLACEHOLDER_RULE,
             user_prompt=generation_prompt,
             primary_gemini_fn=_call_gemini_flash_lite,
-            temperature=0.35,
+            temperature=gen_temperature,
             max_tokens=10000,
             min_chars=500,
             label=f"intent-letter/{letter_id[:8]}",
             timeout_secs=180.0,
+        )
+        logger.info(
+            f"🎨 intent letter generated | profile={format_profile['id']} "
+            f"sign_off={chosen_sign_off!r} temp={gen_temperature}"
         )
 
         # ── Step 4: Translate to Spanish ───────────────────────────────────────
@@ -413,6 +440,9 @@ Provide ONLY the Spanish translation, no explanations."""
             "content_en": letter_content_en,
             "content_es": letter_content_es,
             "extracted_data": extracted,
+            # Persist the chosen visual profile so the PDF download uses the
+            # same fonts/margins/section style as the text was written for.
+            "format_profile_id": format_profile["id"],
         })
         logger.info(f"✅ Intent letter {letter_id} completed")
 
@@ -700,33 +730,43 @@ async def download_intent_letter(
     project = letter_doc.get("project_title", "EB-2 NIW Petition")
     lang_label = "Español" if language == "es" else "English"
 
+    # Resolve the visual profile this letter was authored under (saved at
+    # generation time as format_profile_id) so the PDF fonts/margins match
+    # the writing voice. Falls back to classic_legal for legacy letters that
+    # were created before this field was added.
+    from letter_format_profiles import get_profile
+    from pdf_letter_utils import prepare_pdf_settings, inject_signature_spacer
+    _profile = get_profile(letter_doc.get("format_profile_id", "classic_legal"))
+    _p = prepare_pdf_settings(_profile)
+
     # ── Build PDF ──────────────────────────────────────────────────────────────
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
         pagesize=letter,
-        rightMargin=1 * inch,
-        leftMargin=1.25 * inch,
-        topMargin=1 * inch,
-        bottomMargin=1 * inch
+        rightMargin=_p["right_margin"],
+        leftMargin=_p["left_margin"],
+        topMargin=_p["top_margin"],
+        bottomMargin=_p["bottom_margin"],
     )
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("IntentTitle", parent=styles["Heading1"],
                                   fontSize=14, spaceAfter=8, textColor=colors.HexColor("#1a1a2e"),
-                                  fontName="Helvetica-Bold")
+                                  fontName=_p["font_bold"])
     heading_style = ParagraphStyle("IntentHeading", parent=styles["Heading2"],
-                                    fontSize=12, spaceAfter=6, spaceBefore=12,
-                                    textColor=colors.HexColor("#2c3e50"), fontName="Helvetica-Bold")
+                                    fontSize=_p["font_size_section"] + 1, spaceAfter=6, spaceBefore=12,
+                                    textColor=colors.HexColor("#2c3e50"), fontName=_p["font_bold"])
     subheading_style = ParagraphStyle("IntentSub", parent=styles["Heading3"],
-                                       fontSize=11, spaceAfter=4, spaceBefore=8,
-                                       textColor=colors.HexColor("#34495e"), fontName="Helvetica-Bold")
+                                       fontSize=_p["font_size_section"], spaceAfter=4, spaceBefore=8,
+                                       textColor=colors.HexColor("#34495e"), fontName=_p["font_bold"])
     body_style = ParagraphStyle("IntentBody", parent=styles["Normal"],
-                                 fontSize=10.5, leading=16, spaceAfter=6,
-                                 fontName="Helvetica", textColor=colors.HexColor("#2c2c2c"))
+                                 fontSize=_p["font_size_body"], leading=_p["leading"], spaceAfter=6,
+                                 fontName=_p["font_body"], textColor=colors.HexColor("#2c2c2c"))
     meta_style = ParagraphStyle("IntentMeta", parent=styles["Normal"],
-                                  fontSize=9, leading=13, textColor=colors.HexColor("#555555"),
-                                  fontName="Helvetica")
+                                  fontSize=_p["font_size_body"] - 1.5, leading=13,
+                                  textColor=colors.HexColor("#555555"),
+                                  fontName=_p["font_body"])
 
     story = []
 
@@ -821,6 +861,11 @@ async def download_intent_letter(
                 fmt = re.sub(r'\*(.*?)\*', r'<i>\1</i>', fmt)
                 p = _safe_para(fmt, body_style, stripped)
                 if p: story.append(p)
+
+    # Reserve ~1 inch of vertical whitespace after the sign-off line so the
+    # signer can sign by hand. Without this, the printed name sits directly
+    # under "Sincerely," with no room for an actual signature.
+    inject_signature_spacer(story, height=70)
 
     doc.build(story)
     buffer.seek(0)

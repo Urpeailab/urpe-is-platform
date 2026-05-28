@@ -30,52 +30,19 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
 
 def _pick_profile_for_signer(title: str, credentials: str, organization: str) -> dict:
-    """Choose a writing-style profile based on the signer's professional background."""
-    from letter_format_profiles import get_profile, pick_random_profile
-    text = f"{title} {credentials} {organization}".lower()
+    """
+    Choose a writing-style profile for the letter.
 
-    # Government / policy / agency
-    if any(k in text for k in ['secretary', 'director', 'agency', 'department', 'ministry',
-                                  'government', 'federal', 'state', 'senator', 'policy', 'official',
-                                  'bureau', 'administration', 'commissioner', 'undersecretary']):
-        return get_profile('official_government')
-
-    # Academic / research / professor
-    if any(k in text for k in ['professor', 'ph.d', 'phd', 'dr.', 'researcher', 'faculty',
-                                  'university', 'college', 'institute', 'academic', 'dean',
-                                  'postdoc', 'laboratory', 'lab', 'scholar', 'fellow']):
-        return get_profile('academic_institutional')
-
-    # Medical / health / clinical
-    if any(k in text for k in ['physician', 'doctor', 'medical', 'clinical', 'health',
-                                  'hospital', 'surgeon', 'psychiatrist', 'therapist',
-                                  'public health', 'epidemiology', 'nursing']):
-        return get_profile('humanitarian_advocate')
-
-    # Legal / attorney / counsel
-    if any(k in text for k in ['attorney', 'lawyer', 'counsel', 'juris', 'esq', 'law firm',
-                                  'legal', 'barrister', 'solicitor', 'esquire']):
-        return get_profile('classic_legal')
-
-    # NGO / nonprofit / social
-    if any(k in text for k in ['ngo', 'nonprofit', 'non-profit', 'foundation', 'charity',
-                                  'humanitarian', 'social', 'community', 'welfare', 'advocacy']):
-        return get_profile('humanitarian_advocate')
-
-    # Engineering / technology / STEM
-    if any(k in text for k in ['engineer', 'cto', 'technology', 'software', 'data science',
-                                  'artificial intelligence', 'machine learning', 'cybersecurity',
-                                  'it ', 'systems', 'architect', 'developer', 'stem']):
-        return get_profile('technical_specialist')
-
-    # C-suite / executive / industry leader
-    if any(k in text for k in ['ceo', 'coo', 'cfo', 'president', 'vice president', 'vp',
-                                  'managing director', 'executive director', 'partner',
-                                  'principal', 'founder', 'owner', 'chairman']):
-        return get_profile('executive_brief')
-
-    # Default: narrative (most versatile, least formulaic)
-    return get_profile('narrative_storyteller')
+    Uses the 60/40 weighted picker from letter_format_profiles: 60% of the
+    time we pick the profile suggested by the signer's keywords (so
+    academic-looking signers tend to get an academic voice), 40% of the
+    time we pick a completely random profile so two letters signed by the
+    same person don't look identical. This is the main lever that breaks
+    the "all letters look the same" complaint.
+    """
+    from letter_format_profiles import pick_profile_for_signer
+    signer_blob = f"{title} {credentials} {organization}"
+    return pick_profile_for_signer(signer_blob, random_ratio=0.4)
 
 
 def _clean_placeholders(text: str, today_str: str) -> str:
@@ -207,10 +174,17 @@ def _generate_expert_letter_pdf(
     profile: dict = None,
 ) -> bytes:
     """Generate PDF from expert letter markdown content using the given format profile."""
-    from letter_format_profiles import get_profile
+    from letter_format_profiles import get_profile, resolve_fonts
     if profile is None:
         profile = get_profile("classic_legal")
-    p = profile["pdf"]
+    p = dict(profile["pdf"])   # shallow copy so we can splice in resolved fonts
+    # Resolve font_intent (new system) into concrete font names usable by
+    # ReportLab. The renderer below still reads `font_body` / `font_bold` /
+    # `font_italic`, so we expose them here to keep that interface intact.
+    _fonts = resolve_fonts(profile)
+    p["font_body"] = _fonts["regular"]
+    p["font_bold"] = _fonts["bold"]
+    p["font_italic"] = _fonts["italic"]
 
     buffer = io.BytesIO()
 
@@ -379,14 +353,39 @@ def _generate_expert_letter_pdf(
                     'Bullet', parent=body_style, leftIndent=20, firstLineIndent=-12, spaceAfter=4
                 )))
                 continue
-            if re.match(r'^(RE:|Re:|Ref:|SUBJECT:|Sincerely|Respectfully|Cordially|Dear|Estimad|Atentamente)', line):
+            if re.match(r'^(RE:|Re:|Ref:|SUBJECT:|Sincerely|Respectfully|Cordially|Dear|Estimad|Atentamente|Warmly|Faithfully|Yours|With sincere|With warm|With great|Best regards|Kind regards|Regards|Most respectfully)', line):
                 flush_para()
                 content.append(Paragraph(_pdf_safe(line), body_style))
-                content.append(Spacer(1, 0.05 * _inch))
+                # Leave ~1 inch of vertical whitespace after the sign-off so
+                # the signer can sign by hand. Without this the printed name
+                # sits right under "Sincerely," and there is no room for a
+                # physical signature.
+                content.append(Spacer(1, 70))
                 continue
             current_paragraph.append(_pdf_safe(line))
 
         flush_para()
+
+    # Post-pass safety net: if the HTML path produced the sign-off as a
+    # <p> tag, we never hit the plain-text branch above. Walk `content` and
+    # ensure there's ~70pt of whitespace after the first sign-off paragraph.
+    _SIGN_OFF_RX = re.compile(
+        r'^\s*(Sincerely|Respectfully|Cordially|Warmly|Faithfully|Yours|'
+        r'With sincere|With warm|With great|Best regards|Kind regards|'
+        r'Regards|Most respectfully)[,\.]?\s*$',
+        re.IGNORECASE,
+    )
+    for idx in range(len(content) - 1):
+        flow = content[idx]
+        if isinstance(flow, Paragraph):
+            text = re.sub(r'<[^>]+>', '', flow.text or '').strip()
+            if _SIGN_OFF_RX.match(text):
+                # Already has a tall spacer? Skip.
+                nxt = content[idx + 1] if idx + 1 < len(content) else None
+                if isinstance(nxt, Spacer) and getattr(nxt, 'height', 0) >= 60:
+                    break
+                content.insert(idx + 1, Spacer(1, 70))
+                break
 
     doc.build(content)
     buffer.seek(0)
@@ -529,15 +528,31 @@ IMPORTANT: Extract real, specific information from all three documents. Be thoro
         logger.info(f"✅ Document analysis complete for {letter_id}")
 
         # ── Select profile based on signer's credentials ──────────────────────
+        # 60/40 weighted picker: usually the suggested voice for the signer's
+        # credentials, but 40% of the time a random voice so two letters from
+        # the same signer don't read identically.
         format_profile = _pick_profile_for_signer(
             extracted_data.get('expert_title', ''),
             extracted_data.get('expert_credentials', ''),
             extracted_data.get('expert_organization', '')
         )
 
+        # Pick a sign-off compatible with this voice's mood and a "style salt"
+        # to break LLM caching. These vary on every call.
+        from letter_format_profiles import (
+            pick_sign_off as _pick_sign_off,
+            make_style_salt as _make_style_salt,
+            pick_temperature as _pick_temperature,
+        )
+        chosen_sign_off = _pick_sign_off(format_profile)
+        style_salt = _make_style_salt()
+        gen_temperature = _pick_temperature()
+
         await _update_progress(40, f"Redactando carta en inglés para {extracted_data.get('client_name', 'el cliente')}...")
 
         generation_prompt = f"""Generate a professional expert opinion letter following the Dhanasar 3-Prong NIW structure.
+
+{style_salt}
 
 **CURRENT DATE: {today_str}** — Use this exact date. Never invent a different date.
 
@@ -604,7 +619,7 @@ Paragraph 13 (Comparative Exceptionality): In the expert's years evaluating prof
 Paragraph 14 (Conclusion + Strongest Recommendation): Summarize satisfaction of all 3 Dhanasar prongs in flowing prose (not a checklist). Provide strongest expert recommendation for the NIW petition. State availability for follow-up.
 
 After paragraph 14, close with:
-"Respectfully submitted,"
+"{chosen_sign_off}"
 [Expert's full name, title, organization, email, phone]
 
 ---
@@ -623,10 +638,14 @@ After paragraph 14, close with:
             system_prompt=EXPERT_LETTER_SYSTEM_PROMPT + ANTI_PLACEHOLDER_RULE,
             user_prompt=generation_prompt,
             primary_gemini_fn=_call_gemini_flash_lite,
-            temperature=0.35,
+            temperature=gen_temperature,
             max_tokens=8000,
             min_chars=500,
             label=f"expert-letter/{letter_id[:8]}",
+        )
+        logger.info(
+            f"🎨 expert letter generated | profile={format_profile['id']} "
+            f"sign_off={chosen_sign_off!r} temp={gen_temperature}"
         )
 
         await _update_progress(75, "Traduciendo carta al español...")

@@ -757,15 +757,6 @@ async def call_cheap_evaluator(system_message: str, user_message: str, temperatu
     """
     import httpx as _httpx
     openrouter_key = os.environ.get('OPENROUTER_API_KEY')
-    if not openrouter_key:
-        raise Exception("OPENROUTER_API_KEY not set — cannot call cheap evaluator")
-
-    OR_HEADERS = {
-        "Authorization": f"Bearer {openrouter_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://redaccion.urpeintegralservices.co",
-        "X-Title": "Monica Evaluator (cheap)",
-    }
 
     if json_mode:
         system_message = system_message + "\n\nCRITICAL: Respond with ONLY valid JSON. No markdown fences, no preamble, no explanation outside the JSON object."
@@ -779,58 +770,85 @@ async def call_cheap_evaluator(system_message: str, user_message: str, temperatu
         "lo siento, no puedo",
     )
 
-    # Priority chain: Gemini Flash (cheapest) → Claude Haiku → GPT-4o-mini
-    model_chain = [
-        "google/gemini-2.5-flash",
-        "anthropic/claude-haiku-4.5",
-        "openai/gpt-4o-mini",
-    ]
-
     last_error = None
-    for model_id in model_chain:
-        try:
-            logging.warning(f"💰 Cheap evaluator → {model_id}...")
-            payload = {
-                "model": model_id,
-                "messages": [
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": user_message}
-                ],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-            # Gemini and OpenAI support response_format for JSON mode; Claude doesn't strictly
-            # need it because our prompt already enforces JSON-only output.
-            if json_mode and model_id.startswith(("openai/", "google/")):
-                payload["response_format"] = {"type": "json_object"}
 
-            async with _httpx.AsyncClient(timeout=120.0) as client:
-                resp = await client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=OR_HEADERS,
-                    json=payload
-                )
-            if resp.status_code == 200:
-                data = resp.json()
-                content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
-                if content and len(content.strip()) > 0:
-                    first_chars = content.strip().lower()[:200]
-                    if any(p in first_chars for p in _REFUSAL_PATTERNS) and len(content.strip()) < 500:
-                        logging.warning(f"⚠️ {model_id} refused: '{content.strip()[:100]}...' — trying next")
-                        continue
-                    logging.warning(f"✅ {model_id} evaluator OK ({len(content)} chars)")
-                    return content
-                logging.warning(f"⚠️ {model_id} returned empty, trying next")
-            else:
-                last_error = Exception(f"{model_id} HTTP {resp.status_code}: {resp.text[:200]}")
-                logging.warning(f"⚠️ {model_id} HTTP {resp.status_code}")
-        except Exception as err:
-            last_error = err
-            logging.warning(f"⚠️ {model_id} error: {str(err)[:200]}")
-            continue
+    # ── Primary: OpenRouter cheap chain (Gemini Flash → Claude Haiku → GPT-4o-mini)
+    if openrouter_key:
+        OR_HEADERS = {
+            "Authorization": f"Bearer {openrouter_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://redaccion.urpeintegralservices.co",
+            "X-Title": "Monica Evaluator (cheap)",
+        }
+        model_chain = [
+            "google/gemini-2.5-flash",
+            "anthropic/claude-haiku-4.5",
+            "openai/gpt-4o-mini",
+        ]
+        for model_id in model_chain:
+            try:
+                logging.warning(f"💰 Cheap evaluator → {model_id}...")
+                payload = {
+                    "model": model_id,
+                    "messages": [
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": user_message}
+                    ],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+                # Gemini and OpenAI support response_format for JSON mode; Claude doesn't strictly
+                # need it because our prompt already enforces JSON-only output.
+                if json_mode and model_id.startswith(("openai/", "google/")):
+                    payload["response_format"] = {"type": "json_object"}
 
-    logging.error(f"❌ All cheap evaluator models failed. Last: {str(last_error)[:300] if last_error else 'unknown'}")
-    raise last_error if last_error else Exception("All cheap evaluator models failed")
+                async with _httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers=OR_HEADERS,
+                        json=payload
+                    )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+                    if content and len(content.strip()) > 0:
+                        first_chars = content.strip().lower()[:200]
+                        if any(p in first_chars for p in _REFUSAL_PATTERNS) and len(content.strip()) < 500:
+                            logging.warning(f"⚠️ {model_id} refused: '{content.strip()[:100]}...' — trying next")
+                            continue
+                        logging.warning(f"✅ {model_id} evaluator OK ({len(content)} chars)")
+                        return content
+                    logging.warning(f"⚠️ {model_id} returned empty, trying next")
+                else:
+                    last_error = Exception(f"{model_id} HTTP {resp.status_code}: {resp.text[:200]}")
+                    logging.warning(f"⚠️ {model_id} HTTP {resp.status_code}")
+            except Exception as err:
+                last_error = err
+                logging.warning(f"⚠️ {model_id} error: {str(err)[:200]}")
+                continue
+        logging.warning(f"⚠️ OpenRouter cheap chain exhausted. Last: {str(last_error)[:200] if last_error else 'n/a'}")
+    else:
+        logging.warning("⚠️ OPENROUTER_API_KEY not set — using direct OpenAI fallback for evaluator")
+
+    # ── Fallback: direct OpenAI/proxy via call_openai_mini (gpt-4o). This uses
+    # the same auth path as the rest of the app, so the evaluator still works
+    # when OpenRouter is unavailable as long as ANY provider key is configured.
+    try:
+        logging.warning("💰 Cheap evaluator → fallback call_openai_mini (gpt-4o)...")
+        content = await call_openai_mini(
+            system_message, user_message,
+            temperature=temperature, max_tokens=max_tokens, timeout=90,
+        )
+        if content and content.strip():
+            logging.warning(f"✅ Fallback evaluator OK ({len(content)} chars)")
+            return content
+        last_error = last_error or Exception("call_openai_mini returned empty")
+    except Exception as err:
+        last_error = err
+        logging.warning(f"⚠️ call_openai_mini fallback failed: {str(err)[:200]}")
+
+    logging.error(f"❌ All cheap evaluator providers failed. Last: {str(last_error)[:300] if last_error else 'unknown'}")
+    raise last_error if last_error else Exception("All cheap evaluator providers failed")
 
 
     logging.error(f"❌ All Claude Opus + fallback models failed. Last error: {str(last_error)[:300] if last_error else 'unknown'}")
@@ -891,7 +909,7 @@ async def call_openai_gpt5(system_message: str, user_message: str, temperature: 
 
     # 2. Fallback: Claude Opus 4.5 via OpenRouter
     if openrouter_key:
-        for model_id in ["anthropic/claude-opus-4-6", "google/gemini-3-pro-preview"]:
+        for model_id in ["anthropic/claude-opus-4.6", "google/gemini-3-pro-preview"]:
             try:
                 logging.info(f"🔄 Fallback to {model_id} via OpenRouter...")
                 async with _httpx.AsyncClient(timeout=300.0) as client:
@@ -961,7 +979,7 @@ async def call_claude_opus_niw(system_message: str, user_message: str, temperatu
                     "X-Title": "SmartDocs Creator - NIW White Paper Generator"
                 },
                 json={
-                    "model": "anthropic/claude-opus-4-6",  # Using Opus 4.6 for best writing quality
+                    "model": "anthropic/claude-opus-4.6",  # Using Opus 4.6 for best writing quality
                     "messages": [
                         {"role": "system", "content": system_message},
                         {"role": "user", "content": user_message}
@@ -1034,7 +1052,7 @@ async def call_claude_sonnet_niw(system_message: str, user_message: str, tempera
                         "X-Title": "SmartDocs Creator - NIW White Paper Generator"
                     },
                     json={
-                        "model": "anthropic/claude-sonnet-4-6",  # Using Sonnet 4.6 for faster generation
+                        "model": "anthropic/claude-sonnet-4.6",  # Using Sonnet 4.6 for faster generation
                         "messages": [
                             {"role": "system", "content": system_message},
                             {"role": "user", "content": user_message}
@@ -1696,20 +1714,23 @@ CONTENIDO DE LA PATENTE (primeros 8000 caracteres):
 {document_content[:8000]}
 
 EVALUACIÓN:
-1. ¿La patente refleja el campo de experiencia del inventor? (Sí/No/Parcialmente)
+1. ¿La patente refleja el campo de experiencia del inventor (según CV/proyecto)? (Sí/No/Parcialmente)
 2. ¿El nombre del inventor aparece correctamente? (Sí/No)
-3. ¿La invención está relacionada con el proyecto/experiencia del inventor? (Sí/No/N/A)
-4. ¿Hay información técnica inventada que no corresponde al perfil? (Sí/No)
+3. ¿La invención está relacionada con el proyecto/experiencia del inventor? (Sí/No/Parcialmente)
+4. ¿La complejidad/profundidad técnica de la patente es consistente con la experiencia del inventor? (Sí/No/Parcialmente — usa N/A SOLO si no hay CV ni proyecto)
+5. ¿Hay información técnica inventada que no corresponde al perfil? (Sí/No)
 
 PUNTUACIÓN: 80-100=coherente con el perfil, 60-79=parcialmente coherente, 0-59=información inventada o no relacionada.
+
+IMPORTANTE: Responde cada campo con un valor concreto (Sí/No/Parcialmente). Usa "N/A" únicamente cuando realmente no haya información para evaluar ese punto.
 
 Responde SOLO en JSON válido:
 {{
     "coherence_score": <0-100>,
     "reflects_cv": "<Sí/No/Parcialmente>",
-    "correct_companies": "N/A",
-    "correct_experience_years": "N/A",
-    "project_integrated": "<Sí/No/N/A>",
+    "correct_companies": "<Sí/No/N/A>",
+    "correct_experience_years": "<Sí/No/Parcialmente/N/A>",
+    "project_integrated": "<Sí/No/Parcialmente>",
     "invented_info": "<Sí/No>",
     "summary": "<2-3 líneas>",
     "issues_found": [],
@@ -1758,6 +1779,11 @@ Responde SOLO en formato JSON válido (sin markdown):
             # Return a default evaluation if API fails
             return {
                 "coherence_score": 70,
+                "reflects_cv": "N/A",
+                "correct_companies": "N/A",
+                "correct_experience_years": "N/A",
+                "project_integrated": "N/A",
+                "invented_info": "N/A",
                 "summary": "Evaluación automática no disponible temporalmente",
                 "issues_found": [],
                 "recommendation": "El documento fue generado correctamente. Revise manualmente si es necesario."
@@ -1802,6 +1828,11 @@ Responde SOLO en formato JSON válido (sin markdown):
         # as incoherent just because the evaluator model returned malformed JSON.
         return {
             "coherence_score": 70,
+            "reflects_cv": "N/A",
+            "correct_companies": "N/A",
+            "correct_experience_years": "N/A",
+            "project_integrated": "N/A",
+            "invented_info": "N/A",
             "summary": "Evaluación automática no disponible (respuesta del evaluador malformada)",
             "issues_found": [],
             "recommendation": "Documento generado correctamente. La evaluación de coherencia no pudo ejecutarse automáticamente — revise manualmente si es necesario."
@@ -1812,6 +1843,11 @@ Responde SOLO en formato JSON válido (sin markdown):
         # as incoherent just because the evaluator failed due to transient errors.
         return {
             "coherence_score": 70,
+            "reflects_cv": "N/A",
+            "correct_companies": "N/A",
+            "correct_experience_years": "N/A",
+            "project_integrated": "N/A",
+            "invented_info": "N/A",
             "summary": f"Evaluación no disponible: {str(e)[:100]}",
             "issues_found": [],
             "recommendation": "Documento generado correctamente. Revise manualmente el contenido si es necesario."
@@ -3690,8 +3726,109 @@ def clean_content(content: str) -> str:
     content = re.sub(r'<p>\s*</p>', '', content)
     content = re.sub(r'</p>\s*</p>', '</p>', content)
     content = re.sub(r'<p>\s*<p>', '<p>', content)
-    
+
     return content
+
+
+# ── USPTO section headings (uppercase, normalized) ──────────────────────────
+# Canonical patent section titles that must render as bold headings — never as
+# numbered body paragraphs. Used by `_promote_numbered_patent_headings` to fix
+# the case where the LLM emits a section header inside a numbered <p> such as
+# `<p>&#182;0009 CROSS-REFERENCE TO RELATED APPLICATIONS</p>` instead of an
+# <h2>. Keep in sync with USPTO_PATENT_HEADINGS inside create_pdf().
+_PATENT_SECTION_HEADINGS = frozenset({
+    # English
+    "CROSS-REFERENCE TO RELATED APPLICATIONS",
+    "CROSS REFERENCE TO RELATED APPLICATIONS",
+    "STATEMENT REGARDING FEDERALLY SPONSORED RESEARCH OR DEVELOPMENT",
+    "STATEMENT REGARDING FEDERALLY SPONSORED R&D",
+    "FIELD OF THE INVENTION",
+    "TECHNICAL FIELD",
+    "BACKGROUND OF THE INVENTION",
+    "BACKGROUND",
+    "SUMMARY OF THE INVENTION",
+    "BRIEF SUMMARY OF THE INVENTION",
+    "SUMMARY",
+    "BRIEF DESCRIPTION OF THE DRAWINGS",
+    "BRIEF DESCRIPTION OF DRAWINGS",
+    "DESCRIPTION OF THE DRAWINGS",
+    "DETAILED DESCRIPTION",
+    "DETAILED DESCRIPTION OF THE INVENTION",
+    "DETAILED DESCRIPTION OF EMBODIMENTS",
+    "DETAILED DESCRIPTION OF THE EMBODIMENTS",
+    "DESCRIPTION OF EMBODIMENTS",
+    "DEFINITIONS",
+    "CLAIMS",
+    "WHAT IS CLAIMED IS",
+    "ABSTRACT",
+    "ABSTRACT OF THE DISCLOSURE",
+    # Spanish
+    "REFERENCIA CRUZADA A SOLICITUDES RELACIONADAS",
+    "DECLARACIÓN SOBRE I+D PATROCINADA FEDERALMENTE",
+    "CAMPO DE LA INVENCIÓN",
+    "CAMPO TÉCNICO",
+    "ANTECEDENTES DE LA INVENCIÓN",
+    "ANTECEDENTES",
+    "RESUMEN DE LA INVENCIÓN",
+    "BREVE RESUMEN DE LA INVENCIÓN",
+    "RESUMEN",
+    "BREVE DESCRIPCIÓN DE LOS DIBUJOS",
+    "DESCRIPCIÓN DE LOS DIBUJOS",
+    "DESCRIPCIÓN DETALLADA",
+    "DESCRIPCIÓN DETALLADA DE LA INVENCIÓN",
+    "DESCRIPCIÓN DETALLADA DE LAS REALIZACIONES",
+    "REIVINDICACIONES",
+    "DEFINICIONES",
+    "ABSTRACTO",
+})
+
+
+def _promote_numbered_patent_headings(html: str) -> str:
+    """Convert any <p> whose ENTIRE text is just a canonical USPTO section
+    heading (optionally prefixed by a paragraph-number marker such as
+    `¶0009`, `[0009]`, `(0009)` or a bare `0009 `) into a proper <h2> heading.
+
+    Background: some generated patents emit section headers as numbered body
+    paragraphs (e.g. `<p>&#182;0009 CROSS-REFERENCE TO RELATED APPLICATIONS</p>`)
+    instead of `<h2>`. When rendered, the title shows as a numbered line (the
+    "¶000 on subtitles" bug). This text-based promotion is markup-agnostic
+    (it inspects the paragraph's plain text, so it works whether the title is
+    bold-wrapped or not) and only fires on an EXACT heading match, so body
+    paragraphs are never affected.
+
+    MUST run BEFORE `renumber_paragraphs_sequentially` so a promoted heading
+    does not consume a ¶ number (which would leave a gap in the body numbering).
+    """
+    if not html or '<p' not in html:
+        return html
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+    except Exception:
+        return html
+
+    changed = False
+    for p in soup.find_all('p'):
+        raw = p.get_text(' ', strip=True)
+        if not raw:
+            continue
+        # Strip a single leading paragraph-number marker: ¶0009 / [0009] / (0009) / 0009
+        stripped = re.sub(
+            r'^\s*(?:¶|&#182;|\[|\()?\s*0*\d{1,6}[A-Z]?\s*(?:\]|\))?\s+',
+            '',
+            raw,
+        )
+        norm = re.sub(r'\s+', ' ', stripped).strip().rstrip(':').strip().upper()
+        if norm in _PATENT_SECTION_HEADINGS:
+            h2 = soup.new_tag('h2')
+            strong = soup.new_tag('strong')
+            strong.string = norm
+            h2.append(strong)
+            p.replace_with(h2)
+            changed = True
+
+    return str(soup) if changed else html
+
 
 # Security
 security = HTTPBearer()
@@ -4390,6 +4527,10 @@ class PatentInput(BaseModel):
     mode: str = "SPEC"  # SPEC or DRAWINGS
     language: str = "en"
     client_id: Optional[str] = None
+    # Optional address fields extracted from the CV during /upload-cv. When
+    # present they take precedence over the client record. Frontend should
+    # forward the `extracted_address` payload from /upload-cv directly here.
+    cv_extracted_address: Optional[dict] = None
 
 class PatentInProgress(BaseModel):
     model_config = ConfigDict(extra="allow")  # Allow extra fields like content_es, content_en
@@ -6098,8 +6239,12 @@ def create_pdf(title: str, content: str, doc_type: str, diagram_elements: list =
         firstLineIndent=0
     ))
     
-    # Add title ONLY for non-patent documents (patents already have title in HEADER section)
-    if doc_type != "patent_complete":
+    # Add title ONLY for non-patent documents (patents already carry their own
+    # USPTO header in the body). `patent_complete` and `patent_numbered` both
+    # embed the "UNITED STATES PATENT AND TRADEMARK OFFICE / Provisional Patent
+    # Application" header in their content, so rendering `title` on top would
+    # duplicate it (the spurious "USPTO Numbered Patent: …" heading bug).
+    if doc_type not in ("patent_complete", "patent_numbered"):
         # Check if this is a NIW/Business Plan document that needs a professional cover page
         is_niw_document = doc_type == "business_plan" and ("NIW" in title or "EB-2" in title or "National Interest" in title)
         
@@ -12222,14 +12367,14 @@ async def _run_ai_edit_background(job_id: str, niw_id: str, edit_instructions: s
         """
         Llama OpenRouter probando una cadena de modelos en orden:
           1. anthropic/claude-sonnet-4.6   (más reciente, 1M ctx, mejor edición)
-          2. anthropic/claude-opus-4-6     (más potente, fallback)
-          3. anthropic/claude-sonnet-4-5   (rápido, último recurso)
+          2. anthropic/claude-opus-4.6     (más potente, fallback)
+          3. anthropic/claude-sonnet-4.5   (rápido, último recurso)
         Lanza la última excepción si los 3 fallan.
         """
         models_chain = [
             "anthropic/claude-sonnet-4.6",
-            "anthropic/claude-opus-4-6",
-            "anthropic/claude-sonnet-4-5",
+            "anthropic/claude-opus-4.6",
+            "anthropic/claude-sonnet-4.5",
         ]
         messages = [
             {"role": "system", "content": system_message},
@@ -22431,9 +22576,11 @@ async def start_patent_interactive(input_data: PatentInput, current_user: User =
         inventor_cv=inventor_cv,  # ✅ NUEVO
         project_description=project_desc,  # ✅ NUEVO
         mode=input_data.mode,
-        language=input_data.language
+        language=input_data.language,
+        # Persist CV-extracted address (priority over client record at generation time)
+        cv_extracted_address=(input_data.cv_extracted_address or None),
     )
-    
+
     patent_dict = patent.model_dump()
     patent_dict['created_at'] = patent_dict['created_at'].isoformat()
     patent_dict['updated_at'] = patent_dict['updated_at'].isoformat()
@@ -24027,670 +24174,258 @@ Write all content {language_instruction} following USPTO standards. Keep content
         logging.error(f"Error editing patent section: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ─────────────────────────────────────────────────────────────────────
+# 🎨 Python-ReportLab diagram pipeline (Claude-authored scripts)
+# ─────────────────────────────────────────────────────────────────────
+# Diagrams are now authored by Claude as a complete Python script that
+# imports `patent_diagram_helpers` and writes a multi-page PDF. The script
+# is validated via AST (no os/sys/subprocess/eval/open/getattr/dunders),
+# then executed in an isolated subprocess (-E -s -B, 60s timeout). The
+# resulting PDF is rasterized to PNGs via pypdfium2 and embedded into the
+# patent PDF using the existing PNG-extraction path.
+#
+# This replaces the previous HTML+CSS+Playwright pipeline because LLMs
+# write more correct Python than pixel-perfect HTML, and deterministic
+# helpers (draw_box, draw_arrow, draw_cylinder, ...) eliminate the layout
+# errors that plagued the SVG and HTML approaches.
+
+from patent_diagram_runner import (
+    DiagramScriptError,
+    render_python_diagram_script,
+    validate_script,
+)
+
+
+DIAGRAM_GENERATION_PROMPT_PYTHON = r'''# USPTO PATENT DIAGRAMS — PYTHON / REPORTLAB GENERATOR v5.0
+
+Eres un experto en crear diagramas técnicos profesionales para patentes USPTO. Generas un **script Python completo** que produce un PDF multi-página con 5-7 figuras de calidad USPTO (blanco y negro, Helvetica, líneas limpias, numerales de referencia). El script será ejecutado en un sandbox y rasterizado a PNG.
+
+## OUTPUT FORMAT — CRITICAL
+
+Devuelve UN solo bloque de código Python, sin texto antes ni después, sin explicaciones:
+
+```python
+from patent_diagram_helpers import *
+
+def draw_fig1(c):
+    setup_page(c, "FIG. 1", "Caption describing FIG. 1")
+    # ... drawing calls ...
+
+def draw_fig2(c):
+    setup_page(c, "FIG. 2", "Caption describing FIG. 2")
+    # ...
+
+# ... draw_fig3 ... draw_fig6/7 ...
+
+c = new_canvas("patent_diagrams.pdf")
+draw_fig1(c); c.showPage()
+draw_fig2(c); c.showPage()
+draw_fig3(c); c.showPage()
+draw_fig4(c); c.showPage()
+draw_fig5(c); c.showPage()
+draw_fig6(c); c.showPage()
+c.save()
+```
+
+## ALLOWED IMPORTS — ABSOLUTE WHITELIST
+
+- `from patent_diagram_helpers import *` (REQUIRED, first line)
+- `import math` (optional, for sin/cos/sqrt)
+- `import random` (optional, for visual noise — set a fixed seed if used)
+
+**NUNCA** importes nada más. Cualquier `import os`, `import sys`, `import subprocess`, `import socket`, `import requests`, `import urllib`, `from os ...`, etc. causará rechazo automático. Tampoco uses `open()`, `eval()`, `exec()`, `compile()`, `__import__()`, `getattr()`, `setattr()`, `globals()`, `locals()`, `input()`, ni cadenas que contengan `__...__`.
+
+No abras archivos. No leas/escribas nada excepto el PDF (que escribe `new_canvas` + `c.save()`).
+
+## HELPER API — ÚSALOS, NO INVENTES OTROS
+
+Coordenadas en puntos PDF (1pt = 1/72in). Origen abajo-izquierda. US-Letter portrait = 612×792 pt. Área útil aprox. (54, 72) a (558, 738).
+
+### Canvas y página
+
+- `new_canvas(path)` → crea canvas portrait US-Letter.
+- `setup_page(c, fig_label, fig_caption="", page_landscape=False)` → dibuja el título "FIG. N" arriba centrado y la caption abajo centrada. Devuelve (page_w, page_h). Llámalo PRIMERO en cada `draw_figN`.
+
+### Texto
+
+- `wrap_text(text, max_width, font_name=FONT, font_size=9)` → lista de líneas.
+
+### Cajas y formas
+
+- `draw_box(c, x, y, w, h, label="", ref_num=None, font_size=8, bold=False, ref_pos="above")`
+  - `ref_pos`: `"above" | "below" | "left" | "right" | "tl" | "tr" | "bl" | "br"`
+- `draw_dashed_box(c, x, y, w, h, label=None, ref_num=None, font_size=9, label_at="tl")`
+  - `label_at`: `"tl" | "tr" | "bl" | "br" | "tc" | "bc"`
+- `draw_oval(c, cx, cy, w, h, label="", ref_num=None, font_size=10)`
+  - (cx, cy) es el CENTRO del óvalo.
+- `draw_cylinder(c, x, y, w, h, label="", ref_num=None, font_size=8, ref_pos="above")`
+- `draw_hatched_box(c, x, y, w, h, density="medium", angle_deg=45)`
+  - `density`: `"light" | "medium" | "heavy"`. Útil para zonas/heatmaps.
+
+### Flechas y líneas
+
+- `draw_arrow(c, x1, y1, x2, y2, head_size=6, dashed=False)`
+- `draw_arrow_path(c, points, dashed=False, head_size=6)`
+  - `points` es lista de tuplas `[(x,y), (x,y), ...]`, con head en el último punto.
+- `draw_polyline(c, points, dashed=False)` → polilínea sin head.
+
+### ERD (entity-relationship)
+
+- `draw_entity(c, x, y, w, title, fields, ref_num=None)` → devuelve la altura total.
+  - `fields` es lista de strings, p. ej. `["PK id", "FK user_id", "name", "email"]`.
+- `draw_rel(c, x1, y1, x2, y2, label="", left_card="", right_card="", dashed=False)`
+
+### Ejes/charts
+
+- `draw_axes(c, x, y, w, h, x_label="", y_label="", x_ticks=[(frac,"label")], y_ticks=[(frac,"label")])`
+
+### Constantes disponibles
+
+- `FONT`, `FONT_BOLD`, `LINE_W`, `LINE_W_THIN`
+- `MARGIN_LEFT`, `MARGIN_RIGHT`, `MARGIN_TOP`, `MARGIN_BOTTOM`
+
+## REGLAS DE DISEÑO USPTO
+
+1. **Solo blanco y negro.** Stroke negro, sin fills coloreados. (Hatching está OK.)
+2. **Numerales de referencia EN TODOS los componentes** que aparezcan en el texto de la patente. Usa los números reales mencionados en la patente. Si la patente menciona "el módulo de adquisición 110", llama `draw_box(..., ref_num="110")`.
+3. **Sin solapamiento.** Calcula coordenadas antes de dibujar. Cuando cajas comparten una fila, deja al menos 16 pt entre ellas. Cuando comparten una columna, al menos 14 pt vertical.
+4. **Texto que CABE.** Si una caja es 120 pt de ancho y la etiqueta es larga, sube `h` o reduce `font_size` (mínimo 7). El wrap automático ayuda pero no rescata cajas demasiado pequeñas.
+5. **Flechas que CONECTAN.** Calcula los puntos de salida y llegada en el borde de las cajas, no en su centro. Ejemplo: caja A en (100,400,120,40) y caja B en (300,400,120,40) → `draw_arrow(c, 220, 420, 300, 420)`.
+6. **Layout coherente.** Decide un grid mental (p. ej. 3 columnas × 4 filas) y respétalo. Mantén alineación.
+
+## ESTRUCTURA DE LAS FIGURAS — MÍNIMOS OBLIGATORIOS
+
+Genera **EXACTAMENTE 6 figuras**, cada una con su `draw_figN(c)`. **Los siguientes mínimos son obligatorios — un script con menos componentes será rechazado y regenerado.**
+
+### FIG. 1 — Arquitectura de alto nivel
+- **MÍNIMO 10 cajas, MÁXIMO 14 cajas** representando módulos del sistema.
+- **MÍNIMO 2 contenedores `draw_dashed_box`** para agrupar capas/tiers (p. ej. "Server-side", "Client-side", "External Systems").
+- **TODOS los componentes numerados que la patente menciona (101, 102, 103, ...) deben aparecer como cajas con su `ref_num` exacto.** Lee el texto de la patente, encuentra TODOS los identificadores numéricos, y dibújalos. Si la patente menciona componentes 101–106, las 6 cajas DEBEN existir, no solo 4 o 5.
+- **MÍNIMO 6 flechas** conectando componentes. Cada flecha nace en el borde de una caja y termina en el borde de OTRA caja. **NINGUNA flecha puede apuntar al vacío.**
+
+### FIG. 2 — Flujo de operación principal
+- **MÍNIMO 12 pasos, MÁXIMO 16 pasos.**
+- **MÍNIMO 2 óvalos** (Start y End).
+- **MÍNIMO 1 bucle de feedback** explícito (flecha que vuelve hacia arriba — usar `draw_arrow_path` con puntos intermedios).
+- **MÍNIMO 1 punto de decisión** (caja con dos flechas saliendo, etiquetadas "Yes"/"No" o "Pass"/"Fail").
+- Flechas conectan SIEMPRE entre cajas adyacentes en el flujo — ninguna queda colgando.
+
+### FIG. 3 — Modelo de datos (ERD) o estructura interna
+- Si el invento maneja datos persistentes: **MÍNIMO 6 entidades** (`draw_entity`), cada una con MÍNIMO 4 campos (PK + 2-3 atributos + FK donde aplique). **MÍNIMO 5 relaciones** (`draw_rel`) entre entidades, con cardinalidades visibles (`"1"`, `"N"`, `"1..*"`).
+- Si NO maneja datos persistentes: descomposición interna de un componente clave con **MÍNIMO 8 sub-cajas** organizadas en jerarquía, con flechas etiquetadas que muestran flujo interno.
+
+### FIG. 4 — UI / vista de usuario / ejemplo concreto
+- **MÍNIMO 5 secciones visuales** (paneles, tarjetas, áreas).
+- **MÍNIMO 1 `draw_hatched_box`** para zonas de intensidad/heatmap.
+- **MÍNIMO 1 mini-gráfico** (`draw_axes` + `draw_polyline`) con MÍNIMO 4 ticks en X y 3 en Y, etiquetas visibles.
+- **MÍNIMO 5 etiquetas de texto** que parezcan datos reales (nombres, valores, métricas).
+- El texto NUNCA debe quedar encima del hatching de otra caja — separa las áreas visualmente.
+
+### FIG. 5 — Flujo de datos / pipeline (LANDSCAPE)
+- Llamar `setup_page(c, "FIG. 5", "...", page_landscape=True)`.
+- **MÍNIMO 10 componentes total** distribuidos en 3 columnas: Origen (3-4) → Procesamiento (3-4) → Destino (3-4).
+- **MÍNIMO 2 `draw_cylinder`** para storages/bases de datos.
+- **MÍNIMO 8 flechas** entre columnas, cada una con etiqueta semántica (`"sends events"`, `"queries"`, `"writes log"`, NO solo `"data"` o `"flow"`).
+
+### FIG. 6 — Topología o despliegue
+- **MÍNIMO 2 `draw_dashed_box`** como zones (p. ej. "Cloud Tier" y "On-Premise Tier"), cada una conteniendo MÍNIMO 3 sub-cajas.
+- **MÍNIMO 8 cajas total** distribuidas entre las zones.
+- **MÍNIMO 2 `draw_cylinder`** para storages.
+- **MÍNIMO 5 flechas** de comunicación inter-zone, cada una etiquetada con el tipo de tráfico (`"HTTPS"`, `"LTI 1.3"`, `"sync"`, etc.).
+- **NINGUNA flecha puede salir al borde de la página sin destino visible.**
+
+## REGLAS CRÍTICAS DE CONEXIÓN
+
+- **Flechas al vacío = falla automática.** Cada `draw_arrow` y `draw_arrow_path` debe terminar EN una caja, óvalo, cilindro, o entity — nunca en coordenadas vacías.
+- **Antes de dibujar una flecha**, identifica las dos cajas que conecta y calcula sus bordes. La flecha nace en `(borde_de_caja_A)` y muere en `(borde_de_caja_B)`.
+
+## ❌ FALLO AUTOMÁTICO si:
+- FIG. 1 tiene menos de 10 cajas, o le faltan componentes numerados mencionados en la patente.
+- FIG. 2 tiene menos de 12 pasos o ningún bucle de feedback.
+- FIG. 3 (caso ERD) tiene menos de 6 entidades.
+- FIG. 4 no tiene mini-gráfico o no tiene hatching.
+- FIG. 5 no es landscape o tiene menos de 10 componentes.
+- FIG. 6 no tiene 2 contenedores dashed con al menos 3 cajas cada uno.
+- CUALQUIER flecha apunta a coordenadas sin caja.
+
+## CHECKLIST ANTES DE DEVOLVER
+
+- [ ] Primera línea es `from patent_diagram_helpers import *`. NADA antes.
+- [ ] Ninguna otra línea de import excepto `import math` y/o `import random`.
+- [ ] 6 funciones `draw_figN(c)` definidas.
+- [ ] Cada `draw_figN` empieza con `setup_page(c, "FIG. N", "...")`.
+- [ ] Al final: `c = new_canvas("patent_diagrams.pdf")`, llamadas a las 6 funciones intercaladas con `c.showPage()`, y `c.save()`.
+- [ ] Cuento las cajas de FIG. 1: ¿son ≥10? Si no, agrega más.
+- [ ] Cuento los pasos de FIG. 2: ¿son ≥12? ¿hay loop de feedback? Si no, agrega.
+- [ ] Cuento las entidades de FIG. 3: ¿son ≥6? Si no, agrega.
+- [ ] FIG. 4 tiene mini-gráfico Y hatched-box: ✓?
+- [ ] FIG. 5 es landscape y tiene ≥10 componentes en 3 columnas: ✓?
+- [ ] FIG. 6 tiene 2 zones dashed con ≥3 sub-cajas cada una: ✓?
+- [ ] Ninguna flecha queda apuntando al vacío: ✓?
+- [ ] Todas las cajas/óvalos/cilindros tienen `ref_num` cuando representan un componente numerado en la patente.
+- [ ] Coordenadas dentro del área (54..558) × (72..738) para portrait, (54..738) × (72..558) para landscape.
+- [ ] Sin `os`, `sys`, `open`, `eval`, `getattr`, cadenas `"__..."__`.
+
+Devuelve SOLO el bloque ```python ...``` con el script completo. Nada más.
+'''
+
+
+def _extract_python_block(text: str) -> str:
+    """
+    Pull the Python source out of the LLM response. Accepts the source
+    wrapped in ```python ...``` or just raw code. Returns the stripped
+    script. Raises DiagramScriptError if nothing python-shaped found.
+    """
+    import re as _re
+    s = text or ""
+    # Prefer a fenced ```python block, but also accept plain ```
+    m = _re.search(r"```python\s*\n(.*?)```", s, _re.DOTALL)
+    if not m:
+        m = _re.search(r"```\s*\n(.*?)```", s, _re.DOTALL)
+    if m:
+        code = m.group(1)
+    else:
+        code = s
+    code = code.strip()
+    if "from patent_diagram_helpers" not in code:
+        raise DiagramScriptError(
+            "LLM response does not contain a patent_diagram_helpers script"
+        )
+    return code
+
+
 @api_router.post("/patents/generate-drawings/{patent_id}")
 async def generate_patent_diagrams_gpt4o(patent_text: str, invention_title: str) -> str:
-    """Generate patent diagrams using GPT-4o - Sistema Universal de Diagramas v3.2"""
-    
-    
-    DIAGRAM_GENERATION_PROMPT = """# GENERADOR UNIVERSAL DE DIAGRAMAS TÉCNICOS USPTO v3.2 - ULTRA PRECISION
+    """
+    Generate patent diagrams via Claude-authored Python (ReportLab) scripts,
+    ONE FIGURE PER LLM CALL, all 6 figures fired in PARALLEL.
+
+    Each figure is an independent, validated, sandboxed Python script rendered
+    to a PNG. If one figure fails the other five still come out — a single bad
+    figure no longer aborts the whole set.
+
+    Returns a string of N `<div class="diagram-container"><img ...></div>`
+    blocks separated by `---DIAGRAM_SEPARATOR---`, identical in shape to the
+    legacy pipelines so the downstream PDF assembler is unchanged.
+    """
+    from patent_diagram_pipeline import generate_figures_parallel
+
+    combined, n_ok, n_total, per_figure = await generate_figures_parallel(
+        patent_text, invention_title, openai_client,
+    )
+    if n_ok == 0:
+        # Surface which figures failed so the caller/logs are actionable.
+        detail = "; ".join(f"FIG.{n}: {msg}" for n, msg in sorted(per_figure.items()))
+        raise RuntimeError(f"All {n_total} figures failed — {detail}")
+    if n_ok < n_total:
+        failed = [n for n, msg in per_figure.items() if msg != "ok"]
+        logging.warning(
+            "⚠️ Only %d/%d figures rendered; failed: %s", n_ok, n_total, failed
+        )
+    logging.info("✅ Generated %d/%d diagrams (parallel per-figure)", n_ok, n_total)
+    return combined
 
-Eres un experto en crear diagramas técnicos profesionales para patentes USPTO. Analizas el texto completo de una patente y generas automáticamente 5-7 diagramas SVG completos, detallados y perfectamente formateados.
 
-## 🚨 CAMBIOS CRÍTICOS EN v3.2 - MÁXIMA PRIORIDAD
-
-### REGLAS ABSOLUTAS - NO NEGOCIABLES:
-
-1. **TAMAÑO DE CAJAS - OBLIGATORIO:**
-   - ✅ Width MÍNIMO: 260px (NO MENOS)
-   - ✅ Height MÍNIMO: 140px (NO MENOS)
-   - ✅ Para textos largos (>25 chars): width=300px, height=160px
-   - ❌ NUNCA usar cajas menores a 260×140px
-
-2. **TEXTO MULTILÍNEA - OBLIGATORIO:**
-   - ✅ Si el texto tiene >20 caracteres, SIEMPRE usar múltiples <tspan>
-   - ✅ Máximo 20 caracteres por línea
-   - ✅ dy="0" para primera línea, dy="18" para siguientes
-   - ❌ NUNCA poner texto largo en una sola línea
-
-3. **CONEXIONES EXACTAS - OBLIGATORIO:**
-   - ✅ Calcular puntos de conexión matemáticamente
-   - ✅ Flechas tocan exactamente el borde de las cajas (sin espacio)
-   - ✅ Para flecha horizontal: y = caja_y + caja_height/2
-   - ✅ Para flecha vertical: x = caja_x + caja_width/2
-   - ❌ NUNCA dejar espacios entre flechas y cajas
-
-## EJEMPLO COMPLETO DE CAJA CON TEXTO LARGO:
-
-```svg
-<!-- Caja con texto largo "Orchestration Controller Module" -->
-<rect x='100' y='150' width='280' height='150'
-      fill='white' stroke='black' stroke-width='2' rx='10'/>
-      
-<!-- Texto dividido en 3 líneas -->
-<text x='240' y='205' text-anchor='middle' font-size='14' font-weight='500' font-family='Times New Roman, serif'>
-  <tspan x='240' dy='0'>Orchestration</tspan>
-  <tspan x='240' dy='18'>Controller</tspan>
-  <tspan x='240' dy='18'>Module</tspan>
-</text>
-
-<!-- Número de referencia -->
-<text x='240' y='250' text-anchor='middle' font-size='12' fill='#666' font-family='Times New Roman, serif'>
-  (101)
-</text>
-```
-
-## EJEMPLO COMPLETO DE CONEXIÓN PRECISA:
-
-```svg
-<!-- Caja A: x=100, y=150, width=280, height=150 -->
-<!-- Caja B: x=440, y=150, width=280, height=150 -->
-
-<!-- Calcular puntos de conexión:
-     x1 = 100 + 280 = 380 (borde derecho de Caja A)
-     y1 = 150 + 75 = 225 (centro vertical de Caja A)
-     x2 = 440 (borde izquierdo de Caja B)  
-     y2 = 150 + 75 = 225 (centro vertical de Caja B)
--->
-
-<line x1='380' y1='225' x2='440' y2='225'
-      stroke='black' stroke-width='2' 
-      marker-end='url(#arrowhead)'/>
-<text x='410' y='220' text-anchor='middle' font-size='11'>sends data</text>
-```
-
-## PROCESO PASO A PASO:
-
-### PASO 1: ANÁLISIS DEL TEXTO
-
-Lee la patente completa y extrae:
-1. **Componentes principales**: Busca números de referencia (101), (102), (103)...
-2. **Relaciones**: Identifica "connected to", "communicates with", "receives from", etc.
-3. **Procesos**: Busca "comprises steps", "method includes", "workflow", etc.
-4. **Flujos de datos**: Identifica "transmits", "sends", "publishes", "subscribes", etc.
-5. **Tipo de invención**: Software/Hardware/Método/Química/Mecánica
-
-### PASO 2: SELECCIÓN AUTOMÁTICA DE DIAGRAMAS (7 total OBLIGATORIOS)
-
-**Para Software/Sistemas Distribuidos:**
-- FIG. 1: System Architecture (Block Diagram) - Vista general con TODOS los componentes principales
-- FIG. 2: Detailed Component (Block Diagram) - Arquitectura interna de componente clave
-- FIG. 3: Process Flow (Flowchart) - Flujo principal del sistema con decisiones
-- FIG. 4: Component Interactions (Sequence Diagram) - Intercambio de mensajes temporal
-- FIG. 5: Data Flow Diagram - Flujo de datos entre componentes
-- FIG. 6: Deployment Architecture - Despliegue en infraestructura
-- FIG. 7: State Machine o Alternative Embodiment - Estados o variación técnica
-
-**Para Hardware/Dispositivos:**
-- FIG. 1: Overall Assembly (Block Diagram)
-- FIG. 2: Exploded View (Component Diagram)
-- FIG. 3: Cross-Section View (Schematic)
-- FIG. 4: Detail View of Key Component (Schematic)
-- FIG. 5: Electrical/Mechanical Connections (Wiring/Connection Diagram)
-- FIG. 6: [Opcional] Alternative Embodiment
-
-**Para Métodos/Procesos:**
-- FIG. 1: Method Overview (Flowchart)
-- FIG. 2: Detailed Subprocess (Flowchart)
-- FIG. 3: System Context (Block Diagram)
-- FIG. 4: Decision Logic (Decision Tree/Flowchart)
-- FIG. 5: Timeline/Phases (Sequence/Gantt-style)
-- FIG. 6: [Opcional] Variations
-
-### PASO 3: REGLAS TÉCNICAS UNIVERSALES
-
-#### DIMENSIONES OBLIGATORIAS (NUNCA CAMBIAR)
-\`\`\`svg
-<svg xmlns='http://www.w3.org/2000/svg' 
-     width='700' 
-     height='[500-850]' 
-     viewBox='0 0 700 [500-850]'>
-\`\`\`
-
-**CRITICAL:**
-- width SIEMPRE = 700 (para caber en US Letter con márgenes)
-- height variable: 500-850 según complejidad
-- viewBox SIEMPRE igual a width y height
-- xmlns SIEMPRE presente
-
-#### MÁRGENES INTERNOS OBLIGATORIOS
-\`\`\`
-Margen superior: 60px (espacio para título)
-Márgenes laterales: 40px cada lado
-Área dibujable efectiva: 620px × (height-100)px
-Primer componente: y ≥ 100px
-Último componente: y ≤ height - 40px
-\`\`\`
-
-#### TIPOGRAFÍA ESTÁNDAR
-\`\`\`svg
-<!-- Título del diagrama (siempre centrado en x=350) -->
-<text x='350' y='35' text-anchor='middle' 
-      font-size='18' font-weight='600' font-family='Times New Roman, serif'>
-  FIG. [N] — [Título Descriptivo]
-</text>
-
-<!-- Labels de componentes -->
-<text x='[X]' y='[Y]' text-anchor='middle' 
-      font-size='15' font-weight='500' font-family='Times New Roman, serif'>
-  [Nombre del Componente]
-</text>
-
-<!-- Números de referencia (debajo del label) -->
-<text x='[X]' y='[Y+20]' text-anchor='middle' 
-      font-size='13' fill='#666' font-family='Times New Roman, serif'>
-  ([XXX])
-</text>
-\`\`\`
-
-### PASO 4: COMPONENTES ESTÁNDAR
-
-#### CAJAS RECTANGULARES (Componentes/Módulos)
-
-**REGLAS CRÍTICAS PARA CAJAS:**
-- ✅ Width MÍNIMO: 220px (para textos largos usar hasta 280px)
-- ✅ Height MÍNIMO: 120px (para textos multilínea usar hasta 160px)
-- ✅ Texto debe caber completamente dentro de la caja
-- ✅ Usar múltiples <tspan> si el nombre es largo (>20 caracteres)
-- ✅ Padding interno: dejar 15px de margen entre el texto y los bordes
-
-**Template para cajas con texto corto (<20 caracteres):**
-\`\`\`svg
-<rect x='[X]' y='[Y]' width='220' height='120'
-      fill='white' stroke='black' stroke-width='2' rx='10'/>
-<text x='[X+110]' y='[Y+55]' text-anchor='middle' 
-      font-size='15' font-weight='500'>
-  [Nombre Corto]
-</text>
-<text x='[X+110]' y='[Y+75]' text-anchor='middle' 
-      font-size='13' fill='#666'>
-  ([XXX])
-</text>
-\`\`\`
-
-**Template para cajas con texto largo (>20 caracteres):**
-\`\`\`svg
-<rect x='[X]' y='[Y]' width='260' height='140'
-      fill='white' stroke='black' stroke-width='2' rx='10'/>
-<text x='[X+130]' y='[Y+50]' text-anchor='middle' font-size='14' font-weight='500'>
-  <tspan x='[X+130]' dy='0'>[Primera línea]</tspan>
-  <tspan x='[X+130]' dy='18'>[Segunda línea]</tspan>
-</text>
-<text x='[X+130]' y='[Y+90]' text-anchor='middle' 
-      font-size='13' fill='#666'>
-  ([XXX])
-</text>
-\`\`\`
-
-**Tamaños recomendados:** 
-- Texto corto: width=220px, height=120px
-- Texto medio: width=240px, height=130px  
-- Texto largo: width=260px, height=140px
-
-#### FLECHAS (SIEMPRE con markers)
-
-**REGLAS CRÍTICAS PARA FLECHAS:**
-- ✅ Las flechas DEBEN conectarse exactamente a los bordes de las cajas
-- ✅ Para conexión horizontal: usar centro vertical de la caja (y = caja_y + altura/2)
-- ✅ Para conexión vertical: usar centro horizontal de la caja (x = caja_x + ancho/2)
-- ✅ NO dejar espacios entre flecha y caja
-- ✅ Calcular puntos de conexión considerando el borde, no el centro de la caja
-
-**Template de markers (incluir al inicio del SVG):**
-\`\`\`svg
-<defs>
-  <marker id='arrowhead' markerWidth='10' markerHeight='10' 
-          refX='9' refY='3' orient='auto'>
-    <polygon points='0 0, 10 3, 0 6' fill='black'/>
-  </marker>
-</defs>
-\`\`\`
-
-**Ejemplo: Flecha horizontal entre dos cajas**
-\`\`\`svg
-<!-- Caja izquierda: x=100, y=150, width=220, height=120 -->
-<!-- Caja derecha: x=380, y=150, width=220, height=120 -->
-
-<!-- Punto de conexión: 
-     x1 = caja_izq_x + width = 100 + 220 = 320
-     y1 = caja_izq_y + height/2 = 150 + 60 = 210
-     x2 = caja_der_x = 380
-     y2 = caja_der_y + height/2 = 150 + 60 = 210
--->
-<line x1='320' y1='210' x2='380' y2='210'
-      stroke='black' stroke-width='2' 
-      marker-end='url(#arrowhead)'/>
-<text x='350' y='205' text-anchor='middle' font-size='11'>Label</text>
-\`\`\`
-
-**Ejemplo: Flecha vertical entre dos cajas**
-\`\`\`svg
-<!-- Caja superior: x=250, y=100, width=220, height=120 -->
-<!-- Caja inferior: x=250, y=300, width=220, height=120 -->
-
-<!-- Punto de conexión:
-     x1 = caja_sup_x + width/2 = 250 + 110 = 360
-     y1 = caja_sup_y + height = 100 + 120 = 220
-     x2 = caja_inf_x + width/2 = 250 + 110 = 360
-     y2 = caja_inf_y = 300
--->
-<line x1='360' y1='220' x2='360' y2='300'
-      stroke='black' stroke-width='2' 
-      marker-end='url(#arrowhead)'/>
-\`\`\`
-
-### PASO 5: SEQUENCE DIAGRAMS COMPLETOS (CRÍTICO)
-
-**OBLIGATORIO para Sequence Diagrams:**
-
-1. ✅ Swimlanes verticales (líneas punteadas)
-2. ✅ Headers con nombres de actores en la parte superior
-3. ✅ **FLECHAS HORIZONTALES entre swimlanes** (sin flechas = diagrama inválido)
-4. ✅ **Numeración secuencial** de mensajes (1, 2, 3...)
-5. ✅ **Labels descriptivos** en cada flecha
-6. ✅ **Rectángulos de activación** (10px width) cuando un actor procesa
-7. ✅ Dirección temporal: de arriba (primero) a abajo (último)
-8. ✅ Flechas sólidas para llamadas, punteadas para respuestas
-
-**Template completo para Sequence Diagram:**
-\`\`\`svg
-<svg xmlns='http://www.w3.org/2000/svg' width='700' height='750' viewBox='0 0 700 750'>
-  <defs>
-    <marker id='arrowhead' markerWidth='10' markerHeight='10' refX='9' refY='3' orient='auto'>
-      <polygon points='0 0, 10 3, 0 6' fill='black'/>
-    </marker>
-  </defs>
-  
-  <text x='350' y='35' text-anchor='middle' font-size='18' font-weight='600'>
-    FIG. 3 — Component Interaction Sequence
-  </text>
-  
-  <!-- 4 Swimlanes con spacing=175px -->
-  <text x='87' y='70' text-anchor='middle' font-size='13' font-weight='600'>Client</text>
-  <text x='262' y='70' text-anchor='middle' font-size='13' font-weight='600'>Server</text>
-  <text x='437' y='70' text-anchor='middle' font-size='13' font-weight='600'>Database</text>
-  <text x='612' y='70' text-anchor='middle' font-size='13' font-weight='600'>Cache</text>
-  
-  <!-- Lifelines -->
-  <line x1='87' y1='85' x2='87' y2='680' stroke='#999' stroke-width='1.5' stroke-dasharray='5,5'/>
-  <line x1='262' y1='85' x2='262' y2='680' stroke='#999' stroke-width='1.5' stroke-dasharray='5,5'/>
-  <line x1='437' y1='85' x2='437' y2='680' stroke='#999' stroke-width='1.5' stroke-dasharray='5,5'/>
-  <line x1='612' y1='85' x2='612' y2='680' stroke='#999' stroke-width='1.5' stroke-dasharray='5,5'/>
-  
-  <!-- MENSAJES (OBLIGATORIO tener al menos 6-8) -->
-  
-  <!-- Mensaje 1 -->
-  <line x1='87' y1='120' x2='262' y2='120' stroke='black' stroke-width='2' marker-end='url(#arrowhead)'/>
-  <text x='174' y='115' text-anchor='middle' font-size='11'>1. Request Data</text>
-  
-  <!-- Activación en Server -->
-  <rect x='257' y='120' width='10' height='200' fill='#e8e8e8' stroke='black' stroke-width='1'/>
-  
-  <!-- Mensaje 2 -->
-  <line x1='262' y1='160' x2='612' y2='160' stroke='black' stroke-width='2' marker-end='url(#arrowhead)'/>
-  <text x='437' y='155' text-anchor='middle' font-size='11'>2. Check Cache</text>
-  
-  <!-- Activación en Cache -->
-  <rect x='607' y='160' width='10' height='60' fill='#e8e8e8' stroke='black' stroke-width='1'/>
-  
-  <!-- Mensaje 3 (return) -->
-  <line x1='612' y1='200' x2='262' y2='200' stroke='black' stroke-width='1.5' stroke-dasharray='4,4' marker-end='url(#arrowhead)'/>
-  <text x='437' y='195' text-anchor='middle' font-size='11'>3. Cache Miss</text>
-  
-  <!-- Mensaje 4 -->
-  <line x1='262' y1='240' x2='437' y2='240' stroke='black' stroke-width='2' marker-end='url(#arrowhead)'/>
-  <text x='349' y='235' text-anchor='middle' font-size='11'>4. Query DB</text>
-  
-  <!-- Activación en Database -->
-  <rect x='432' y='240' width='10' height='60' fill='#e8e8e8' stroke='black' stroke-width='1'/>
-  
-  <!-- Mensaje 5 (return) -->
-  <line x1='437' y1='280' x2='262' y2='280' stroke='black' stroke-width='1.5' stroke-dasharray='4,4' marker-end='url(#arrowhead)'/>
-  <text x='349' y='275' text-anchor='middle' font-size='11'>5. Result Set</text>
-  
-  <!-- Mensaje 6 (return final) -->
-  <line x1='262' y1='320' x2='87' y2='320' stroke='black' stroke-width='1.5' stroke-dasharray='4,4' marker-end='url(#arrowhead)'/>
-  <text x='174' y='315' text-anchor='middle' font-size='11'>6. Response</text>
-  
-</svg>
-\`\`\`
-
-**REGLA CRÍTICA PARA SEQUENCE DIAGRAMS:**
-- ✅ SIEMPRE incluir flechas horizontales entre swimlanes
-- ✅ SIEMPRE numerar los mensajes (1, 2, 3...)
-- ✅ SIEMPRE agregar labels descriptivos a cada flecha
-- ✅ SIEMPRE usar rectángulos de activación (10px width)
-
-### PASO 6: VALIDACIÓN AUTOMÁTICA
-
-Antes de outputear cada SVG, verifica:
-\`\`\`
-[ ] ¿xmlns presente?
-[ ] ¿width=700?
-[ ] ¿viewBox presente?
-[ ] ¿Tiene título centrado en x=350?
-[ ] ¿Markers definidos si hay flechas?
-[ ] ¿Font size >= 11px?
-[ ] ¿Sequence diagrams tienen mensajes horizontales?
-[ ] ¿Todos los componentes mencionados en texto incluidos?
-[ ] ¿Cajas tienen width >= 220px y height >= 120px?
-[ ] ¿Texto largo (>20 caracteres) usa <tspan> multilínea?
-[ ] ¿Flechas se conectan exactamente a los bordes de las cajas?
-[ ] ¿No hay espacios entre flechas y cajas?
-\`\`\`
-
-### PASO 7: GENERACIÓN COMPLETA DE COMPONENTES - OBLIGATORIO
-
-**REGLA DE ORO ABSOLUTA: COMPLETITUD TOTAL DE DIAGRAMAS**
-
-**PARA FLOWCHARTS (FIG. 3):**
-✅ CADA flecha DEBE tener un cuadro de origen Y un cuadro de destino
-✅ SI una flecha apunta hacia abajo, DEBE haber un cuadro debajo
-✅ NO dejar flechas apuntando al vacío
-✅ Incluir TODOS los pasos del proceso mencionados en el texto
-✅ Si el texto menciona 15 pasos, el diagrama debe mostrar los 15 pasos
-✅ Si no caben todos, dividir en múltiples figuras (FIG. 3A, FIG. 3B)
-❌ NUNCA terminar un flowchart con una flecha sin destino
-
-**PARA BLOCK DIAGRAMS (FIG. 2):**
-✅ CADA línea de conexión DEBE conectar dos componentes
-✅ SI el texto menciona "comprises 8 sub-modules", mostrar LOS 8
-✅ NO omitir componentes por falta de espacio
-✅ Organizar en grid o tree para que quepan todos
-❌ NUNCA dejar líneas sin conectar a un componente
-
-**VALIDACIÓN PRE-GENERACIÓN:**
-Antes de generar cada diagrama, pregúntate:
-1. ¿Conté cuántos componentes menciona el texto? ¿Los incluí TODOS?
-2. ¿Todas las flechas tienen origen Y destino?
-3. ¿Alguna flecha apunta al vacío? Si sí, agregar el cuadro faltante
-4. ¿El diagrama se ve completo o truncado? Si truncado, extender height
-
-**EJEMPLO DE ERROR COMÚN A EVITAR:**
-❌ MAL:
-```
-[Paso 1] →
-[Paso 2] →
-[Paso 3] →
-[Paso 4] → ← FLECHA SIN DESTINO (ERROR)
-```
-
-✅ CORRECTO:
-```
-[Paso 1] →
-[Paso 2] →
-[Paso 3] →
-[Paso 4] →
-[Paso 5] ← TODOS LOS PASOS COMPLETOS
-```
-
-**REGLA DE ORO: No omitir componentes mencionados en el texto**
-
-Si el texto menciona:
-  "comprising an orchestrator core (101), a message queue (102), 
-   an AI gateway (103), a state store (104), and observability module (105)"
-
-Entonces FIG. 1 DEBE mostrar LOS 5 COMPONENTES:
-  - (101) Orchestrator Core
-  - (102) Message Queue
-  - (103) AI Gateway
-  - (104) State Store        ← NO OMITIR
-  - (105) Observability      ← NO OMITIR
-
-**SI UN DIAGRAMA TIENE MÁS DE 8 COMPONENTES:**
-✅ Aumentar height a 850px o dividir en FIG. 2A y FIG. 2B
-❌ NO omitir componentes para que "quepa mejor"
-
-## REGLAS CRÍTICAS UNIVERSALES
-
-### ✅ SIEMPRE hacer:
-1. Generar 5-6 diagramas (no menos de 4, no más de 7)
-2. Incluir TODOS los componentes principales mencionados en texto
-3. **VERIFICAR que cada flecha tenga origen Y destino (no flechas al vacío)**
-4. **CONTAR componentes en texto antes de dibujar - deben coincidir**
-5. Width exactamente 700px
-6. Centrar todo horizontalmente
-7. Títulos descriptivos (no genéricos como "System Diagram")
-8. Números de referencia consistentes con texto
-9. Sequence diagrams con flechas y mensajes completos (mínimo 6)
-10. Flowcharts con flechas conectando todos los pasos (SIN EXCEPCIONES)
-11. Block diagrams con líneas mostrando conexiones (cada línea conecta 2 componentes)
-12. Activación visual en Sequence diagrams
-13. **Cajas con tamaño adecuado: mínimo 220×120px**
-14. **Texto largo dividido en múltiples líneas con <tspan>**
-15. **Flechas conectadas exactamente a los bordes de las cajas (sin espacios)**
-16. **Si un proceso tiene N pasos en el texto, el flowchart debe mostrar los N pasos**
-
-### ❌ NUNCA hacer:
-1. width > 700 o width < 700
-2. Omitir componentes mencionados en el texto
-3. **Dejar flechas apuntando al vacío (sin cuadro destino)**
-4. **Terminar un flowchart con una flecha sin destino**
-5. Sequence diagram sin flechas horizontales
-6. Componentes descentrados
-7. Usar HTML dentro de SVG
-8. Usar <foreignObject>
-9. Depender de CSS externo
-10. Colores (solo blanco, negro, grises)
-11. Elementos fuera del viewBox
-12. Olvidar xmlns o markers
-13. **Generar diagramas que parezcan truncados o incompletos**
-14. **Omitir pasos intermedios en flowcharts "para ahorrar espacio"**
-11. **Cajas pequeñas (<220px width o <120px height)**
-12. **Texto que desborda los límites de la caja**
-13. **Flechas desconectadas o con espacios entre caja y flecha**
-
-## FORMATO DE OUTPUT
-
-🚨 **MANDATORY: GENERATE MINIMUM 5 DIAGRAMS, MAXIMUM 7 DIAGRAMS** 🚨
-
-Para CADA diagrama genera:
-
-\`\`\`svg
-<svg width='700' height='600' xmlns='http://www.w3.org/2000/svg' style='display: block; margin: 0 auto;'>
-[CÓDIGO SVG COMPLETO AQUÍ]
-</svg>
-\`\`\`
-
-**IMPORTANTE: Siempre incluir `style='display: block; margin: 0 auto;'` en la etiqueta <svg> para centrar el diagrama**
-
-Separa cada diagrama con:
----DIAGRAM_SEPARATOR---
-
-**CRITICAL INSTRUCTION - YOU MUST GENERATE MULTIPLE DIAGRAMS:**
-
-You MUST generate AT LEAST 5 different diagrams. DO NOT generate only 1 diagram.
-
-**Required diagrams (GENERATE ALL OF THESE):**
-
-1. **FIG. 1 - System Architecture Overview** (Block diagram with all main components)
-   - Show: Main modules, data flows, external connections
-   - Example: API Gateway → Orchestrator → Database → Cache
-
-2. **FIG. 2 - Detailed Component Diagram** (Zoomed-in view of core module)
-   - Show: Internal components of the main module
-   - Example: Orchestrator internals with sub-components
-
-3. **FIG. 3 - Process Flow Diagram** (Flowchart of main process)
-   - Show: Decision points, steps, loops
-   - Example: Request processing flow with if/else branches
-
-4. **FIG. 4 - Sequence Diagram** (Interactions over time)
-   - Show: Messages between components with numbered steps
-   - MUST have: Horizontal arrows, activation boxes, return messages
-
-5. **FIG. 5 - Data Flow Diagram** (How data moves through system)
-   - Show: Data transformations, storage points, pipelines
-   - Example: Input → Processing → Storage → Output
-
-**Optional but recommended (add if text complexity requires):**
-
-6. **FIG. 6 - Deployment Diagram** (Infrastructure/deployment view)
-7. **FIG. 7 - Entity-Relationship Diagram** (Database schema if applicable)
-
-**VERIFICATION BEFORE SUBMITTING:**
-- [ ] Did I generate at least 5 complete SVG diagrams?
-- [ ] Did I separate each diagram with ---DIAGRAM_SEPARATOR---?
-- [ ] Does each diagram have a unique FIG. number and descriptive title?
-- [ ] Are all diagrams different (not duplicates)?
-
-**AUTOMATIC FAILURE IF:**
-- You generate only 1 or 2 diagrams (NEED AT LEAST 5)
-- You forget the separators
-- Diagrams are generic/duplicate content
-
-Based on the patent text complexity, generate 5-7 high-quality technical diagrams."""
-
-    try:
-        # Call GPT-4o using the existing openai_client with LOWER temperature for precision
-        # 🛡️ Wrap in a helper so we can retry via OpenRouter if the primary
-        # OpenAI key fails (429 insufficient_quota is the most common failure
-        # and was blocking all patent drawings generation).
-        async def _call_gpt4o_primary():
-            return await openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": DIAGRAM_GENERATION_PROMPT},
-                    {"role": "user", "content": f"Genera los diagramas técnicos para esta patente:\n\nTÍTULO: {invention_title}\n\n{patent_text}"}
-                ],
-                temperature=0.3,
-                max_tokens=16000
-            )
-
-        async def _call_gpt4o_openrouter():
-            """Fallback path: use GPT-4o via OpenRouter when direct OpenAI fails."""
-            import httpx
-            openrouter_key = os.environ.get('OPENROUTER_API_KEY')
-            if not openrouter_key:
-                return None
-            logging.warning("⚠️ OpenAI GPT-4o failed — falling back to OpenRouter for diagram generation")
-            async with httpx.AsyncClient(timeout=300.0) as http_client:
-                r = await http_client.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {openrouter_key}",
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": "https://redaccion.urpeintegralservices.co",
-                        "X-Title": "SmartDocs Creator - Patent Diagrams",
-                    },
-                    json={
-                        "model": "openai/gpt-4o",
-                        "messages": [
-                            {"role": "system", "content": DIAGRAM_GENERATION_PROMPT},
-                            {"role": "user", "content": f"Genera los diagramas técnicos para esta patente:\n\nTÍTULO: {invention_title}\n\n{patent_text}"}
-                        ],
-                        "temperature": 0.3,
-                        "max_tokens": 16000,
-                    },
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    # Emulate the SDK response structure for downstream code
-                    class _Msg:
-                        def __init__(self, content): self.content = content
-                    class _Choice:
-                        def __init__(self, content): self.message = _Msg(content); self.finish_reason = "stop"
-                    class _Resp:
-                        def __init__(self, content): self.choices = [_Choice(content)]
-                    content = data["choices"][0]["message"]["content"]
-                    logging.info(f"✅ OpenRouter GPT-4o fallback succeeded ({len(content)} chars)")
-                    return _Resp(content)
-                logging.error(f"❌ OpenRouter fallback failed with {r.status_code}: {r.text[:200]}")
-                return None
-
-        try:
-            response = await _call_gpt4o_primary()
-        except Exception as primary_err:
-            err_msg = str(primary_err).lower()
-            if '429' in err_msg or 'insufficient_quota' in err_msg or 'rate' in err_msg or 'quota' in err_msg:
-                response = await _call_gpt4o_openrouter()
-                if response is None:
-                    raise primary_err
-            else:
-                raise
-        
-        diagrams_raw = response.choices[0].message.content
-        logging.info(f"📊 GPT-4o generated {len(diagrams_raw)} chars of diagram SVG")
-        
-        # Split diagrams by separator
-        diagrams = diagrams_raw.split("---DIAGRAM_SEPARATOR---")
-        
-        # CRITICAL CHECK: Verify we got multiple diagrams
-        if len(diagrams) < 3:
-            logging.warning(f"⚠️ Only {len(diagrams)} diagram(s) found. Expected at least 5. Attempting retry...")
-            
-            # Retry with more explicit prompt — also with OpenRouter fallback
-            async def _retry_primary():
-                return await openai_client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[
-                        {"role": "system", "content": DIAGRAM_GENERATION_PROMPT},
-                        {"role": "user", "content": f"Genera los diagramas técnicos para esta patente:\n\nTÍTULO: {invention_title}\n\n{patent_text}"},
-                        {"role": "assistant", "content": diagrams_raw},
-                        {"role": "user", "content": f"🚨 CRITICAL ERROR: You only generated {len(diagrams)} diagram(s). You MUST generate AT LEAST 5 DIFFERENT diagrams.\n\nGenerate the remaining diagrams now:\n- FIG. 2 - Detailed Component Diagram\n- FIG. 3 - Process Flow Diagram\n- FIG. 4 - Sequence Diagram\n- FIG. 5 - Data Flow Diagram\n\nSeparate EACH diagram with ---DIAGRAM_SEPARATOR---"}
-                    ],
-                    temperature=0.3,
-                    max_tokens=16000
-                )
-            try:
-                retry_response = await _retry_primary()
-            except Exception as retry_err:
-                err_msg = str(retry_err).lower()
-                if '429' in err_msg or 'insufficient_quota' in err_msg or 'quota' in err_msg:
-                    retry_response = await _call_gpt4o_openrouter()
-                    if retry_response is None:
-                        logging.warning(f"⚠️ Retry fallback also failed, continuing with partial diagrams")
-                        additional_diagrams = ""
-                        retry_response = None
-                else:
-                    raise
-
-            if retry_response is not None:
-                additional_diagrams = retry_response.choices[0].message.content
-                logging.info(f"🔄 Retry generated {len(additional_diagrams)} additional chars")
-            
-            # Combine original and additional diagrams
-            diagrams_raw = diagrams_raw + "\n---DIAGRAM_SEPARATOR---\n" + additional_diagrams
-            diagrams = diagrams_raw.split("---DIAGRAM_SEPARATOR---")
-            logging.info(f"✅ After retry: {len(diagrams)} total diagram blocks")
-        
-        # Process and validate SVG diagrams
-        valid_svgs = []
-        for i, diagram_svg in enumerate(diagrams, 1):
-            diagram_svg = diagram_svg.strip()
-            
-            # Remove markdown code blocks if present
-            if diagram_svg.startswith("```svg"):
-                diagram_svg = diagram_svg.replace("```svg", "").replace("```", "").strip()
-            
-            # Validate SVG
-            if '<svg' in diagram_svg and '</svg>' in diagram_svg:
-                # Ensure xmlns is present
-                if 'xmlns=' not in diagram_svg:
-                    diagram_svg = diagram_svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"', 1)
-                    logging.info(f"Added xmlns to SVG {i}")
-                
-                # Wrap SVG in centered div
-                centered_svg = f'<div style="text-align: center; margin: 20px auto; display: block;">{diagram_svg}</div>'
-                
-                valid_svgs.append(centered_svg)
-                logging.info(f"✅ Validated SVG {i}: {len(diagram_svg)} chars")
-            else:
-                logging.warning(f"⚠️ Diagram {i} is not valid SVG, skipping")
-        
-        # CRITICAL CHECK: Warn if too few diagrams
-        if len(valid_svgs) < 5:
-            logging.warning(f"⚠️ Only generated {len(valid_svgs)} valid diagrams. Patent standard recommends 5-7 diagrams for better USPTO compliance.")
-        
-        # Combine all SVGs separated by our marker
-        combined_svg = "\n---DIAGRAM_SEPARATOR---\n".join(valid_svgs)
-        
-        logging.info(f"✅ Generated {len(valid_svgs)} valid diagrams total")
-        
-        return combined_svg
-        
-    except Exception as e:
-        logging.error(f"Error in generate_patent_diagrams_gpt4o: {str(e)}")
-        raise
 
 
 async def generate_patent_diagrams_programmatic(patent_text: str, invention_title: str) -> str:
@@ -24915,6 +24650,135 @@ async def generate_patent_drawings(
             "error": str(e),
             "success": False
         }
+
+# ─────────────────────────────────────────────────────────────────────
+# 🎨 Regeneración de diagramas EN PARALELO y EN SEGUNDO PLANO
+# ─────────────────────────────────────────────────────────────────────
+# El PDF se puede descargar sin diagramas; el usuario los genera/regenera
+# con este endpoint. Las 6 figuras se generan en paralelo (1 LLM por figura),
+# así que si una falla las otras 5 igual salen. Sigue el patrón de jobs en
+# segundo plano del proyecto (thread propio + event loop propio + facade
+# mongo-compat) porque FastAPI BackgroundTasks falla en producción para
+# tareas largas. El progreso se rastrea en los campos diagrams_status /
+# diagrams_progress / diagrams_message del documento de la patente.
+
+def _regenerate_diagrams_background(patent_id: str, language: str = "en"):
+    """Thread target (NOT async): regenerate all 6 figures in parallel."""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        from db.mongo_compat import get_mongo_compat_db
+        tdb = get_mongo_compat_db()
+
+        async def _run():
+            patent = await tdb.patents.find_one({"id": patent_id}, {"_id": 0})
+            coll = tdb.patents
+            if not patent:
+                patent = await tdb.patents_in_progress.find_one({"id": patent_id}, {"_id": 0})
+                coll = tdb.patents_in_progress
+            if not patent:
+                logging.error(f"[DIAGRAMS {patent_id}] patent not found in background")
+                return
+
+            await coll.update_one({"id": patent_id}, {"$set": {
+                "diagrams_status": "generating",
+                "diagrams_progress": 5,
+                "diagrams_message": "Generando 6 figuras en paralelo...",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }})
+
+            # Build the patent text the figures are derived from.
+            if patent.get('generation_method') == 'complete_single_call':
+                patent_text = (patent.get('complete_specification_en')
+                               or patent.get('complete_specification_es', ''))
+            else:
+                sections = patent.get('sections', [])
+                patent_text = (
+                    f"TITLE: {patent.get('invention_title','')}\n"
+                    f"FIELD: {patent.get('technical_field','')}\n"
+                    f"DESCRIPTION: {patent.get('invention_description','')}\n"
+                )
+                for s in sorted(sections, key=lambda x: x.get('number', 0)):
+                    patent_text += f"\n\n{s.get('content','')}"
+            title = patent.get('invention_title_en') or patent.get('invention_title', '')
+
+            from patent_diagram_pipeline import generate_figures_parallel
+            combined, n_ok, n_total, per_figure = await generate_figures_parallel(
+                patent_text, title, openai_client,
+            )
+
+            status = "completed" if n_ok == n_total else ("partial" if n_ok > 0 else "error")
+            update = {
+                "diagrams_status": status,
+                "diagrams_progress": 100,
+                "diagrams_message": f"{n_ok}/{n_total} figuras generadas correctamente",
+                "diagrams_detail": per_figure,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            # Only overwrite stored drawings if at least one figure rendered, so a
+            # total failure doesn't wipe a previously-good set.
+            if n_ok > 0:
+                update["drawings_content"] = combined
+                update["drawings_content_en"] = combined
+            await coll.update_one({"id": patent_id}, {"$set": update})
+            logging.info(f"[DIAGRAMS {patent_id}] done: {n_ok}/{n_total} ({status})")
+
+        loop.run_until_complete(_run())
+        loop.close()
+    except Exception as e:
+        logging.error(f"[DIAGRAMS {patent_id}] background thread failed: {e}")
+        import traceback
+        logging.error(traceback.format_exc())
+        # Best-effort: mark error so the UI stops spinning.
+        try:
+            loop2 = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop2)
+            from db.mongo_compat import get_mongo_compat_db
+            tdb2 = get_mongo_compat_db()
+            async def _mark_err():
+                for cname in ("patents", "patents_in_progress"):
+                    await getattr(tdb2, cname).update_one(
+                        {"id": patent_id},
+                        {"$set": {"diagrams_status": "error",
+                                  "diagrams_message": f"Error: {str(e)[:200]}"}},
+                    )
+            loop2.run_until_complete(_mark_err())
+            loop2.close()
+        except Exception:
+            pass
+
+
+@api_router.post("/patents/{patent_id}/regenerate-diagrams")
+async def regenerate_patent_diagrams(
+    patent_id: str,
+    language: str = "en",
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Fire a background job that regenerates all 6 patent figures IN PARALLEL.
+    Returns immediately with status='generating'. Poll GET /patents/{id} and
+    read `diagrams_status` ('generating' | 'completed' | 'partial' | 'error')
+    plus `diagrams_message` / `diagrams_detail` to track progress.
+    """
+    patent = await db.patents.find_one({"id": patent_id}, {"_id": 0})
+    if not patent:
+        patent = await db.patents_in_progress.find_one({"id": patent_id}, {"_id": 0})
+    if not patent:
+        raise HTTPException(status_code=404, detail="Patent not found")
+
+    import threading
+    threading.Thread(
+        target=_regenerate_diagrams_background,
+        args=(patent_id, language),
+        daemon=True,
+    ).start()
+    logging.info(f"🎨 [DIAGRAMS {patent_id}] background regeneration started")
+    return {
+        "status": "generating",
+        "message": "Regeneración de diagramas iniciada en segundo plano. "
+                   "Las 6 figuras se generan en paralelo.",
+    }
+
 
 @api_router.post("/patents/finalize/{patent_id}")
 async def finalize_patent(patent_id: str, current_user: User = Depends(get_current_user)):
@@ -25882,13 +25746,31 @@ async def download_patent_drawings(
         raise HTTPException(status_code=404, detail="Drawings not available")
     
     title = f"Patent Drawings: {patent['invention_title']}" if language == 'en' else f"Dibujos de Patente: {patent['invention_title']}"
-    
-    pdf_bytes = create_pdf(
-        title=title,
-        content=drawings_content,
-        doc_type="patent_drawings"
-    )
-    
+
+    # 🔧 DIAGRAM SIZE FIX: render diagrams through the same extractor used by the
+    # combined "complete" PDF (each FIG scaled to fill the page, one per page)
+    # instead of letting create_pdf's generic <img> handler cap them at
+    # 5.5"×4" — which squished portrait diagrams and made them look tiny when
+    # downloaded on their own.
+    diagram_objects = extract_drawings_as_reportlab_objects(drawings_content)
+    if diagram_objects:
+        pdf_bytes = create_pdf(
+            title=title,
+            content="___DIAGRAM_INSERTION_POINT___",
+            doc_type="patent_drawings",
+            diagram_elements=diagram_objects,
+            language=language,
+        )
+    else:
+        # Fallback: no extractable image/SVG diagrams (e.g. text-only / legacy
+        # drawings) — render the raw HTML as before.
+        pdf_bytes = create_pdf(
+            title=title,
+            content=drawings_content,
+            doc_type="patent_drawings",
+            language=language,
+        )
+
     safe_filename = sanitize_filename(patent['invention_title'])
     lang_suffix = '_ES' if language == 'es' else '_EN'
     return StreamingResponse(
@@ -25901,29 +25783,118 @@ def extract_svg_drawings_as_reportlab_objects(drawings_content: str) -> list:
     """
     Extrae bloques SVG y los convierte DIRECTAMENTE a ReportLab Drawing objects (vectoriales).
     Usa el Sistema Universal de Diagramas v2.0
-    
+
     Returns:
         list: Lista de elementos ReportLab (Drawing objects y Spacers)
     """
     from utils.svg_processor import process_patent_diagrams
-    
+
     logging.info(f"📊 Processing drawings with Universal Diagram System v2.0")
     logging.info(f"📊 Content length: {len(drawings_content) if drawings_content else 0} chars")
-    
+
     if not drawings_content:
         logging.warning("⚠️ No drawings_content provided")
         return []
-    
+
     # Usar el procesador universal
     elements = process_patent_diagrams(
         diagram_content=drawings_content,
         max_width=550,  # Letter size con márgenes
         max_height=700
     )
-    
+
     logging.info(f"✅ Universal processor returned {len(elements)} elements")
-    
+
     return elements
+
+
+def extract_png_drawings_as_reportlab_objects(drawings_content: str, max_width: int = 440, max_height: int = 600) -> list:
+    """
+    Extract base64-encoded PNG <img> tags (emitted by the HTML+CSS diagram
+    pipeline v4.0) and convert them to ReportLab Image flowables.
+
+    Each diagram is a `<img src="data:image/png;base64,XXX">` inside a
+    `<div class="diagram-container">`, separated by `---DIAGRAM_SEPARATOR---`
+    (the same format used by the legacy SVG path so downstream PDF assembly
+    can treat both interchangeably).
+
+    Returns:
+        list: List of ReportLab Image / Spacer / PageBreak flowables.
+    """
+    import base64
+    import re
+    from io import BytesIO
+    from reportlab.platypus import Image as RLImage, Spacer, PageBreak
+    from reportlab.lib.utils import ImageReader
+
+    if not drawings_content:
+        logging.warning("⚠️ No drawings_content for PNG extraction")
+        return []
+
+    # Find all base64 PNG sources, in order of appearance
+    png_pattern = re.compile(
+        r'<img[^>]*src=["\']data:image/png;base64,([A-Za-z0-9+/=\s]+?)["\'][^>]*>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    matches = list(png_pattern.finditer(drawings_content))
+    if not matches:
+        logging.info("📊 No PNG <img> tags found — content is not in v4.0 format")
+        return []
+
+    logging.info(f"📊 Found {len(matches)} PNG diagrams in v4.0 HTML format")
+    flowables: list = []
+    for i, m in enumerate(matches, 1):
+        b64_data = re.sub(r'\s+', '', m.group(1))  # strip any whitespace
+        try:
+            png_bytes = base64.b64decode(b64_data)
+        except Exception as decode_err:
+            logging.warning(f"⚠️ PNG {i}: base64 decode failed ({decode_err}); skipping")
+            continue
+
+        try:
+            # Use ImageReader to peek at dimensions and scale proportionally
+            img_reader = ImageReader(BytesIO(png_bytes))
+            iw, ih = img_reader.getSize()
+            # Scale so it fits within (max_width × max_height) preserving aspect ratio
+            scale = min(max_width / iw, max_height / ih, 1.0)
+            w = iw * scale
+            h = ih * scale
+            rl_img = RLImage(BytesIO(png_bytes), width=w, height=h)
+            rl_img.hAlign = 'CENTER'
+            # Page break before each figure (except the first) so each FIG lands
+            # on its own page, matching the legacy SVG behavior.
+            if flowables:
+                flowables.append(PageBreak())
+            flowables.append(rl_img)
+            flowables.append(Spacer(1, 12))
+            logging.info(f"✅ FIG. {i}: {iw}x{ih}px → {w:.0f}x{h:.0f}pt")
+        except Exception as render_err:
+            logging.warning(f"⚠️ PNG {i}: failed to build Image flowable ({render_err}); skipping")
+            continue
+
+    logging.info(f"✅ PNG extractor built {len(flowables)} ReportLab flowables")
+    return flowables
+
+
+def extract_drawings_as_reportlab_objects(drawings_content: str, max_width: int = 440, max_height: int = 600) -> list:
+    """
+    Format-detecting extractor: chooses between the legacy SVG processor
+    (extract_svg_drawings_as_reportlab_objects) and the new PNG extractor
+    (extract_png_drawings_as_reportlab_objects) based on what the content
+    contains. This lets the PDF assembly code stay agnostic.
+    """
+    if not drawings_content:
+        return []
+    # New HTML+PNG pipeline emits `<img src="data:image/png;base64,...">` tags.
+    # Detect that first; fall back to the SVG path if no PNG tags are present.
+    if 'data:image/png;base64,' in drawings_content:
+        flowables = extract_png_drawings_as_reportlab_objects(
+            drawings_content, max_width=max_width, max_height=max_height
+        )
+        if flowables:
+            return flowables
+        logging.warning("⚠️ PNG content detected but extractor returned empty; falling back to SVG path")
+    return extract_svg_drawings_as_reportlab_objects(drawings_content)
 
 
 async def generate_patent_content_parts(patent_id: str, language: str, user_id: str):
@@ -26471,69 +26442,18 @@ DESCRIPTION_EN: [English translation of description]"""
     drawings_content_full = patent.get('drawings_content_en', patent.get('drawings_content', ''))
     drawings_content = ""  # Initialize
     
-    # CRITICAL CHECK: Verify existing drawings meet USPTO standards (5-7 diagrams)
-    needs_regeneration = False
-    
+    # 🆕 DESACOPLADO: el PDF NO regenera diagramas de forma síncrona dentro del
+    # request (eso provocaba timeouts de proxy de 60-100s y que un fallo de
+    # diagramas tumbara toda la descarga). Ahora simplemente usamos lo que haya
+    # guardado en la BD. Si no hay diagramas, el PDF sale SIN ellos y el usuario
+    # los genera aparte con el botón "Regenerar diagramas" (job en paralelo en
+    # segundo plano, endpoint POST /patents/{id}/regenerate-diagrams).
     if not drawings_content_full:
-        logging.info("🎨 No drawings found - auto-generating diagrams using GPT-4o...")
-        needs_regeneration = True
-    else:
-        # Check if existing drawings have enough diagrams
-        import re
-        existing_svg_count = len(re.findall(r'<svg[^>]*>', drawings_content_full))
-        logging.info(f"📊 Existing drawings analysis: {existing_svg_count} SVG diagram(s) found in database")
-        
-        if existing_svg_count < 3:
-            logging.warning(f"⚠️ INSUFFICIENT DIAGRAMS: Only {existing_svg_count} diagram(s) found. USPTO standard requires 5-7 diagrams.")
-            logging.warning(f"🔄 Regenerating diagrams with improved prompt to meet standards...")
-            needs_regeneration = True
-    
-    if needs_regeneration:
-        logging.info("🎨 Generating diagrams with enhanced multi-diagram system...")
-        try:
-            # Get patent text for diagram generation
-            if patent.get('generation_method') == 'complete_single_call':
-                patent_text = patent.get('complete_specification_en', '')
-                if not patent_text:
-                    patent_text = patent.get('complete_specification_es', '')
-            else:
-                sections = patent.get('sections', [])
-                patent_text = f"""
-                TITLE: {invention_title_en if language == 'en' else patent.get('invention_title', '')}
-                FIELD: {technical_field_en if language == 'en' else patent.get('technical_field', '')}
-                DESCRIPTION: {patent.get('invention_description', '')}
-                """
-                for section in sorted(sections, key=lambda x: x.get('number', 0)):
-                    patent_text += f"\n\n{section.get('content', '')}"
-            
-            # Generate diagrams using GPT-4o with improved prompt
-            drawings_html_en = await generate_patent_diagrams_gpt4o(
-                patent_text, 
-                invention_title_en if language == 'en' else patent.get('invention_title', '')
-            )
-            
-            # Save to database for future use
-            collection = db.patents if patent.get('status') == 'approved' else db.patents_in_progress
-            await collection.update_one(
-                {"id": patent_id},
-                {"$set": {
-                    "drawings_content": drawings_html_en,
-                    "drawings_content_en": drawings_html_en,
-                    "updated_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-            
-            drawings_content_full = drawings_html_en
-            logging.info(f"✅ Auto-generated diagrams using GPT-4o ({len(drawings_html_en)} chars)")
-            
-        except Exception as e:
-            logging.error(f"❌ Failed to auto-generate drawings with GPT-4o: {str(e)}")
-            import traceback
-            logging.error(traceback.format_exc())
-            import traceback
-            logging.error(traceback.format_exc())
-            drawings_content_full = ""
-    
+        logging.info(
+            "ℹ️ No drawings in DB — generating PDF WITHOUT diagrams. "
+            "User can add them later via regenerate-diagrams (background)."
+        )
+
     if drawings_content_full:
         # Extract body content from HTML (drawings_content is a full HTML document)
         import re
@@ -26707,12 +26627,81 @@ DESCRIPTION_EN: [English translation of description]"""
     else:
         invention_title_numbered = patent.get('invention_title', '')
         technical_field_numbered = patent.get('technical_field', '')
-    
+
+    # ── Resolve inventor address for the algorithm (line-numbered) header ──
+    # Mirrors the resolution chain used by the patent_content header further
+    # below: cv_extracted_address > patent top-level > client record > skip.
+    # We compute it here (and re-use the same names later) so the algorithm
+    # block carries the full inventor identification, not only the name.
+    _cv_addr = patent.get('cv_extracted_address') or {}
+    if not isinstance(_cv_addr, dict):
+        _cv_addr = {}
+
+    _client_addr = {}
+    if patent.get('client_id'):
+        try:
+            _client = await db.clients.find_one({"id": patent['client_id']}, {"_id": 0})
+            if _client:
+                _client_addr = {
+                    'street_address': _client.get('street_address', ''),
+                    'city': _client.get('city', ''),
+                    'state': _client.get('state', ''),
+                    'postal_code': _client.get('postal_code', ''),
+                    'country': _client.get('country', ''),
+                    'email': _client.get('email', ''),
+                    'phone': _client.get('phone', ''),
+                }
+        except Exception as _e:
+            logging.warning(f"Could not load client for algorithm header: {_e}")
+
+    def _resolve_addr(field: str) -> str:
+        for value in (_cv_addr.get(field), patent.get(field), _client_addr.get(field)):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return '[VERIFY]'
+
+    def _v(field: str):
+        raw = _resolve_addr(field)
+        return raw if raw and raw != '[VERIFY]' else None
+
+    _street = _v('street_address')
+    _city = _v('city')
+    _state = _v('state')
+    _postal = _v('postal_code')
+    _country = _v('country')
+    _email = _v('email')
+    _phone = _v('phone')
+
+    _legacy_residence = (patent.get('inventor_residence') or '').strip()
+    _composed_addr_parts = [p for p in [_street, _city, _state, _postal, _country] if p]
+    _residence_line = ', '.join(_composed_addr_parts) if _composed_addr_parts else (_legacy_residence or None)
+
+    _city_state_postal_parts = [p for p in [_city, _state, _postal] if p]
+    _city_state_postal_line = ', '.join(_city_state_postal_parts) if _city_state_postal_parts else None
+
+    _has_any_contact = any([_residence_line, _street, _city_state_postal_line, _country, _email, _phone])
+
+    # Build a plain-text inventor identification block for the algorithm
+    # (line-numbered) header. Each present field becomes its own line so the
+    # USPTO line numbering picks it up cleanly.
+    _algo_addr_lines = []
+    for _label, _value in (
+        ('RESIDENCE', _residence_line),
+        ('STREET ADDRESS', _street),
+        ('CITY / STATE / POSTAL CODE', _city_state_postal_line),
+        ('COUNTRY', _country),
+        ('EMAIL', _email),
+        ('PHONE', _phone),
+    ):
+        if _value:
+            _algo_addr_lines.append(f"{_label}: {_value}")
+    _algo_addr_block = ('\n\n' + '\n\n'.join(_algo_addr_lines)) if _algo_addr_lines else ''
+
     full_text_for_algorithm = f"""UNITED STATES PATENT AND TRADEMARK OFFICE
 
 Provisional Patent Application – 35 U.S.C. §111(b)
 
-APPLICANT: {patent.get('inventor_name', 'Inventor Name').upper()}
+APPLICANT: {patent.get('inventor_name', 'Inventor Name').upper()}{_algo_addr_block}
 
 TITLE OF THE INVENTION: "{invention_title_numbered}"
 
@@ -26739,9 +26728,9 @@ TECHNICAL FIELD: {technical_field_numbered}
     # Extract SVG diagrams as ReportLab Drawing objects (vectorial, not raster)
     diagram_drawing_objects = []
     if drawings_content:
-        logging.info(f"🔄 Extracting SVG diagrams as Drawing objects...")
-        diagram_drawing_objects = extract_svg_drawings_as_reportlab_objects(drawings_content)
-        logging.info(f"📊 Extracted {len(diagram_drawing_objects)} diagram elements (includes spacers)")
+        logging.info(f"🔄 Extracting diagrams as ReportLab flowables (auto-detect PNG/SVG)...")
+        diagram_drawing_objects = extract_drawings_as_reportlab_objects(drawings_content)
+        logging.info(f"📊 Extracted {len(diagram_drawing_objects)} diagram elements (includes spacers/page breaks)")
         formatted_drawings_content = "___DIAGRAM_INSERTION_POINT___"  # Marcador para insertar diagramas
     else:
         logging.info("⚠️ No drawings content available")
@@ -26753,11 +26742,17 @@ TECHNICAL FIELD: {technical_field_numbered}
     # Build patent with proper USPTO header structure
     # Header is added by code (not by GPT) to ensure consistency
     
+    # 🔧 USPTO FORMAT FIX: promote any section heading the LLM emitted as a
+    # numbered body paragraph (e.g. "<p>&#182;0009 CROSS-REFERENCE …</p>") into a
+    # real <h2>. Done HERE — before renumber_paragraphs_sequentially — so the
+    # promoted headings don't consume ¶ numbers (avoids gaps in body numbering).
+    spec_content = _promote_numbered_patent_headings(spec_content)
+
     # CRITICAL: Remove any header that GPT might have generated in spec_content
     # to prevent duplication
     import re
     from bs4 import BeautifulSoup
-    
+
     spec_soup = BeautifulSoup(spec_content, 'html.parser')
     
     # Remove any existing USPTO header from GPT-generated content
@@ -26781,46 +26776,180 @@ TECHNICAL FIELD: {technical_field_numbered}
                 logging.info(f"🧹 Removing duplicate header element: {text[:50]}...")
                 tag.decompose()
     
+    # 🆕 Remove the redundant "INVENTOR INFORMATION" block the LLM emits as
+    # section 0. The canonical inventor header (¶0002-¶0008, USPTO format) is
+    # added by code below, so this LLM block is a duplicate (it was showing up
+    # twice in the PDF). Remove the heading AND all following siblings up to the
+    # next heading. The earlier generic header cleanup misses it because its
+    # parent contains "FIELD OF THE INVENTION".
+    _inv_labels = ("INVENTOR INFORMATION", "INFORMACIÓN DEL INVENTOR",
+                   "INFORMACION DEL INVENTOR")
+    for _heading in spec_soup.find_all(['h1', 'h2', 'h3', 'h4']):
+        _ht = _heading.get_text().strip().upper()
+        if any(lbl in _ht for lbl in _inv_labels):
+            _to_remove = [_heading]
+            _sib = _heading.find_next_sibling()
+            while _sib is not None and not (
+                hasattr(_sib, 'name') and _sib.name in ['h1', 'h2', 'h3', 'h4']
+            ):
+                _to_remove.append(_sib)
+                _sib = _sib.find_next_sibling()
+            for _node in _to_remove:
+                try:
+                    _node.decompose()
+                except Exception:
+                    pass
+            logging.info("🧹 Removed redundant INVENTOR INFORMATION block from spec")
+            break
+
     cleaned_spec_content = str(spec_soup)
     logging.info("✅ Cleaned spec_content to remove any GPT-generated header")
-    
+
+    # ── Resolve inventor address with priority chain ──────────────────────
+    # Priority (per field): cv_extracted_address > patent top-level > client record > [VERIFY]
+    # This mirrors the resolution logic in patent_generation_complete.py so the
+    # USPTO header always shows the most accurate available data.
+    _cv_addr = patent.get('cv_extracted_address') or {}
+    if not isinstance(_cv_addr, dict):
+        _cv_addr = {}
+
+    _client_addr = {}
+    if patent.get('client_id'):
+        try:
+            _client = await db.clients.find_one({"id": patent['client_id']}, {"_id": 0})
+            if _client:
+                _client_addr = {
+                    'street_address': _client.get('street_address', ''),
+                    'city': _client.get('city', ''),
+                    'state': _client.get('state', ''),
+                    'postal_code': _client.get('postal_code', ''),
+                    'country': _client.get('country', ''),
+                    'email': _client.get('email', ''),
+                    'phone': _client.get('phone', ''),
+                }
+                logging.info(f"✅ Loaded client address for patent header: {_client.get('name', 'Unknown')}")
+        except Exception as _e:
+            logging.warning(f"Could not load client for patent header: {_e}")
+
+    def _resolve_addr(field: str) -> str:
+        for value in (_cv_addr.get(field), patent.get(field), _client_addr.get(field)):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return '[VERIFY]'
+
+    def _v(field: str):
+        """Resolve a field but return None if unresolved (so we can skip the line)."""
+        raw = _resolve_addr(field)
+        return raw if raw and raw != '[VERIFY]' else None
+
+    _street = _v('street_address')
+    _city = _v('city')
+    _state = _v('state')
+    _postal = _v('postal_code')
+    _country = _v('country')
+    _email = _v('email')
+    _phone = _v('phone')
+
+    # Compose a single-line residence preview from whichever address parts we have,
+    # falling back to the legacy `inventor_residence` free-text field.
+    _legacy_residence = (patent.get('inventor_residence') or '').strip()
+    _composed_addr_parts = [p for p in [_street, _city, _state, _postal, _country] if p]
+    _residence_line = ', '.join(_composed_addr_parts) if _composed_addr_parts else (_legacy_residence or None)
+
+    # Compose the city/state/postal line only with the parts we actually have.
+    _city_state_postal_parts = [p for p in [_city, _state, _postal] if p]
+    _city_state_postal_line = ', '.join(_city_state_postal_parts) if _city_state_postal_parts else None
+
+    # Determine if we have ANY contact data at all. If not, render a single
+    # red warning instead of empty placeholders — the patent should not be
+    # filed to USPTO until the inventor's contact info is completed.
+    _has_any_contact = any([_residence_line, _street, _city_state_postal_line, _country, _email, _phone])
+
+    def _addr_block(labels: dict, paragraph_offset: int = 4) -> str:
+        """Build the address paragraphs in the requested language, skipping
+        any line whose value is missing. If nothing is known, returns a
+        red-highlighted warning instead.
+        `labels` maps the field-name key (residence/street/city_state_postal/
+        country/email/phone) to its localised label."""
+        if not _has_any_contact:
+            return (
+                '<p>&#182;{n:04d} <strong style="color:#B91C1C;">{warning}</strong></p>'.format(
+                    n=paragraph_offset,
+                    warning=labels['warning'],
+                )
+            )
+        lines = []
+        n = paragraph_offset
+        for key, value in (
+            ('residence', _residence_line),
+            ('street', _street),
+            ('city_state_postal', _city_state_postal_line),
+            ('country', _country),
+            ('email', _email),
+            ('phone', _phone),
+        ):
+            if value:
+                lines.append(f'<p>&#182;{n:04d} <strong>{labels[key]}:</strong> {value}</p>')
+                n += 1
+        return '\n            '.join(lines)
+
     if language == 'es':
         clean_title_es = clean_content(patent['invention_title'])
         clean_field_es = clean_content(patent['technical_field'])
-        
+
+        addr_html = _addr_block({
+            'residence': 'Residencia',
+            'street': 'Dirección postal',
+            'city_state_postal': 'Ciudad / Estado / Código Postal',
+            'country': 'País',
+            'email': 'Email',
+            'phone': 'Teléfono',
+            'warning': 'Falta completar la dirección del inventor antes de presentar esta solicitud al USPTO.',
+        })
+
         # USPTO Header - FORMATO CORRECTO según especificación
         patent_content = f"""
         <div style="text-align: center; margin-bottom: 30px;">
             <h2 style="font-size: 16px; font-weight: bold;">Solicitud de Patente Provisional - 35 U.S.C. Section 111(b)</h2>
         </div>
-        
+
         <div style="margin: 20px 0;">
             <p>&#182;0002 <strong>Título de la Invención:</strong> {clean_title_es}</p>
             <p style="margin-bottom: 10px;"></p>
             <p>&#182;0003 <strong>Inventor:</strong> {patent['inventor_name'].upper()}</p>
             <p style="margin-bottom: 10px;"></p>
-            <p>&#182;0004 <strong>Residencia:</strong> {patent.get('inventor_residence', 'N/A')}</p>
+            {addr_html}
         </div>
-        
+
         <div style="margin-top: 40px;">
             {cleaned_spec_content}
         </div>
         """
     else:
+        addr_html = _addr_block({
+            'residence': 'Residence',
+            'street': 'Street Address',
+            'city_state_postal': 'City / State / Postal Code',
+            'country': 'Country',
+            'email': 'Email',
+            'phone': 'Phone',
+            'warning': 'Inventor address information is missing; complete this before filing with the USPTO.',
+        })
+
         # USPTO Header - FORMATO CORRECTO según especificación
         patent_content = f"""
         <div style="text-align: center; margin-bottom: 30px;">
             <h2 style="font-size: 16px; font-weight: bold;">Provisional Patent Application - 35 U.S.C. Section 111(b)</h2>
         </div>
-        
+
         <div style="margin: 20px 0;">
             <p>&#182;0002 <strong>Title of the Invention:</strong> {invention_title_en}</p>
             <p style="margin-bottom: 10px;"></p>
             <p>&#182;0003 <strong>Inventor:</strong> {patent['inventor_name'].upper()}</p>
             <p style="margin-bottom: 10px;"></p>
-            <p>&#182;0004 <strong>Residence:</strong> {patent.get('inventor_residence', 'N/A')}</p>
+            {addr_html}
         </div>
-        
+
         <div style="margin-top: 40px;">
             {cleaned_spec_content}
         </div>
@@ -26966,16 +27095,20 @@ async def evaluate_patent(
     logging.info(f"🔍 Retrieving evaluation for patent {patent_id}")
     logging.info(f"👤 User: {current_user.email}")
     
-    # Get the existing evaluation from database
-    evaluation = await db.patent_evaluations.find_one(
-        {"patent_id": patent_id},
-        {"_id": 0},
-        sort=[("created_at", -1)]
+    # Get the existing evaluation from database.
+    # CompatCollection.find_one() does NOT accept `sort`; use find().sort().limit(1).
+    _eval_rows = await (
+        db.patent_evaluations
+        .find({"patent_id": patent_id})
+        .sort("created_at", -1)
+        .limit(1)
+        .to_list(1)
     )
-    
+    evaluation = _eval_rows[0] if _eval_rows else None
+
     if not evaluation:
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail="No se encontró evaluación para esta patente. La evaluación se realiza automáticamente durante la generación."
         )
     
@@ -27069,34 +27202,19 @@ async def get_patent_evaluation(
     current_user: User = Depends(get_current_user)
 ):
     """Get the latest evaluation for a patent"""
-    evaluation = await db.patent_evaluations.find_one(
-        {"patent_id": patent_id},
-        {"_id": 0},
-        sort=[("created_at", -1)]
+    # CompatCollection.find_one() does NOT accept `sort`; use find().sort().limit(1).
+    rows = await (
+        db.patent_evaluations
+        .find({"patent_id": patent_id})
+        .sort("created_at", -1)
+        .limit(1)
+        .to_list(1)
     )
-    
+    evaluation = rows[0] if rows else None
+
     if not evaluation:
         raise HTTPException(status_code=404, detail="No evaluation found for this patent")
-    
-    return evaluation
 
-
-
-@api_router.get("/patents/{patent_id}/evaluation")
-async def get_patent_evaluation(
-    patent_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """Get the latest evaluation for a patent"""
-    evaluation = await db.patent_evaluations.find_one(
-        {"patent_id": patent_id},
-        {"_id": 0},
-        sort=[("created_at", -1)]
-    )
-    
-    if not evaluation:
-        raise HTTPException(status_code=404, detail="No evaluation found for this patent")
-    
     return evaluation
 
 
@@ -27180,13 +27298,70 @@ async def download_patent_numbered(
     else:
         invention_title = patent.get('invention_title', '')
         technical_field = patent.get('technical_field', '')
-    
+
+    # ── Resolve inventor address for the numbered header ────────────────
+    # Same priority chain as the rest of the system: cv_extracted_address >
+    # patent top-level > client record > skip.
+    _cv_addr_n = patent.get('cv_extracted_address') or {}
+    if not isinstance(_cv_addr_n, dict):
+        _cv_addr_n = {}
+
+    _client_addr_n = {}
+    if patent.get('client_id'):
+        try:
+            _client_n = await db.clients.find_one({"id": patent['client_id']}, {"_id": 0})
+            if _client_n:
+                _client_addr_n = {
+                    'street_address': _client_n.get('street_address', ''),
+                    'city': _client_n.get('city', ''),
+                    'state': _client_n.get('state', ''),
+                    'postal_code': _client_n.get('postal_code', ''),
+                    'country': _client_n.get('country', ''),
+                    'email': _client_n.get('email', ''),
+                    'phone': _client_n.get('phone', ''),
+                }
+        except Exception as _e:
+            logging.warning(f"Could not load client for numbered header: {_e}")
+
+    def _resolve_n(field: str):
+        for value in (_cv_addr_n.get(field), patent.get(field), _client_addr_n.get(field)):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    _street_n = _resolve_n('street_address')
+    _city_n = _resolve_n('city')
+    _state_n = _resolve_n('state')
+    _postal_n = _resolve_n('postal_code')
+    _country_n = _resolve_n('country')
+    _email_n = _resolve_n('email')
+    _phone_n = _resolve_n('phone')
+
+    _legacy_res_n = (patent.get('inventor_residence') or '').strip()
+    _composed_n = [p for p in [_street_n, _city_n, _state_n, _postal_n, _country_n] if p]
+    _residence_n = ', '.join(_composed_n) if _composed_n else (_legacy_res_n or None)
+    _csp_n = [p for p in [_city_n, _state_n, _postal_n] if p]
+    _city_state_postal_n = ', '.join(_csp_n) if _csp_n else None
+
+    _addr_lines_n = []
+    for _label, _value in (
+        ('RESIDENCE', _residence_n),
+        ('STREET ADDRESS', _street_n),
+        ('CITY / STATE / POSTAL CODE', _city_state_postal_n),
+        ('COUNTRY', _country_n),
+        ('EMAIL', _email_n),
+        ('PHONE', _phone_n),
+    ):
+        if _value:
+            _addr_lines_n.append(f"{_label}: {_value}")
+    _addr_block_n = ('\n\n' + '\n\n'.join(_addr_lines_n)) if _addr_lines_n else ''
+
     # Create full document content
     full_text = f"""UNITED STATES PATENT AND TRADEMARK OFFICE
 
 Provisional Patent Application – 35 U.S.C. §111(b)
 
-APPLICANT: {patent.get('inventor_name', 'Inventor Name').upper()}
+APPLICANT: {patent.get('inventor_name', 'Inventor Name').upper()}{_addr_block_n}
 
 TITLE OF THE INVENTION: "{invention_title}"
 
@@ -30318,35 +30493,36 @@ async def upload_cv_pdf(
         logging.info(f"✅ CV extraction successful: {len(extracted_text)} chars using {extraction_method}")
         
         # Analyze the CV with AI to extract structured information
-        system_message = """Eres un experto en análisis de hojas de vida (CVs). 
+        system_message = """Eres un experto en análisis de hojas de vida (CVs).
 Tu tarea es analizar el CV proporcionado y extraer información clave de manera estructurada y organizada.
 
 Organiza la información en las siguientes categorías:
 1. Información Personal (nombre, título profesional)
-2. Educación (grados académicos, instituciones, años)
-3. Experiencia Profesional (puestos, empresas, responsabilidades clave)
-4. Publicaciones y Investigación (si aplica)
-5. Premios y Reconocimientos
-6. Certificaciones y Habilidades Técnicas
-7. Áreas de Especialización
+2. Datos de Contacto (dirección física completa, ciudad, estado/provincia, país, código postal, email, teléfono)
+3. Educación (grados académicos, instituciones, años)
+4. Experiencia Profesional (puestos, empresas, responsabilidades clave)
+5. Publicaciones y Investigación (si aplica)
+6. Premios y Reconocimientos
+7. Certificaciones y Habilidades Técnicas
+8. Áreas de Especialización
 
-Proporciona un resumen bien estructurado y profesional que pueda ser usado en una propuesta EB-2 NIW."""
-        
+Proporciona un resumen bien estructurado y profesional que pueda ser usado en una propuesta EB-2 NIW o una patente provisional USPTO."""
+
         prompt = f"""Analiza la siguiente hoja de vida y extrae la información clave de manera estructurada:
 
 {extracted_text}
 
-Proporciona un resumen profesional y bien organizado con las categorías mencionadas."""
-        
+Proporciona un resumen profesional y bien organizado con las categorías mencionadas. Para la sección "Datos de Contacto" incluye TODO lo que encuentres en el CV (dirección completa, email, teléfono) — si algún campo no aparece en el CV, escribe "no especificado" en esa línea."""
+
         try:
             # Use GPT-4o-mini for faster CV analysis (10-20x faster than GPT-5)
             analyzed_cv = await call_openai_mini(
-                system_message, 
+                system_message,
                 prompt,
                 temperature=0.3,  # More deterministic = faster
-                max_tokens=2000   # Sufficient for CV analysis
+                max_tokens=2500   # Slightly higher to accommodate the contact section
             )
-            
+
             # If AI analysis fails or returns empty, use the raw text
             if not analyzed_cv or len(analyzed_cv.strip()) < 50:
                 logging.warning("WARNING AI analysis returned empty or too short, using raw extracted text")
@@ -30355,12 +30531,68 @@ Proporciona un resumen profesional y bien organizado con las categorías mencion
             logging.error(f"❌ Error analyzing CV with AI: {str(ai_error)}")
             # If AI analysis fails completely, use the raw extracted text
             analyzed_cv = extracted_text
-        
+
+        # Second call: structured address extraction (JSON). Keeps the markdown
+        # analysis intact for display and adds machine-readable fields that
+        # downstream features (patents, intent letters, etc.) can use directly
+        # without re-parsing markdown.
+        extracted_address = {
+            "street_address": "",
+            "city": "",
+            "state": "",
+            "postal_code": "",
+            "country": "",
+            "email": "",
+            "phone": "",
+        }
+        try:
+            address_system = (
+                "You extract structured contact information from CV text. "
+                "Return ONLY valid JSON matching the requested schema. "
+                "If a field is genuinely not present in the CV, return an empty string for it — never invent values."
+            )
+            address_user = f"""Extract the following contact fields from this CV. Return JSON only, no commentary.
+
+CV TEXT:
+{extracted_text[:12000]}
+
+Required JSON schema (every key must be present, use empty string for missing):
+{{
+  "street_address": "street number + street name only, no city/state/postal",
+  "city": "city or town",
+  "state": "state, province, region — empty string if not in CV",
+  "postal_code": "postal/zip code — empty string if not in CV",
+  "country": "country name (English or Spanish, as written in CV)",
+  "email": "email address",
+  "phone": "phone number with any country code shown"
+}}"""
+            addr_resp = await asyncio.wait_for(
+                openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": address_system},
+                        {"role": "user", "content": address_user},
+                    ],
+                    temperature=0.0,
+                    max_tokens=400,
+                    response_format={"type": "json_object"},
+                ),
+                timeout=30.0,
+            )
+            parsed = json.loads(addr_resp.choices[0].message.content)
+            for k in extracted_address:
+                v = parsed.get(k)
+                if isinstance(v, str):
+                    extracted_address[k] = v.strip()
+        except Exception as addr_err:
+            logging.warning(f"CV address extraction failed (non-fatal): {type(addr_err).__name__}: {addr_err}")
+
         return {
             "success": True,
             "filename": file.filename,
             "raw_text": extracted_text,
             "analyzed_cv": analyzed_cv,
+            "extracted_address": extracted_address,
             "text_length": len(extracted_text),
             "used_ocr": extraction_method == "ocr" or extraction_method == "gpt4o_vision"
         }
@@ -32087,6 +32319,10 @@ async def start_patent_v2(input_data: PatentInput, current_user: User = Depends(
         invention_description=input_data.invention_description,
         inventor_cv=input_data.inventor_cv or input_data.applicant_cv or "",  # ✅ Guardar CV
         project_description=input_data.project_description or "",  # ✅ Guardar descripción del proyecto
+        # Persist CV-extracted address (priority over client record at PDF render time).
+        # Mirrors /patents/start-interactive so the V2 flow reaches the same address
+        # resolution chain in /patents/{id}/download-complete and patent_generation_complete.
+        cv_extracted_address=(input_data.cv_extracted_address or None),
         sections=[],
         current_section=0,
         status="draft",
@@ -36621,30 +36857,31 @@ IMPORTANT: Extract real, specific information from all three documents. Be thoro
                 analysis_raw = analysis_raw[4:]
         extracted_data = json.loads(analysis_raw.strip())
 
-        # Select profile based on recommender's credentials
-        from letter_format_profiles import get_profile
+        # Select profile based on recommender's credentials.
+        # 60/40 weighted picker: usually the voice that matches the recommender's
+        # background, but 40% of the time a random voice so two letters by the
+        # same recommender don't come out identical.
+        from letter_format_profiles import (
+            pick_profile_for_signer,
+            pick_sign_off,
+            make_style_salt,
+            pick_temperature,
+        )
         rec_title = extracted_data.get('recommender_title', '')
         rec_creds = extracted_data.get('recommender_credentials', '')
         rec_org   = extracted_data.get('recommender_organization', '')
-        txt = f"{rec_title} {rec_creds} {rec_org}".lower()
-        if any(k in txt for k in ['secretary','director','agency','department','government','federal','policy','official','commissioner']):
-            format_profile = get_profile('official_government')
-        elif any(k in txt for k in ['professor','ph.d','phd','researcher','university','academic','scholar','faculty','dean']):
-            format_profile = get_profile('academic_institutional')
-        elif any(k in txt for k in ['physician','medical','clinical','health','hospital','surgeon','public health']):
-            format_profile = get_profile('humanitarian_advocate')
-        elif any(k in txt for k in ['attorney','lawyer','counsel','juris','esq','legal']):
-            format_profile = get_profile('classic_legal')
-        elif any(k in txt for k in ['ngo','nonprofit','foundation','humanitarian','social','community']):
-            format_profile = get_profile('humanitarian_advocate')
-        elif any(k in txt for k in ['engineer','cto','technology','software','data science','ai ','machine learning','systems']):
-            format_profile = get_profile('technical_specialist')
-        elif any(k in txt for k in ['ceo','coo','president','vice president','vp','managing director','executive','founder']):
-            format_profile = get_profile('executive_brief')
-        else:
-            format_profile = get_profile('narrative_storyteller')
+        format_profile = pick_profile_for_signer(
+            f"{rec_title} {rec_creds} {rec_org}",
+            random_ratio=0.4,
+        )
+
+        chosen_sign_off = pick_sign_off(format_profile)
+        style_salt = make_style_salt()
+        gen_temperature = pick_temperature()
 
         generation_prompt = f"""Generate a professional EB-2 NIW recommendation letter following the Dhanasar 3-Prong NIW structure.
+
+{style_salt}
 
 **CURRENT DATE: {today_str}** — Use this exact date on the letter. Never invent a different date.
 
@@ -36711,7 +36948,7 @@ Paragraph 13 (Comparative Exceptionality): In the recommender's years working wi
 Paragraph 14 (Conclusion + Strongest Recommendation): Summarize satisfaction of all 3 Dhanasar prongs in flowing prose (not a checklist). Provide strongest professional recommendation for the NIW petition without reservation. State availability for follow-up.
 
 After paragraph 14, close with:
-"Respectfully submitted,"
+"{chosen_sign_off}"
 [Recommender's full name, complete professional title, organization, email, phone]
 
 ---
@@ -36730,11 +36967,15 @@ After paragraph 14, close with:
             system_prompt=RECOMMENDATION_LETTER_SYSTEM_PROMPT + RECOMMENDATION_ANTI_PLACEHOLDER_RULE,
             user_prompt=generation_prompt,
             primary_gemini_fn=call_gemini_flash_lite,
-            temperature=0.35,
+            temperature=gen_temperature,
             max_tokens=8000,
             min_chars=500,
             label=f"recommendation-letter/{letter_id[:8]}",
             timeout_secs=150.0,
+        )
+        logging.info(
+            f"🎨 recommendation letter generated | profile={format_profile['id']} "
+            f"sign_off={chosen_sign_off!r} temp={gen_temperature}"
         )
 
         await _update(80, "Traduciendo al español...")
@@ -37108,8 +37349,11 @@ async def download_recommendation_letter(
         
         # Get format profile for this letter
         from letter_format_profiles import get_profile
+        from pdf_letter_utils import prepare_pdf_settings
         profile = get_profile(letter_doc.get('format_profile_id', 'classic_legal'))
-        p = profile["pdf"]
+        # Resolve fonts via the registry (EB Garamond, Lato, etc. when available;
+        # falls back to Times/Helvetica when the TTFs aren't installed).
+        p = prepare_pdf_settings(profile)
 
         # Get candidate and recommender names for metadata
         candidate_name = letter_doc.get('candidate_name', 'Candidate')
@@ -37309,7 +37553,12 @@ async def download_recommendation_letter(
         content.append(Spacer(1, 0.15*inch))
         date_str = datetime.now().strftime("%B %d, %Y") if language == "en" else (lambda n: f"{n.day} de {['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'][n.month-1]} de {n.year}")(datetime.now())
         content.append(Paragraph(f"Date / Fecha: {date_str}", signature_style))
-        
+
+        # Leave ~1 inch of vertical whitespace right after the sign-off so the
+        # recommender has physical room for a handwritten signature.
+        from pdf_letter_utils import inject_signature_spacer
+        inject_signature_spacer(content, height=70)
+
         # Build PDF
         doc.build(content)
         buffer.seek(0)
@@ -40317,7 +40566,7 @@ CUANDO EL USUARIO PIDA CORRECCIONES O CAMBIOS A UN DOCUMENTO:
         if response is None and openrouter_key:
             try:
                 logger.info(f"💬 [chat {conversation_id}] Trying Claude Opus 4.6 via OpenRouter...")
-                response = await _try_openrouter("anthropic/claude-opus-4-6")
+                response = await _try_openrouter("anthropic/claude-opus-4.6")
                 logger.info(f"✅ [chat {conversation_id}] Claude Opus 4.6 OK ({len(response)} chars)")
             except Exception as e:
                 logger.warning(
@@ -42704,10 +42953,15 @@ async def pm_save_json_override(
     user_email = _get_user_email(current_user)
     now = datetime.now(timezone.utc).isoformat()
 
-    # Determine next version number
-    last = await db.json_override_history.find_one(
-        {"module_id": module_id}, sort=[("version", -1)]
+    # Determine next version number (find_one no acepta sort en CompatCollection)
+    _last_rows = await (
+        db.json_override_history
+        .find({"module_id": module_id})
+        .sort("version", -1)
+        .limit(1)
+        .to_list(1)
     )
+    last = _last_rows[0] if _last_rows else None
     version = (last["version"] + 1) if last else 1
 
     # Save to history
@@ -42853,10 +43107,16 @@ async def pm_restore_json_override_version(
     user_email = _get_user_email(current_user)
     now = datetime.now(timezone.utc).isoformat()
 
-    # Determine next version number (restore creates a new version entry)
-    last = await db.json_override_history.find_one(
-        {"module_id": module_id}, sort=[("version", -1)]
+    # Determine next version number (restore creates a new version entry).
+    # find_one no acepta sort en CompatCollection; usamos find().sort().limit(1).
+    _last_rows = await (
+        db.json_override_history
+        .find({"module_id": module_id})
+        .sort("version", -1)
+        .limit(1)
+        .to_list(1)
     )
+    last = _last_rows[0] if _last_rows else None
     new_version = (last["version"] + 1) if last else 1
 
     restore_note = body.get("notes", f"Restored from v{version}")
@@ -43140,87 +43400,157 @@ def _extract_client_fields(case: dict, source: str) -> dict:
 @api_router.get("/external/search-clients")
 async def search_external_clients(
     q: str = Query("", description="Search query — filters by name/email"),
-    panel_token: str = Query("", description="Panel JWT token passed from iframe URL ?token="),
+    panel_token: str = Query("", description="(Deprecated, ignored) — kept for backwards compatibility with old frontend builds"),
+    include_imported: bool = Query(False, description="If true, include cases already imported into Redactora"),
     current_user: User = Depends(get_current_user),
 ):
-    """Proxy endpoint: searches clients from the external panel.
-    Priority: 1) panel_token from request param, 2) external_token stored in DB, 3) admin credentials fallback."""
+    """Search Portal cases (visa_cases + classic_cases) directly from the shared
+    Supabase database. Replaces the previous HTTP proxy that depended on a
+    panel JWT (which had token-expiration and role-rejection issues).
 
-    # Priority 1: token passed directly from the iframe URL (?token= param forwarded by frontend)
-    ext_token = panel_token.strip() if panel_token and panel_token.strip() else None
+    Only cases with `is_redactora = false` are returned by default — once a
+    case has been imported into Redactora via POST /clients (with
+    external_id/external_source), the source row is flagged and excluded
+    from subsequent searches.
+    """
+    import re as _re
 
-    # Priority 2: token stored in DB during SSO
-    if not ext_token:
-        user_doc = await db.users.find_one({"id": current_user.id}, {"_id": 0, "external_token": 1})
-        ext_token = (user_doc or {}).get("external_token")
+    if not supabase:
+        return {"clients": [], "total": 0, "errors": ["Supabase no inicializado en el backend."]}
 
-    # Priority 3: fall back to admin auto-login
-    if not ext_token:
-        ext_token = await _get_panel_admin_token()
+    # Sanitize the search term for PostgREST `or` filters — these reserve
+    # commas, parentheses, and a few other chars. Strip them; keep alphanumerics
+    # and common name/email characters.
+    q_raw = (q or "").strip()
+    q_safe = _re.sub(r'[,()\\%*]', '', q_raw)
 
-    logging.info(f"search-clients: using token source={'panel_token_param' if panel_token.strip() else 'db_or_admin'}")
-
-    headers = {"Authorization": f"Bearer {ext_token}"}
     results = []
     errors = []
 
-    # Build search param for server-side filtering
-    search_param = f"&search={q}" if q else ""
+    # Frontend gates with min 2 chars — if no query, return empty fast.
+    if not q_safe:
+        return {"clients": [], "total": 0, "errors": []}
 
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        # Endpoint 1: classic cases
-        try:
-            r1 = await client.get(
-                f"{PANEL_BASE_URL}/api/classic-cases/admin?limit=100{search_param}",
-                headers=headers,
+    # ── classic_cases: only `name`, `email`, `status` exist as top-level cols
+    # on this schema. Everything else (phone, country, city, state, etc.)
+    # lives inside the `data` JSONB.
+    try:
+        cq = (
+            supabase.table("classic_cases")
+            .select("id, name, email, status, data, is_redactora")
+            .limit(100)
+        )
+        if not include_imported:
+            cq = cq.eq("is_redactora", False)
+        cq = cq.or_(f"name.ilike.%{q_safe}%,email.ilike.%{q_safe}%")
+        cres = cq.execute()
+        for c in (cres.data or [])[:100]:
+            d = c.get("data") or {}
+            merged = {
+                **d,
+                "id": c.get("id"),
+                "status": c.get("status"),
+                "applicantName": c.get("name"),
+                "applicantEmail": c.get("email"),
+            }
+            results.append(_extract_client_fields(merged, "classic"))
+    except Exception as e:
+        logging.warning(f"search-clients classic_cases query failed: {type(e).__name__}: {e}")
+        errors.append(f"classic_cases: {type(e).__name__}")
+
+    # ── visa_cases: name lives on the case row as `client_name`; full user
+    # info (email, phone, profession) lives in the `users` view via
+    # `client_id`. Two-step query because postgrest in this supabase-py
+    # version doesn't support filtering on embedded resources cleanly.
+    try:
+        # 1) Find users whose name/email match the query.
+        users_res = (
+            supabase.table("users")
+            .select("id, name, email, phone, profession, user_state")
+            .or_(f"name.ilike.%{q_safe}%,email.ilike.%{q_safe}%")
+            .limit(200)
+            .execute()
+        )
+        users_by_id = {u["id"]: u for u in (users_res.data or [])}
+
+        # 2) Get visa_cases for those users (if any), plus visa_cases
+        #    whose client_name matches directly (in case the case row
+        #    has a name that diverges from the user record).
+        case_rows = []
+
+        if users_by_id:
+            vq = (
+                supabase.table("visa_cases")
+                .select("id, status, visa_type, client_id, client_name, metadata, is_redactora")
+                .in_("client_id", list(users_by_id.keys()))
+                .limit(100)
             )
-            logging.info(f"External classic-cases → HTTP {r1.status_code}")
-            if r1.status_code == 200:
-                data1 = r1.json()
-                cases1 = data1 if isinstance(data1, list) else data1.get("cases", [])
-                for c in (cases1 or [])[:100]:
-                    results.append(_extract_client_fields(c, "classic"))
-            elif r1.status_code in (401, 403):
-                _panel_admin_token_cache.clear()
-                errors.append("Token expirado para classic-cases.")
-        except Exception as e:
-            logging.warning(f"Error fetching classic-cases: {type(e).__name__}: {e}")
-            errors.append(f"classic-cases: {type(e).__name__}")
+            if not include_imported:
+                vq = vq.eq("is_redactora", False)
+            case_rows.extend((vq.execute()).data or [])
 
-        # Endpoint 2: visa cases — use server-side search for speed
-        try:
-            r2 = await client.get(
-                f"{PANEL_BASE_URL}/api/admin/visa-cases?limit=100{search_param}",
-                headers=headers,
+        # Also catch cases where client_name on the case matches even
+        # though the linked user record doesn't.
+        vq_name = (
+            supabase.table("visa_cases")
+            .select("id, status, visa_type, client_id, client_name, metadata, is_redactora")
+            .ilike("client_name", f"%{q_safe}%")
+            .limit(100)
+        )
+        if not include_imported:
+            vq_name = vq_name.eq("is_redactora", False)
+        case_rows.extend((vq_name.execute()).data or [])
+
+        # Backfill user info for any case whose user wasn't fetched above.
+        missing_user_ids = [
+            c.get("client_id") for c in case_rows
+            if c.get("client_id") and c["client_id"] not in users_by_id
+        ]
+        if missing_user_ids:
+            extra_users = (
+                supabase.table("users")
+                .select("id, name, email, phone, profession, user_state")
+                .in_("id", list(set(missing_user_ids)))
+                .execute()
             )
-            logging.info(f"External visa-cases → HTTP {r2.status_code}")
-            if r2.status_code == 200:
-                data2 = r2.json()
-                cases2 = data2 if isinstance(data2, list) else data2.get("cases", [])
-                for c in (cases2 or [])[:100]:
-                    results.append(_extract_client_fields(c, "visa"))
-            elif r2.status_code in (401, 403):
-                _panel_admin_token_cache.clear()
-                errors.append("Token expirado para visa-cases.")
-        except Exception as e:
-            logging.warning(f"Error fetching visa-cases: {type(e).__name__}: {e}")
-            errors.append(f"visa-cases: {type(e).__name__}")
+            for u in (extra_users.data or []):
+                users_by_id[u["id"]] = u
 
-    # Filter by query (name or email)
-    if q:
-        q_lower = q.lower()
-        results = [r for r in results if
-                   q_lower in (r.get("name") or "").lower()
-                   or q_lower in (r.get("email") or "").lower()]
+        # Dedupe case_rows by id (the two queries can overlap)
+        seen_case_ids = set()
+        unique_cases = []
+        for c in case_rows:
+            if c.get("id") in seen_case_ids:
+                continue
+            seen_case_ids.add(c.get("id"))
+            unique_cases.append(c)
 
-    # Remove entries without name
+        for c in unique_cases[:100]:
+            u = users_by_id.get(c.get("client_id"), {}) or {}
+            metadata = c.get("metadata") or {}
+            merged = {
+                **(metadata if isinstance(metadata, dict) else {}),
+                "id": c.get("id"),
+                "status": c.get("status"),
+                "visaType": c.get("visa_type"),
+                "userName": u.get("name") or c.get("client_name") or "",
+                "userEmail": u.get("email") or "",
+                "userPhone": u.get("phone") or "",
+                "industry": u.get("profession") or "",
+            }
+            results.append(_extract_client_fields(merged, "visa"))
+    except Exception as e:
+        logging.warning(f"search-clients visa_cases query failed: {type(e).__name__}: {e}")
+        errors.append(f"visa_cases: {type(e).__name__}")
+
+    # Drop entries without a name (defensive)
     results = [r for r in results if r.get("name")]
 
-    # Deduplicate by email, then by external_id
+    # Deduplicate by email, falling back to external_id
     seen = set()
     deduped = []
     for r in results:
-        key = r.get("email") or r.get("external_id") or r.get("name", "")
+        key = (r.get("email") or "").lower() or r.get("external_id") or r.get("name", "")
         if key and key not in seen:
             seen.add(key)
             deduped.append(r)
@@ -43537,45 +43867,218 @@ async def download_econometric_docx(
     )
 
 
+def _strip_patent_header_blocks(spec_html: str) -> str:
+    """Remove any USPTO header / title / inventor block at the top of the spec
+    so the canonical header (added separately) is not duplicated. Mirrors the
+    cleanup performed in download_patent_complete."""
+    if not spec_html:
+        return spec_html
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(spec_html, 'html.parser')
+    except Exception:
+        return spec_html
+
+    # 1. Generic header lines (banner / title / inventor / technical field) —
+    #    only when NOT inside the FIELD OF THE INVENTION block.
+    for tag in soup.find_all(['h1', 'h2', 'h3', 'p', 'div']):
+        text = tag.get_text() or ''
+        if any(ph in text for ph in (
+            'Provisional Patent Application', 'Solicitud de Patente Provisional',
+            '35 U.S.C. Section 111(b)', '35 U.S.C. § 111(b)',
+            'Invention Title:', 'Title of the Invention:', 'Título de la Invención:',
+            'Inventor:', 'Technical Field:', 'Campo Técnico:',
+        )):
+            parent_text = (tag.parent.get_text() if tag.parent else '') or ''
+            if 'FIELD OF THE INVENTION' not in parent_text and 'CAMPO DE LA INVEN' not in parent_text.upper():
+                try:
+                    tag.decompose()
+                except Exception:
+                    pass
+
+    # 2. An "INVENTOR INFORMATION" / "Header" heading and its following block.
+    _labels = ("INVENTOR INFORMATION", "INFORMACIÓN DEL INVENTOR", "INFORMACION DEL INVENTOR",
+               "HEADER", "ENCABEZADO")
+    for heading in soup.find_all(['h1', 'h2', 'h3', 'h4']):
+        ht = re.sub(r'^\s*\d+[\.\)]\s*', '', (heading.get_text() or '').strip().upper())
+        if any(ht == lbl or ht.startswith(lbl + ' ') for lbl in _labels):
+            to_remove = [heading]
+            sib = heading.find_next_sibling()
+            while sib is not None and not (hasattr(sib, 'name') and sib.name in ['h1', 'h2', 'h3', 'h4']):
+                to_remove.append(sib)
+                sib = sib.find_next_sibling()
+            for node in to_remove:
+                try:
+                    node.decompose()
+                except Exception:
+                    pass
+            break
+
+    return str(soup)
+
+
+async def _assemble_patent_header_html(patent: dict, language: str) -> str:
+    """Build the canonical USPTO header (banner + Title + Inventor + address)
+    as HTML, resolving the inventor address with the same priority chain as the
+    complete PDF (cv_extracted_address > patent > client record)."""
+    _cv_addr = patent.get('cv_extracted_address') or {}
+    if not isinstance(_cv_addr, dict):
+        _cv_addr = {}
+    _client_addr = {}
+    if patent.get('client_id'):
+        try:
+            _client = await db.clients.find_one({"id": patent['client_id']}, {"_id": 0})
+            if _client:
+                _client_addr = {k: _client.get(k, '') for k in
+                                ('street_address', 'city', 'state', 'postal_code',
+                                 'country', 'email', 'phone')}
+        except Exception as _e:
+            logging.warning(f"Could not load client for Word header: {_e}")
+
+    def _v(field: str):
+        for value in (_cv_addr.get(field), patent.get(field), _client_addr.get(field)):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    _street, _city, _state = _v('street_address'), _v('city'), _v('state')
+    _postal, _country = _v('postal_code'), _v('country')
+    _email, _phone = _v('email'), _v('phone')
+    _legacy = (patent.get('inventor_residence') or '').strip()
+    _residence = ', '.join([p for p in [_street, _city, _state, _postal, _country] if p]) or (_legacy or None)
+    _csp = ', '.join([p for p in [_city, _state, _postal] if p]) or None
+    _has_contact = any([_residence, _street, _csp, _country, _email, _phone])
+    name = (patent.get('inventor_name', '') or 'Inventor').upper()
+
+    if language == 'es':
+        banner = "Solicitud de Patente Provisional - 35 U.S.C. § 111(b)"
+        title_v = patent.get('invention_title', '') or ''
+        labels = dict(title="Título de la Invención", inventor="Inventor", residence="Residencia",
+                      street="Dirección postal", csp="Ciudad / Estado / Código Postal",
+                      country="País", email="Email", phone="Teléfono")
+        warn = "Falta completar la dirección del inventor antes de presentar esta solicitud al USPTO."
+    else:
+        banner = "Provisional Patent Application - 35 U.S.C. § 111(b)"
+        title_v = patent.get('invention_title_en') or patent.get('invention_title', '') or ''
+        labels = dict(title="Title of the Invention", inventor="Inventor", residence="Residence",
+                      street="Street Address", csp="City / State / Postal Code",
+                      country="Country", email="Email", phone="Phone")
+        warn = "Inventor address information is missing; complete this before filing with the USPTO."
+
+    lines = [f'<p>&#182;0002 <strong>{labels["title"]}:</strong> {title_v}</p>',
+             f'<p>&#182;0003 <strong>{labels["inventor"]}:</strong> {name}</p>']
+    if not _has_contact:
+        lines.append(f'<p>&#182;0004 <strong>{warn}</strong></p>')
+    else:
+        n = 4
+        for key, val in (('residence', _residence), ('street', _street), ('csp', _csp),
+                         ('country', _country), ('email', _email), ('phone', _phone)):
+            if val:
+                lines.append(f'<p>&#182;{n:04d} <strong>{labels[key]}:</strong> {val}</p>')
+                n += 1
+    return f'<h2>{banner}</h2>\n' + '\n'.join(lines)
+
+
 @api_router.get("/patents/{patent_id}/download-docx")
 async def download_patent_docx(
     patent_id: str,
     language: str = "en",
     current_user: User = Depends(get_current_user),
 ):
-    """Download patent specification as Microsoft Word (.docx).
+    """Download the patent as an EDITABLE Microsoft Word (.docx) that mirrors
+    the complete PDF: the full specification (including the inventor/USPTO
+    header block) followed by the figures, in strict black & white.
 
-    Note: drawings/diagrams are NOT included — the .docx export targets
-    editability in Google Docs, where complex USPTO drawings would not
-    render correctly anyway. The companion `/download-complete` PDF
-    remains the canonical filing-quality artifact."""
+    The figures are embedded as images (the same PNGs the complete PDF uses).
+    The line-numbered USPTO filing copy is intentionally omitted — it is a
+    fixed presentation format (available via the "Numbered" download), not
+    something meant to be edited in Word."""
     patent = (await db.patents.find_one({"id": patent_id}, {"_id": 0})
               or await db.patents_in_progress.find_one({"id": patent_id}, {"_id": 0}))
     if not patent:
         raise HTTPException(status_code=404, detail="Patent not found")
-    # Prefer a multi-section structure; fall back to the unified spec field.
-    content = ''
-    sections = patent.get('sections', [])
-    if sections:
-        content = _compile_sectioned_content(sections, language)
-    if not content:
-        content = (patent.get(f'complete_specification_{language}', '')
-                   or patent.get('complete_specification_en', '')
-                   or patent.get(f'content_{language}', '')
-                   or patent.get('content_en', '')
-                   or '')
-    if not content:
+
+    # ── 1. Specification (same primary source as the complete PDF) ────────
+    # complete_specification already contains the inventor/header block + the
+    # full spec, so the Word starts with the same header the PDF shows.
+    spec = (patent.get(f'complete_specification_{language}', '')
+            or patent.get('complete_specification_en', '') or '')
+    used_complete_spec = bool(spec and len(spec) > 100)
+    if not used_complete_spec and patent.get('sections'):
+        spec = _compile_sectioned_content(patent['sections'], language)
+    if not spec:
+        spec = (patent.get(f'content_{language}', '')
+                or patent.get('content_en', '') or '')
+    if not spec:
         raise HTTPException(status_code=404, detail=f"Patent content not available in {language}")
+
+    # ── 2. Normalize to clean HTML ────────────────────────────────────────
+    if used_complete_spec:
+        # Strip translation artifacts exactly like the complete-PDF path.
+        spec = clean_content(spec)
+    # Convert any leftover markdown bold/italic so NO literal "**"/"***" survive.
+    spec = re.sub(r'\*\*\*(.+?)\*\*\*', r'<strong><em>\1</em></strong>', spec, flags=re.DOTALL)
+    spec = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', spec, flags=re.DOTALL)
+    # Convert leading-# markdown headings (sectioned fallback) into <h2>.
+    spec = re.sub(r'(?m)^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$', r'<h2>\1</h2>', spec)
+    # Promote numbered section headers ("<p>&#182;0009 CROSS-REFERENCE…</p>") to <h2>.
+    spec = _promote_numbered_patent_headings(spec)
+    # Strip any header/title/inventor block already in the spec so the canonical
+    # header we add below is not duplicated.
+    spec = _strip_patent_header_blocks(spec)
+
+    # ── 3. Prepend the canonical USPTO header (the start the PDF shows) ───
+    header_html = await _assemble_patent_header_html(patent, language)
+    body = f"{header_html}\n{spec}"
+    # Renumber ¶ markers across header + spec so the numbering is sequential
+    # (¶0001, ¶0002 …) with no gaps — exactly like the complete PDF.
+    body = renumber_paragraphs_sequentially(body)
+
+    # ── 4. Figures — embed the same images the complete PDF shows ─────────
+    drawings = (patent.get(f'drawings_content_{language}', '')
+                or patent.get('drawings_content_en', '')
+                or patent.get('drawings_content', '') or '')
+    content = body
+    if drawings and 'data:image' in drawings:
+        # Drop the inter-figure text separators (they'd show as literal text).
+        drawings = drawings.replace('---DIAGRAM_SEPARATOR---', '')
+        figures_heading = 'DIBUJOS' if language == 'es' else 'DRAWINGS'
+        content = f"{body}\n<h2>{figures_heading}</h2>\n{drawings}"
+
+    # ── 5. Line-numbered USPTO copy (same as the complete PDF appends) ────
+    # Mirror the "Numbered" document: every line numbered, no ¶ markers,
+    # rendered as a monospace block at the very end.
+    try:
+        import html as _html_mod
+        from bs4 import BeautifulSoup as _BS_num
+        numbered_div = apply_uspto_line_numbering(body)
+        numbered_text = _BS_num(numbered_div, 'html.parser').get_text()
+        if numbered_text.strip():
+            numbered_heading = 'DOCUMENTO NUMERADO' if language == 'es' else 'NUMBERED DOCUMENT'
+            # Force a page break before the appendix so it starts on a fresh
+            # page (the previous content ends with the figures, which would
+            # otherwise crowd the numbered copy on the same page).
+            content += (f"\n<div class=\"page-break\"></div>\n"
+                        f"<h2>{numbered_heading}</h2>\n"
+                        f"<pre>{_html_mod.escape(numbered_text)}</pre>")
+    except Exception as _e_num:
+        logging.warning(f"Could not append numbered section to Word: {_e_num}")
+
     title = patent.get('invention_title', 'Patent Specification')
-    applicant = patent.get('applicant_name', '')
     return _docx_response(
         content=content,
         title=title,
         filename_stem=f"Patent_{title.replace(' ', '_')[:60]}",
         doc_type="Provisional Patent Application" if language == 'en' else "Solicitud de Patente Provisional",
-        author=applicant or None,
         language=language,
-        is_html=_looks_like_html(content),
+        is_html=True,
+        # No cover page — the specification already opens with the USPTO header,
+        # matching the complete PDF (which has no separate cover).
+        add_cover=False,
+        # Patents are strictly black & white; render the HTML straight through
+        # (avoids the <strong>→** round-trip that produced literal "**").
+        html_passthrough=True,
+        mono=True,
     )
 
 

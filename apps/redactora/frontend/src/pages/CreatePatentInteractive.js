@@ -20,7 +20,12 @@ const CreatePatentInteractive = () => {
   const [cvData, setCvData] = useState({
     applicant_name: '',
     applicant_cv: '',
-    project_description: ''
+    project_description: '',
+    // Structured contact info extracted from the CV. Backed by the second JSON-mode
+    // call in /upload-cv. Forwarded to /patents/start-interactive so the patent's
+    // INVENTOR INFORMATION block uses CV-extracted values before falling back to
+    // the client record.
+    extracted_address: null
   });
   const [inventionSuggestions, setInventionSuggestions] = useState([]);
   const [patentRecommendation, setPatentRecommendation] = useState(null);
@@ -281,7 +286,8 @@ const CreatePatentInteractive = () => {
       if (response.data.success) {
         setCvData({
           ...cvData,
-          applicant_cv: response.data.analyzed_cv
+          applicant_cv: response.data.analyzed_cv,
+          extracted_address: response.data.extracted_address || null
         });
         toast.success('✅ CV analizado exitosamente');
       }
@@ -384,7 +390,10 @@ const CreatePatentInteractive = () => {
       const patentData = {
         ...formData,
         inventor_cv: formData.inventor_cv || cvData.applicant_cv,
-        project_description: formData.project_description || cvData.project_description
+        project_description: formData.project_description || cvData.project_description,
+        // Address resolution priority for the patent INVENTOR INFORMATION block:
+        // CV-extracted (this field) → top-level patent field → client record → [VERIFY]
+        cv_extracted_address: cvData.extracted_address || null
       };
       const response = await axios.post(`${API}/patents/start-interactive`, patentData, {
         headers: { 'Authorization': `Bearer ${token}` }

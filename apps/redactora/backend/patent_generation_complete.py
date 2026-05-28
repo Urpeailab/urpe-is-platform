@@ -61,6 +61,16 @@ Current Title (TOO GENERIC - you MUST improve it): {invention_title}
 Technical Field: {technical_field}
 Inventor: {inventor_name}
 
+**INVENTOR CONTACT INFORMATION (resolved by the system — use exactly as provided):**
+- Full Name: {inventor_name}
+- Street Address: {street_address}
+- City: {city}
+- State / Region: {state}
+- Postal Code: {postal_code}
+- Country: {country}
+- Email: {email}
+- Phone: {phone}
+
 **PRIMARY CONTEXT - APPLICANT BACKGROUND (USE THIS AS PRIMARY SOURCE):**
 {applicant_cv}
 
@@ -83,12 +93,22 @@ Use this improved title throughout the ENTIRE patent specification.
 
 **REQUIRED SECTIONS (generate ALL sequentially):**
 
+0. **INVENTOR INFORMATION** (output FIRST, before Field of the Invention)
+   <h2><strong>INVENTOR INFORMATION</strong></h2>
+   Render a single block (use <p> tags, one line per field, no paragraph numbers ¶XXXX here) with EXACTLY these labels and the values from the "INVENTOR CONTACT INFORMATION" data above. Preserve "[VERIFY]" verbatim if any field is missing — do NOT invent values.
+   <p><strong>Inventor:</strong> {inventor_name}<br/>
+   <strong>Address:</strong> {street_address}<br/>
+   <strong>City / State / Postal Code:</strong> {city}, {state}, {postal_code}<br/>
+   <strong>Country of Residence:</strong> {country}<br/>
+   <strong>Email:</strong> {email}<br/>
+   <strong>Phone:</strong> {phone}</p>
+
 1. **FIELD OF THE INVENTION** (2-3 paragraphs starting &#182;0001)
-   - **ONLY technical description** - NO inventor information here
+   - **ONLY technical description** - NO inventor information here (it's already in section 0)
    - Technical domain, subfields, relevant applications
    - USPTO classifications (e.g., G06F 9/46, G06N 20/00)
    - Format: "The present invention relates to [technical field]..."
-   - **DO NOT include:** Inventor name, residence, address, email, or phone
+   - **DO NOT repeat inventor name, residence, address, email, or phone in this section** — those belong in the INVENTOR INFORMATION block above
 
 2. **BACKGROUND** (4-5 paragraphs)
    - Current solutions and their limitations (mention 2-3 specific products/systems)
@@ -155,26 +175,21 @@ Use this improved title throughout the ENTIRE patent specification.
    - NO marketing language, NO unnecessary words
    - **CRITICAL**: If draft exceeds 150 words, remove redundant phrases until exactly ≤150 words
 
-**IMPORTANT:** 
-- DO NOT include an "INVENTOR INFORMATION" section at the end
-- Inventor information is automatically added to the PDF header by the system
-- End your content with the ABSTRACT section
+**IMPORTANT:**
+- DO include the **INVENTOR INFORMATION** block (section 0) at the very top, BEFORE Field of the Invention. Use exactly the values from the "INVENTOR CONTACT INFORMATION" data block above — preserve "[VERIFY]" verbatim if a field is missing.
+- DO NOT repeat inventor identification anywhere else in the document. The only place it appears is the INVENTOR INFORMATION block at the top.
+- End your content with the ABSTRACT section.
 
 **OUTPUT FORMAT:**
-- Start IMMEDIATELY with <h2><strong>FIELD OF THE INVENTION</strong></h2>
-- Continue with <p>&#182;0001 [content]</p>
-- **CRITICAL:** DO NOT include USPTO header (Provisional Patent Application, Invention Title, Inventor, Technical Field)
-  → This header is added AUTOMATICALLY by the system
-- **CRITICAL:** DO NOT include inventor information anywhere in the content
-  → Inventor information is in the PDF header ONLY, not in a separate section
-- **CRITICAL:** DO NOT create an "INVENTOR INFORMATION" section at the end
-  → End your content with the ABSTRACT section
-- **CRITICAL:** FIELD OF THE INVENTION must contain ONLY technical description
-  → Start directly with "¶0001 The present invention relates to..."
-- NO introductory text, NO "Here is the patent application", NO header
-- Generate EVERYTHING in this single response
+- Start IMMEDIATELY with the **INVENTOR INFORMATION** block as section 0 (see structure above).
+- Then continue with <h2><strong>FIELD OF THE INVENTION</strong></h2> followed by <p>&#182;0001 [content]</p>.
+- **CRITICAL:** DO NOT add any other USPTO header (Provisional Patent Application banner, Invention Title repeated, Technical Field, etc.). The only header is the INVENTOR INFORMATION block.
+- **CRITICAL:** FIELD OF THE INVENTION must contain ONLY technical description — start directly with "¶0001 The present invention relates to...".
+- **CRITICAL:** CLAIMS and ABSTRACT sections must NOT have paragraph numbers (&#182;XXXX).
+- NO introductory text, NO "Here is the patent application", NO commentary.
+- Generate EVERYTHING in this single response.
 
-Begin now DIRECTLY with Field of the Invention:"""
+Begin now DIRECTLY with the INVENTOR INFORMATION block (section 0):"""
 
 # System message for Spanish translation
 TRANSLATION_SYSTEM_MESSAGE_ES = """You are a professional Spanish translator specialized in legal and technical patent documents.
@@ -244,25 +259,47 @@ TRANSLATION_USER_PROMPT_ES = """Translate the following USPTO patent application
 def get_complete_patent_prompts(patent_data: dict) -> tuple:
     """
     Generate prompts for complete patent generation
-    
+
     Args:
-        patent_data: Dictionary with invention_title, technical_field, inventor_name, invention_description, 
-                     and client address information (city, state, street_address, postal_code, email, phone, country)
-    
+        patent_data: Dictionary with invention_title, technical_field, inventor_name, invention_description,
+                     and client address information (city, state, street_address, postal_code, email, phone, country).
+                     Optionally `cv_extracted_address` (dict) — fields extracted from the CV at upload time.
+
+    Address-resolution priority (per field, applied independently):
+        1. `cv_extracted_address.<field>` (from /upload-cv structured extraction)
+        2. `<field>` (top-level field on the patent record — user input or legacy)
+        3. `client_<field>` (loaded from the linked client record)
+        4. literal "[VERIFY]" placeholder rendered in red by the PDF renderer
+
     Returns:
         tuple: (system_message_en, user_prompt_en)
     """
-    inventor_name = patent_data.get('inventor_name', '')
-    
-    # Get client address information (from client data passed in patent_data)
-    city = patent_data.get('client_city', patent_data.get('city', '[City]'))
-    country = patent_data.get('client_country', patent_data.get('country', '[Country]'))
-    state = patent_data.get('client_state', patent_data.get('state', '[State/Region]'))
-    street_address = patent_data.get('client_street_address', patent_data.get('street_address', '[Street Address]'))
-    postal_code = patent_data.get('client_postal_code', patent_data.get('postal_code', '[Postal Code]'))
-    email = patent_data.get('client_email', patent_data.get('email', '[email@example.com]'))
-    phone = patent_data.get('client_phone', patent_data.get('phone', '[Phone Number]'))
-    
+    inventor_name = patent_data.get('inventor_name', '') or '[VERIFY]'
+
+    # ── Address resolution: CV-extracted > top-level > client record > [VERIFY]
+    cv_addr = patent_data.get('cv_extracted_address') or {}
+    if not isinstance(cv_addr, dict):
+        cv_addr = {}
+
+    def _resolve(field_name: str) -> str:
+        """Return the first non-empty value across the priority chain."""
+        for value in (
+            cv_addr.get(field_name),
+            patent_data.get(field_name),
+            patent_data.get(f'client_{field_name}'),
+        ):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return '[VERIFY]'
+
+    street_address = _resolve('street_address')
+    city = _resolve('city')
+    state = _resolve('state')
+    postal_code = _resolve('postal_code')
+    country = _resolve('country')
+    email = _resolve('email')
+    phone = _resolve('phone')
+
     # Get CV and project description (NEW - these have PRIORITY)
     # ✅ FIX: PatentInProgress stores CV as 'inventor_cv', not 'applicant_cv'
     applicant_cv = patent_data.get('inventor_cv', '') or patent_data.get('applicant_cv', '')

@@ -9,7 +9,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { toast } from 'sonner';
-import { FileText, Download, Loader2, ArrowLeft, ArrowRight, Save, Edit, RefreshCw, CheckCircle, Copy, Globe, Sparkles, Languages, History, MessageSquare, Scale, AlertCircle, X, AlertTriangle, Lightbulb, XCircle, Play } from 'lucide-react';
+import { FileText, Download, Loader2, ArrowLeft, ArrowRight, Save, Edit, RefreshCw, CheckCircle, Copy, Globe, Sparkles, Languages, History, Scale, AlertCircle, X, AlertTriangle, Lightbulb, XCircle, Play } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -33,12 +33,14 @@ const ViewPatent = () => {
   const [saving, setSaving] = useState(false);
   const [evaluationResult, setEvaluationResult] = useState(null);
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
+  const [evaluating, setEvaluating] = useState(false); // loading indicator for diagram generation
   const [generating, setGenerating] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [commentStats, setCommentStats] = useState(null);
   const [generatingTranslation, setGeneratingTranslation] = useState(false);
   const [downloadingPDF, setDownloadingPDF] = useState(false);
+  const [reEvaluating, setReEvaluating] = useState(false);
   const { id } = useParams();
   const navigate = useNavigate();
 
@@ -272,7 +274,10 @@ const ViewPatent = () => {
     try {
       const response = await axios.get(
         `${API}/patents/${id}/download-drawings?language=${language}`,
-        { responseType: 'blob' }
+        {
+          responseType: 'blob',
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        }
       );
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
@@ -288,25 +293,6 @@ const ViewPatent = () => {
     }
   };
 
-  const downloadSpecification = async (language = 'es') => {
-    try {
-      const response = await axios.get(
-        `${API}/patents/${id}/download-specification?language=${language}`,
-        { responseType: 'blob' }
-      );
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      const langSuffix = language === 'es' ? '_ES' : '_EN';
-      link.setAttribute('download', `${patent.invention_title}${langSuffix}.pdf`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      toast.success(`Definición descargada en ${language === 'es' ? 'español' : 'inglés'}`);
-    } catch (error) {
-      toast.error('Error al descargar');
-    }
-  };
 
   const downloadComplete = async (language = 'es') => {
     setDownloadingPDF(true);
@@ -382,7 +368,10 @@ const ViewPatent = () => {
     try {
       const response = await axios.get(
         `${API}/patents/${id}/download-numbered?language=${language}`,
-        { responseType: 'blob' }
+        {
+          responseType: 'blob',
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        }
       );
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
@@ -398,28 +387,102 @@ const ViewPatent = () => {
     }
   };
 
+  const downloadDocx = async (language = 'es') => {
+    try {
+      const response = await axios.get(
+        `${API}/patents/${id}/download-docx?language=${language}`,
+        {
+          responseType: 'blob',
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        }
+      );
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      const langSuffix = language === 'es' ? '_ES' : '_EN';
+      link.setAttribute('download', `${patent.invention_title}${langSuffix}.docx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      toast.success(`Documento Word descargado en ${language === 'es' ? 'español' : 'inglés'} (editable)`);
+    } catch (error) {
+      toast.error('Error al descargar el documento Word');
+    }
+  };
+
+  const reEvaluateCoherence = async () => {
+    setReEvaluating(true);
+    try {
+      const response = await axios.post(
+        `${API}/patents/${id}/evaluate-coherence`,
+        {},
+        { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }
+      );
+      const evaluation = response.data?.coherence_evaluation;
+      if (evaluation) {
+        setPatent((prev) => ({ ...prev, coherence_evaluation: evaluation }));
+        toast.success(`Coherencia evaluada: ${evaluation.coherence_score}/100`);
+      } else {
+        await loadPatent();
+        toast.success('Evaluación de coherencia actualizada');
+      }
+    } catch (error) {
+      toast.error('No se pudo re-evaluar la coherencia');
+    } finally {
+      setReEvaluating(false);
+    }
+  };
+
   const generateDrawings = async () => {
     setEvaluating(true); // Using evaluating state as loading indicator
     try {
       const token = localStorage.getItem('token');
-      toast.info('Generando dibujos técnicos con IA...');
-      
-      const response = await axios.post(
-        `${API}/patents/generate-drawings/${id}`,
+      const authHeader = { headers: { 'Authorization': `Bearer ${token}` } };
+
+      // 1) Fire the background job — returns immediately. The 6 figures are
+      //    generated in parallel (one LLM call per figure), so a single bad
+      //    figure no longer blocks the others.
+      await axios.post(
+        `${API}/patents/${id}/regenerate-diagrams`,
         {},
-        { headers: { 'Authorization': `Bearer ${token}` } }
+        authHeader
       );
-      
-      if (response.data.success !== false) {
-        toast.success('¡Dibujos generados exitosamente!');
-        // Reload patent to get updated drawings_content
+      toast.info('Generando las 6 figuras en paralelo... puede tardar 1-3 minutos.');
+
+      // 2) Poll the patent until diagrams_status resolves (~up to 5 min).
+      let final = null;
+      for (let i = 0; i < 75; i++) {
+        await new Promise((r) => setTimeout(r, 4000));
+        try {
+          const resp = await axios.get(`${API}/patents/${id}`, authHeader);
+          const st = resp.data.diagrams_status;
+          if (st === 'generating') continue;
+          if (st === 'completed' || st === 'partial' || st === 'error') {
+            final = resp.data;
+            break;
+          }
+        } catch (e) {
+          // transient error — keep polling
+        }
+      }
+
+      if (final) {
+        const st = final.diagrams_status;
+        const msg = final.diagrams_message || '';
+        if (st === 'completed') {
+          toast.success('¡Figuras generadas! ' + msg);
+        } else if (st === 'partial') {
+          toast.warning('Algunas figuras fallaron: ' + msg);
+        } else {
+          toast.error('Error generando figuras: ' + msg);
+        }
         await loadPatent();
       } else {
-        toast.warning('No se pudieron generar los dibujos. ' + (response.data.error || ''));
+        toast.warning('La generación sigue en curso. Refresca en un momento para ver las figuras.');
       }
     } catch (error) {
       console.error('Error generating drawings:', error);
-      toast.error('Error al generar dibujos: ' + (error.response?.data?.detail || error.message));
+      toast.error('Error al iniciar generación: ' + (error.response?.data?.detail || error.message));
     } finally {
       setEvaluating(false);
     }
@@ -500,31 +563,41 @@ const ViewPatent = () => {
               </>
             )}
           </Button>
+
+          {/* ── Descargas por documento separado ───────────────────────── */}
+          {/* Diagramas y Numerado solo en inglés (formato de presentación USPTO). */}
+          <Button onClick={() => downloadDrawings('en')} variant="outline" size="sm" className="bg-gray-50">
+            <Download className="mr-1" size={14} />🖼️ Diagramas (EN)
+          </Button>
+          <Button onClick={() => downloadNumbered('en')} variant="outline" size="sm" className="bg-gray-50">
+            <Download className="mr-1" size={14} />🔢 Numerado (EN)
+          </Button>
+
+          {/* ── Word editable (mismo contenido que el PDF Completo) ────────── */}
+          <Button onClick={() => downloadDocx('en')} variant="outline" size="sm" className="bg-indigo-50 border-indigo-300">
+            <Download className="mr-1" size={14} />📝 Word (EN)
+          </Button>
+
           {/* TODO: Botón temporalmente deshabilitado - se incluye automáticamente en descarga completa
           <Button onClick={() => downloadNumbered('en')} variant="outline" size="sm" className="bg-green-50 border-green-300">
             <Download className="mr-1" size={14} />
             📋 Con Líneas Numeradas (EN)
           </Button>
           */}
-          <Button onClick={() => setShowComments(true)} variant="outline" size="sm" className="bg-blue-50 relative">
-            <MessageSquare className="mr-1" size={14} />
-            Comentarios
-            {commentStats && commentStats.open > 0 && (
-              <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                {commentStats.open}
-              </span>
-            )}
-          </Button>
-          <Button 
-            onClick={() => {
-              setShowEvaluationModal(true);
-            }} 
-            variant="outline" 
-            size="sm" 
-            className={patent.evaluation_status ? "bg-green-50 border-green-300" : "bg-gray-50 border-gray-300"}
+          <Button
+            onClick={generateDrawings}
+            variant="outline"
+            size="sm"
+            className="bg-purple-50 border-purple-300"
+            disabled={evaluating}
           >
-            <CheckCircle className="mr-1" size={14} />
-            Ver Evaluación
+            {evaluating ? (
+              <><Loader2 className="mr-1 animate-spin" size={14} />Generando diagramas...</>
+            ) : patent.drawings_content ? (
+              <><RefreshCw className="mr-1" size={14} />Regenerar Diagramas</>
+            ) : (
+              <><Sparkles className="mr-1" size={14} />Generar Diagramas</>
+            )}
           </Button>
           <Button 
             onClick={() => {
@@ -681,6 +754,22 @@ const ViewPatent = () => {
                     <span className="text-gray-600">{patent.coherence_evaluation.recommendation}</span>
                   </div>
                 )}
+
+                <div className="mt-3">
+                  <Button
+                    onClick={reEvaluateCoherence}
+                    variant="outline"
+                    size="sm"
+                    className="bg-white/70"
+                    disabled={reEvaluating}
+                  >
+                    {reEvaluating ? (
+                      <><Loader2 className="mr-1 animate-spin" size={14} />Re-evaluando coherencia...</>
+                    ) : (
+                      <><RefreshCw className="mr-1" size={14} />Re-evaluar coherencia</>
+                    )}
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
@@ -936,12 +1025,31 @@ const ViewPatent = () => {
           </CardContent>
         </Card>
 
+        {!patent.drawings_content && (
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle>Diagramas de Patente (FIG. 1-6)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col items-center justify-center p-8 text-center">
+                <p className="text-gray-600 max-w-md">
+                  Esta patente aún no tiene diagramas. Usa el botón
+                  <span className="font-semibold text-purple-700"> “Generar Diagramas” </span>
+                  de la barra superior. Las 6 figuras (FIG. 1-6) se generan en paralelo;
+                  si alguna falla, las demás igual se incluyen. El PDF se puede descargar
+                  sin diagramas mientras tanto.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {patent.drawings_content && (
           <Card className="mt-4">
             <CardHeader>
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Dibujos de Patente (FIG. 1-7)</CardTitle>
+                  <CardTitle>Dibujos de Patente (FIG. 1-6)</CardTitle>
                   {!editingDrawings && (
                     <p className="text-sm text-gray-500 mt-1">
                       {currentLanguage === 'es' ? 'Versión en Español' : 'English Version'}
@@ -949,10 +1057,12 @@ const ViewPatent = () => {
                   )}
                 </div>
                 {!editingDrawings ? (
-                  <Button onClick={() => setEditingDrawings(true)} variant="outline" size="sm">
-                    <Edit className="mr-2" size={16} />
-                    Editar
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button onClick={() => setEditingDrawings(true)} variant="outline" size="sm">
+                      <Edit className="mr-2" size={16} />
+                      Editar
+                    </Button>
+                  </div>
                 ) : (
                   <div className="flex gap-2">
                     <Button 

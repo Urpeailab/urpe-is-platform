@@ -144,7 +144,12 @@ const Dashboard = () => {
         state: client.state || '',
         industry: client.industry || '',
         notes: [client.notes, `Importado de: ${client.external_source} (ID: ${client.external_id})`].filter(Boolean).join(' | '),
-        tags: ['importado-panel']
+        tags: ['importado-panel'],
+        // Tell the backend to flag the source case row in the shared
+        // Supabase DB (is_redactora=true) so it's excluded from subsequent
+        // panel searches.
+        external_id: client.external_id || null,
+        external_source: client.external_source || null,
       };
       await axios.post(`${API}/clients`, payload, {
         headers: { 'Authorization': `Bearer ${token}` }

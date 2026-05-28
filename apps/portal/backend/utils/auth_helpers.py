@@ -16,9 +16,9 @@ def verify_staff_token_impl(authorization: str) -> dict:
         token = authorization.replace('Bearer ', '')
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         
-        # Check if user is staff
+        # Check if user is staff (api_token and admin_system are staff-delegated tokens)
         user_type = payload.get('type')
-        if user_type not in ['staff', 'admin']:
+        if user_type not in ['staff', 'admin', 'api_token', 'admin_system']:
             raise HTTPException(status_code=403, detail="Staff access required")
         
         return payload
