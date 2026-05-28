@@ -638,6 +638,10 @@ After paragraph 14, close with:
             system_prompt=EXPERT_LETTER_SYSTEM_PROMPT + ANTI_PLACEHOLDER_RULE,
             user_prompt=generation_prompt,
             primary_gemini_fn=_call_gemini_flash_lite,
+            # OpenAI-directo como último escalón: si OpenRouter está caído
+            # (key revocada, sin saldo), GPT-4o salva la carta sin que el
+            # usuario tenga que hacer nada.
+            openai_gpt4o_fn=_call_openai_gpt4o,
             temperature=gen_temperature,
             max_tokens=8000,
             min_chars=500,

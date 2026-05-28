@@ -4481,14 +4481,17 @@ class NIWSection(BaseModel):
 
 class NIWInProgress(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: Optional[str] = None
     client_id: Optional[str] = None
-    project_title: str
-    applicant_name: str
-    applicant_cv: str
-    project_idea: str
+    # Mismos motivos que en Patent/PatentInProgress: filas legacy o NIWs creados
+    # antes de que estos campos fueran obligatorios pueden tener NULL → el
+    # response_model=List[NIWInProgress] del listado por cliente reventaba 500.
+    project_title: Optional[str] = ""
+    applicant_name: Optional[str] = ""
+    applicant_cv: Optional[str] = ""
+    project_idea: Optional[str] = ""
     patent_info: Optional[str] = ""
     language: str = "en"
     has_graphic_design: bool = False
@@ -4507,6 +4510,14 @@ class NIWInProgress(BaseModel):
     updated_by: Optional[str] = None
     created_by_name: Optional[str] = None
     updated_by_name: Optional[str] = None
+
+    @field_validator(
+        "project_title", "applicant_name", "applicant_cv", "project_idea",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_niw_strs_none_to_empty(cls, v):
+        return "" if v is None else v
 
 # Patent Application Models
 class PatentSection(BaseModel):
@@ -4542,15 +4553,20 @@ class PatentInput(BaseModel):
 
 class PatentInProgress(BaseModel):
     model_config = ConfigDict(extra="allow")  # Allow extra fields like content_es, content_en
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: Optional[str] = None
     client_id: Optional[str] = None
-    invention_title: str
-    inventor_name: str
-    inventor_residence: str
-    invention_description: str
-    technical_field: str
+    # Estos campos provienen del formulario de creación. Los hacemos opcionales
+    # con default "" porque filas legacy / parcialmente generadas pueden tenerlos
+    # NULL en Supabase, y antes el GET reventaba con ValidationError al leerlas.
+    # Pydantic v2 no cae al default cuando la clave existe con valor None — por
+    # eso usamos field_validator(mode="before") para coercer None → "".
+    invention_title: Optional[str] = ""
+    inventor_name: Optional[str] = ""
+    inventor_residence: Optional[str] = ""
+    invention_description: Optional[str] = ""
+    technical_field: Optional[str] = ""
     inventor_cv: Optional[str] = ""  # ✅ NUEVO: CV del inventor
     project_description: Optional[str] = ""  # ✅ NUEVO: Descripción del proyecto
     mode: str = "SPEC"  # SPEC, DRAWINGS, or BOTH
@@ -4568,18 +4584,33 @@ class PatentInProgress(BaseModel):
     created_by_name: Optional[str] = None
     updated_by_name: Optional[str] = None
 
+    @field_validator(
+        "invention_title", "inventor_name", "inventor_residence",
+        "invention_description", "technical_field",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_none_to_empty(cls, v):
+        return "" if v is None else v
+
 class Patent(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: Optional[str] = None
     client_id: Optional[str] = None
-    invention_title: str
-    inventor_name: str
-    inventor_residence: str
-    invention_description: str
-    technical_field: str
-    specification_content: str
+    # Estos campos pueden venir NULL en filas legacy o estar ausentes en el
+    # `data` JSONB de patentes parcialmente migradas. Antes el GET reventaba
+    # con `ValidationError: specification_content Field required` al leer
+    # una patente "completed" sin el campo poblado. Los hacemos opcionales
+    # con default "" y coercemos None → "" con field_validator(mode="before")
+    # porque pydantic v2 no aplica el default cuando la clave existe con None.
+    invention_title: Optional[str] = ""
+    inventor_name: Optional[str] = ""
+    inventor_residence: Optional[str] = ""
+    invention_description: Optional[str] = ""
+    technical_field: Optional[str] = ""
+    specification_content: Optional[str] = ""
     drawings_content: Optional[str] = None
     language: str = "en"
     status: str = "completed"
@@ -4588,6 +4619,15 @@ class Patent(BaseModel):
     problematic_sections: Optional[List[str]] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator(
+        "invention_title", "inventor_name", "inventor_residence",
+        "invention_description", "technical_field", "specification_content",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_none_to_empty(cls, v):
+        return "" if v is None else v
 
 
 # ============================================================================
@@ -30458,25 +30498,37 @@ async def upload_cv_pdf(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user)
 ):
-    """Upload and extract text from CV PDF or Word document"""
+    """Upload and extract text from CV PDF or Word document.
+
+    Stage-tracked: cada fase (read, extract, ai_analysis, address_extraction)
+    se etiqueta para que un 500 nos diga exactamente cuál falló. Antes el
+    `except Exception` final tragaba el detalle y el cliente solo veía
+    "Error al procesar el PDF: <repr>" sin pista de la fase. Esto es lo
+    que rompió "leer CV" en producción sin traceback en el log."""
+    fname = (file.filename or "").lower()
+    stage = "init"
+    logging.info(f"📄 [upload-cv] user={current_user.email} file={file.filename!r} content_type={file.content_type!r}")
     try:
-        # Read file content
+        # Phase 1: read bytes from the upload
+        stage = "read"
         content = await file.read()
+        logging.info(f"📄 [upload-cv] stage={stage} bytes={len(content)}")
+        if not content:
+            raise HTTPException(status_code=400, detail="El archivo está vacío.")
+
         extracted_text = ""
         extraction_method = "none"
-        
-        # Extract text based on file type
-        if file.filename.endswith('.pdf'):
+
+        # Phase 2: text extraction (PDF or DOCX)
+        stage = "extract"
+        if fname.endswith('.pdf'):
             extracted_text, extraction_method = await extract_text_from_pdf_robust(content, file.filename)
-                    
-        elif file.filename.endswith(('.doc', '.docx')):
-            # Extract from Word (including tables)
+
+        elif fname.endswith(('.doc', '.docx')):
             doc = docx.Document(io.BytesIO(content))
-            # Extract from paragraphs
             for paragraph in doc.paragraphs:
                 if paragraph.text.strip():
                     extracted_text += paragraph.text + "\n"
-            # Extract from tables (many CVs use tables for layout)
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
@@ -30485,20 +30537,25 @@ async def upload_cv_pdf(
             extraction_method = "docx"
         else:
             raise HTTPException(
-                status_code=400, 
-                detail="Solo se permiten archivos PDF, DOC o DOCX"
+                status_code=400,
+                detail=f"Solo se permiten archivos PDF, DOC o DOCX (recibido: {file.filename!r})",
             )
         
         # Clean up the text
+        stage = "post_extract"
         extracted_text = extracted_text.strip()
-        
+
         if not extracted_text or len(extracted_text) < 50:
             raise HTTPException(
-                status_code=400, 
-                detail="No se pudo extraer texto del PDF. El archivo puede estar dañado o ser una imagen sin texto reconocible."
+                status_code=400,
+                detail=(
+                    "No se pudo extraer texto del archivo. "
+                    "El CV puede estar dañado o ser una imagen escaneada sin texto reconocible. "
+                    f"Método usado: {extraction_method}, caracteres extraídos: {len(extracted_text)}."
+                ),
             )
-        
-        logging.info(f"✅ CV extraction successful: {len(extracted_text)} chars using {extraction_method}")
+
+        logging.info(f"✅ [upload-cv] extraction OK: {len(extracted_text)} chars via {extraction_method}")
         
         # Analyze the CV with AI to extract structured information
         system_message = """Eres un experto en análisis de hojas de vida (CVs).
@@ -30522,6 +30579,7 @@ Proporciona un resumen bien estructurado y profesional que pueda ser usado en un
 
 Proporciona un resumen profesional y bien organizado con las categorías mencionadas. Para la sección "Datos de Contacto" incluye TODO lo que encuentres en el CV (dirección completa, email, teléfono) — si algún campo no aparece en el CV, escribe "no especificado" en esa línea."""
 
+        stage = "ai_analysis"
         try:
             # Use GPT-4o-mini for faster CV analysis (10-20x faster than GPT-5)
             analyzed_cv = await call_openai_mini(
@@ -30536,8 +30594,11 @@ Proporciona un resumen profesional y bien organizado con las categorías mencion
                 logging.warning("WARNING AI analysis returned empty or too short, using raw extracted text")
                 analyzed_cv = extracted_text
         except Exception as ai_error:
-            logging.error(f"❌ Error analyzing CV with AI: {str(ai_error)}")
-            # If AI analysis fails completely, use the raw extracted text
+            # Non-fatal: si el LLM falla por timeout/billing/rate-limit/etc.,
+            # devolvemos el texto crudo del CV. El operador puede seguir adelante
+            # con el flujo de generación; perdimos la versión "linda" del resumen
+            # pero NO bloqueamos al usuario por un problema upstream.
+            logging.warning(f"⚠️ [upload-cv] AI análisis falló ({type(ai_error).__name__}: {ai_error}); usando texto crudo")
             analyzed_cv = extracted_text
 
         # Second call: structured address extraction (JSON). Keeps the markdown
@@ -30608,8 +30669,17 @@ Required JSON schema (every key must be present, use empty string for missing):
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"❌ Error processing CV: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error al procesar el PDF: {str(e)}")
+        # Stage-aware error: dice EXACTAMENTE en qué fase explotó (read /
+        # extract / post_extract / ai_analysis / address). Sin esto el cliente
+        # solo ve "Error al procesar el PDF" y no podemos debuggear.
+        import traceback as _tb
+        tb_str = _tb.format_exc()
+        logging.error(f"❌ [upload-cv] FAIL stage={stage} file={file.filename!r}: {type(e).__name__}: {e}")
+        logging.error(f"❌ [upload-cv] traceback:\n{tb_str}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al procesar el CV (fase: {stage}): {type(e).__name__}: {str(e)[:300]}",
+        )
 
 
 @api_router.post("/upload-project")
@@ -36731,6 +36801,12 @@ async def generate_recommendation_letter(
     project_info: UploadFile = File(..., description="Información del Proyecto (obligatorio)"),
     recommender_cv: UploadFile = File(..., description="CV del Firmante (obligatorio)"),
     client_id: Optional[str] = Form(None),
+    # Texto libre que escribe el operador con el contexto de la relación entre
+    # el firmante (recommender) y el candidato. Mejora dramáticamente la calidad
+    # del párrafo 3 ("Professional Relationship") y la verificación de logros,
+    # porque el LLM ya no tiene que inferirlo desde el CV — recibe la versión
+    # textual de cómo se conocen, hace cuánto, en qué proyectos colaboraron, etc.
+    relationship_context: Optional[str] = Form(""),
     current_user: User = Depends(get_current_user)
 ):
     """
@@ -36750,6 +36826,8 @@ async def generate_recommendation_letter(
     format_profile = pick_random_profile()
     today_str = dt.now().strftime("%B %d, %Y")
 
+    relationship_context = (relationship_context or "").strip()
+
     letter_doc = {
         "id": letter_id,
         "user_id": current_user.id,
@@ -36767,6 +36845,7 @@ async def generate_recommendation_letter(
         "format_profile_id": format_profile["id"],
         "progress_percentage": 5,
         "progress_message": "Extrayendo texto de los documentos...",
+        "relationship_context": relationship_context,  # auditoría
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
@@ -36777,7 +36856,8 @@ async def generate_recommendation_letter(
         letter_id, candidate_cv_bytes, candidate_cv.filename,
         project_info_bytes, project_info.filename,
         recommender_cv_bytes, recommender_cv.filename,
-        format_profile, today_str, client_id, current_user.id
+        format_profile, today_str, client_id, current_user.id,
+        relationship_context,
     )
 
     return {"letter_id": letter_id, "status": "generating", "message": "Generación iniciada en segundo plano"}
@@ -36788,7 +36868,8 @@ async def _generate_recommendation_letter_background(
     candidate_cv_bytes: bytes, candidate_cv_filename: str,
     project_info_bytes: bytes, project_info_filename: str,
     recommender_cv_bytes: bytes, recommender_cv_filename: str,
-    format_profile: dict, today_str: str, client_id: str, user_id: str
+    format_profile: dict, today_str: str, client_id: str, user_id: str,
+    relationship_context: str = "",
 ):
     """Background task: runs the AI calls and updates recommendation letter document."""
 
@@ -36819,6 +36900,18 @@ async def _generate_recommendation_letter_background(
 
         await _update(30, "Analizando documentos con IA...")
 
+        # Bloque opcional con contexto operador-provisto sobre la relación
+        # firmante↔candidato. Se incluye SOLO si el operador escribió algo;
+        # cuando está vacío no agregamos sección en blanco para no enseñarle al
+        # LLM a inventarse contexto cuando no lo tiene.
+        relationship_block_analysis = (
+            f"\n\n**OPERATOR-PROVIDED RELATIONSHIP CONTEXT (firmante ↔ candidato):**\n"
+            f"This is direct information from the URPE IS team about how the recommender knows "
+            f"the candidate. Treat it as authoritative when extracting `recommender_relationship`. "
+            f"If it conflicts with the CVs, the operator context wins.\n\n"
+            f"{relationship_context[:3000]}"
+        ) if relationship_context else ""
+
         analysis_prompt = f"""You are analyzing three documents for generating a professional EB-2 NIW recommendation letter aligned with Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
 
 **DOCUMENT 1 - CANDIDATE'S CV:**
@@ -36828,7 +36921,7 @@ async def _generate_recommendation_letter_background(
 {project_info_text[:8000]}
 
 **DOCUMENT 3 - RECOMMENDER'S CV:**
-{recommender_cv_text[:6000]}
+{recommender_cv_text[:6000]}{relationship_block_analysis}
 
 Extract and return ONLY a JSON object with this structure:
 {{
@@ -36887,6 +36980,21 @@ IMPORTANT: Extract real, specific information from all three documents. Be thoro
         style_salt = make_style_salt()
         gen_temperature = pick_temperature()
 
+        # Precomputed para inyectar limpio en la f-string del generation_prompt.
+        # Python < 3.12 no permite backslashes (`\n`) en expresiones `{...}`
+        # dentro de f-strings — por eso construimos el bloque acá y solo
+        # interpolamos la variable (sin expresiones complejas) más abajo.
+        relationship_block_generation = (
+            "\n## OPERATOR-PROVIDED RELATIONSHIP CONTEXT (firmante ↔ candidato):\n"
+            "This is verified context from the URPE IS team about how the recommender "
+            "and the candidate know each other (duration, nature of collaboration, projects together, "
+            "what the recommender directly observed). Use it as the SOURCE OF TRUTH for Paragraph 3 "
+            "(Professional Relationship), Paragraphs 7-9 (Three Achievement Paragraphs — verified events), "
+            "and Paragraph 13 (Comparative Exceptionality). Quote concrete details (dates, project names, "
+            "specific events) from this context — they are real, not invented.\n\n"
+            f"{relationship_context}\n"
+        ) if relationship_context else ""
+
         generation_prompt = f"""Generate a professional EB-2 NIW recommendation letter following the Dhanasar 3-Prong NIW structure.
 
 {style_salt}
@@ -36915,7 +37023,7 @@ IMPORTANT: Extract real, specific information from all three documents. Be thoro
 - Credentials & Expertise: {extracted_data['recommender_credentials']}
 - Email: {extracted_data.get('recommender_email', '')}
 - Phone: {extracted_data.get('recommender_phone', '')}
-
+{relationship_block_generation}
 ---
 ## MANDATORY FORMAT — Flowing Professional Letter (NO section headers):
 
@@ -36975,6 +37083,8 @@ After paragraph 14, close with:
             system_prompt=RECOMMENDATION_LETTER_SYSTEM_PROMPT + RECOMMENDATION_ANTI_PLACEHOLDER_RULE,
             user_prompt=generation_prompt,
             primary_gemini_fn=call_gemini_flash_lite,
+            # OpenAI-directo como último escalón cuando OpenRouter está caído.
+            openai_gpt4o_fn=call_openai_gpt4o,
             temperature=gen_temperature,
             max_tokens=8000,
             min_chars=500,
@@ -37034,13 +37144,21 @@ Provide ONLY the Spanish translation."""
         letter_content_en = _clean(letter_content_en)
         letter_content_es = _clean(letter_content_es or letter_content_en)
 
+        # Sanitiza placeholders del LLM ("Not provided", "N/A", …) ANTES de
+        # guardar, para que el bloque de firma del PDF/Word no muestre basura
+        # cuando la extracción del CV falla parcialmente. El bloque de firma
+        # filtra otra vez en render (defense in depth), pero limpiar acá deja
+        # la BD coherente para listados, búsquedas y auditoría.
         await _update(100, "Carta generada exitosamente", {
             "status": "completed",
-            "candidate_name": extracted_data['candidate_name'],
-            "candidate_field": extracted_data['candidate_field'],
-            "recommender_name": extracted_data['recommender_name'],
-            "recommender_organization": extracted_data['recommender_organization'],
-            "project_title": extracted_data.get('project_title', ''),
+            "candidate_name": _clean_recommender_field(extracted_data.get('candidate_name')),
+            "candidate_field": _clean_recommender_field(extracted_data.get('candidate_field')),
+            "recommender_name": _clean_recommender_field(extracted_data.get('recommender_name')),
+            "recommender_title": _clean_recommender_field(extracted_data.get('recommender_title')),
+            "recommender_organization": _clean_recommender_field(extracted_data.get('recommender_organization')),
+            "recommender_email": _clean_recommender_field(extracted_data.get('recommender_email')),
+            "recommender_phone": _clean_recommender_field(extracted_data.get('recommender_phone')),
+            "project_title": _clean_recommender_field(extracted_data.get('project_title')),
             "content_en": letter_content_en,
             "content_es": letter_content_es,
             "extracted_data": extracted_data,
@@ -37336,6 +37454,32 @@ async def delete_recommendation_letter(
         raise HTTPException(status_code=500, detail="Error deleting letter")
 
 
+def _clean_recommender_field(value) -> str:
+    """Sanitiza placeholders que el LLM extractor a veces escribe cuando no
+    puede leer un campo del CV (CV escaneado, formato ambiguo, etc.).
+
+    Antes el PDF mostraba `Not provided` en el bloque de firma porque
+    `letter_doc['recommender_name']` venía con ese string literal — el LLM
+    extrajo el JSON con "Not provided" como nombre y se guardó tal cual.
+    Esto devuelve "" cuando el valor es uno de esos placeholders, para que
+    el caller pueda condicionar el render (no escribir la línea vs escribirla).
+    """
+    if not value:
+        return ""
+    v = str(value).strip()
+    if not v:
+        return ""
+    placeholders = {
+        "not provided", "no proporcionado", "n/a", "na", "none", "null",
+        "unknown", "tbd", "to be determined", "placeholder",
+        "recommender", "candidate", "applicant",
+        "[name]", "[recommender name]", "[full name]",
+    }
+    if v.lower() in placeholders:
+        return ""
+    return v
+
+
 @api_router.get("/recommendation-letters/{letter_id}/download")
 async def download_recommendation_letter(
     letter_id: str,
@@ -37363,9 +37507,16 @@ async def download_recommendation_letter(
         # falls back to Times/Helvetica when the TTFs aren't installed).
         p = prepare_pdf_settings(profile)
 
-        # Get candidate and recommender names for metadata
-        candidate_name = letter_doc.get('candidate_name', 'Candidate')
-        recommender_name = letter_doc.get('recommender_name', 'Recommender')
+        # Get candidate and recommender names for metadata. Sanitize placeholder
+        # values like "Not provided" that the LLM extractor sometimes emits when
+        # it can't read a field from the CV — we don't want those leaking into
+        # the PDF signature block (which is what the user saw in production).
+        candidate_name = _clean_recommender_field(letter_doc.get('candidate_name')) or 'Candidate'
+        recommender_name_clean = _clean_recommender_field(letter_doc.get('recommender_name'))
+        recommender_name = recommender_name_clean or 'Recommender'
+        recommender_title_clean = _clean_recommender_field(letter_doc.get('recommender_title'))
+        recommender_org_clean = _clean_recommender_field(letter_doc.get('recommender_organization'))
+        recommender_email_clean = _clean_recommender_field(letter_doc.get('recommender_email'))
         lang_text = "Español" if language == "es" else "English"
         
         # Create PDF with profile settings
@@ -37544,20 +37695,21 @@ async def download_recommendation_letter(
         )
         
         content.append(Spacer(1, 0.4*inch))
-        
-        # Signature line
+
+        # Signature line — siempre se renderiza para dejar espacio físico para
+        # la firma manuscrita. Los campos textuales debajo solo aparecen si
+        # tienen valor real (no placeholders del LLM como "Not provided").
         content.append(Paragraph("_" * 40, signature_style))
         content.append(Spacer(1, 0.05*inch))
-        content.append(Paragraph(f"<b>{recommender_name}</b>", signature_bold_style))
-        
-        # Add additional info if available
-        if letter_doc.get('recommender_title'):
-            content.append(Paragraph(letter_doc['recommender_title'], signature_style))
-        if letter_doc.get('recommender_organization'):
-            content.append(Paragraph(letter_doc['recommender_organization'], signature_style))
-        if letter_doc.get('recommender_email'):
-            content.append(Paragraph(letter_doc['recommender_email'], signature_style))
-        
+        if recommender_name_clean:
+            content.append(Paragraph(f"<b>{recommender_name_clean}</b>", signature_bold_style))
+        if recommender_title_clean:
+            content.append(Paragraph(recommender_title_clean, signature_style))
+        if recommender_org_clean:
+            content.append(Paragraph(recommender_org_clean, signature_style))
+        if recommender_email_clean:
+            content.append(Paragraph(recommender_email_clean, signature_style))
+
         content.append(Spacer(1, 0.15*inch))
         date_str = datetime.now().strftime("%B %d, %Y") if language == "en" else (lambda n: f"{n.day} de {['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'][n.month-1]} de {n.year}")(datetime.now())
         content.append(Paragraph(f"Date / Fecha: {date_str}", signature_style))
@@ -44096,23 +44248,65 @@ async def download_recommendation_letter_docx(
     language: str = "en",
     current_user: User = Depends(get_current_user),
 ):
-    """Download recommendation letter as Microsoft Word (.docx)."""
+    """Download recommendation letter as Microsoft Word (.docx).
+
+    Appends a signature block (línea horizontal para firma manuscrita +
+    nombre/título/organización/email + fecha) al HTML antes de pasarlo al
+    renderer. Antes el Word terminaba con "Sincerely, [nombre]" del cuerpo
+    pero NO tenía la línea horizontal para que el firmante firmara a mano
+    — el PDF sí la tenía. Esto trae paridad PDF↔Word.
+    """
     letter = await db.recommendation_letters.find_one({"id": letter_id}, {"_id": 0})
     if not letter:
         raise HTTPException(status_code=404, detail="Letter not found")
     content = letter.get(f'content_{language}') or letter.get('content_en')
     if not content:
         raise HTTPException(status_code=404, detail=f"Content in {language} not available")
-    candidate = letter.get('candidate_name', 'Candidate')
-    recommender = letter.get('recommender_name', 'Recommender')
+
+    candidate = _clean_recommender_field(letter.get('candidate_name')) or 'Candidate'
+    rec_name = _clean_recommender_field(letter.get('recommender_name'))
+    rec_title = _clean_recommender_field(letter.get('recommender_title'))
+    rec_org = _clean_recommender_field(letter.get('recommender_organization'))
+    rec_email = _clean_recommender_field(letter.get('recommender_email'))
+
+    # Fecha localizada según idioma de la carta
+    today = datetime.now()
+    if language == 'es':
+        meses = ['enero','febrero','marzo','abril','mayo','junio',
+                 'julio','agosto','septiembre','octubre','noviembre','diciembre']
+        date_str = f"{today.day} de {meses[today.month-1]} de {today.year}"
+    else:
+        date_str = today.strftime("%B %d, %Y")
+
+    # Construir bloque de firma como HTML — solo incluye campos no-placeholder.
+    # `<hr>` actúa como línea para firma manuscrita; los párrafos vacíos dan
+    # respiro vertical. Mantiene paridad con el PDF (Spacer + "_"*40).
+    sig_lines = []
+    if rec_name:
+        sig_lines.append(f"<p><strong>{rec_name}</strong></p>")
+    if rec_title:
+        sig_lines.append(f"<p>{rec_title}</p>")
+    if rec_org:
+        sig_lines.append(f"<p>{rec_org}</p>")
+    if rec_email:
+        sig_lines.append(f"<p>{rec_email}</p>")
+    sig_lines.append(f"<p>Date / Fecha: {date_str}</p>")
+    signature_html = (
+        "<p>&nbsp;</p>"
+        "<p>_______________________________________________</p>"
+        + "".join(sig_lines)
+    )
+
+    content_with_signature = content + signature_html
+
     return _docx_response(
-        content=content,
+        content=content_with_signature,
         title=f"Recommendation Letter for {candidate}",
-        filename_stem=f"Recommendation_Letter_{candidate.replace(' ', '_')}_by_{recommender.replace(' ', '_')}",
+        filename_stem=f"Recommendation_Letter_{candidate.replace(' ', '_')}_by_{(rec_name or 'Recommender').replace(' ', '_')}",
         doc_type="Recommendation Letter" if language == 'en' else "Carta de Recomendación",
-        author=recommender,
+        author=rec_name or 'Recommender',
         language=language,
-        is_html=_looks_like_html(content),
+        is_html=_looks_like_html(content_with_signature),
         add_cover=False,
     )
 
