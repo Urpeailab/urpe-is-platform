@@ -35,6 +35,20 @@ import { Printer } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
+// Reemplaza el origin (protocolo+host) de una URL por el de la página actual,
+// preservando path/query/hash. Útil para mostrar/copiar los links de acceso
+// con el dominio en el que el admin está navegando, sin tocar el backend
+// (que mantiene su FRONTEND_URL para emails y otros flujos).
+const withCurrentOrigin = (u) => {
+  if (!u) return u;
+  try {
+    const url = new URL(u);
+    return `${window.location.origin}${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return u;
+  }
+};
+
 // Helper function to extract text from multilingual objects
 const getText = (value, fallback = '') => {
   if (!value) return fallback;
@@ -2499,12 +2513,12 @@ export const VisaCaseDetailRedesign = () => {
                               <p className="text-gray-500 text-xs mb-1">URL del Link</p>
                               <div className="flex items-center gap-2">
                                 <code className="flex-1 bg-white border border-gray-200 text-gray-700 p-2 rounded text-xs break-all overflow-hidden">
-                                  {link.magicLinkUrl}
+                                  {withCurrentOrigin(link.magicLinkUrl)}
                                 </code>
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  onClick={() => copyToClipboard(link.magicLinkUrl)}
+                                  onClick={() => copyToClipboard(withCurrentOrigin(link.magicLinkUrl))}
                                   className="border-purple-300 text-purple-700 hover:bg-purple-100 flex-shrink-0"
                                   data-testid={`copy-link-${index}`}
                                   title="Copiar al portapapeles"
