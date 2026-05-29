@@ -1365,18 +1365,29 @@ export const VisaCaseDetailRedesign = () => {
 
   // Open edit stage modal
   const handleOpenEditStageModal = (stage) => {
-    setStageToEdit(stage);
-    // Check if stage is unlocked based on status OR isUnlocked field
-    const isCurrentlyUnlocked = stage.status === 'unlocked' || stage.isUnlocked === true;
-    setEditStageData({
-      name: typeof stage.name === 'object' ? (stage.name.es || stage.name.en || '') : (stage.name || ''),
-      description: typeof stage.description === 'object' ? (stage.description.es || stage.description.en || '') : (stage.description || ''),
-      amount: (stage.amount !== undefined && stage.amount !== null) ? stage.amount.toString() : '0',
-      status: stage.status || '',
-      isPaid: stage.isPaid || false,
-      isUnlocked: isCurrentlyUnlocked
-    });
-    setEditStageModalOpen(true);
+    console.log('[EditStage] Opening modal for stage:', stage?.stageNumber, stage);
+    if (!stage) {
+      console.error('[EditStage] No stage provided');
+      return;
+    }
+    try {
+      setStageToEdit(stage);
+      // Check if stage is unlocked based on status OR isUnlocked field
+      const isCurrentlyUnlocked = stage.status === 'unlocked' || stage.isUnlocked === true;
+      setEditStageData({
+        name: typeof stage.name === 'object' ? (stage.name?.es || stage.name?.en || '') : (stage.name || ''),
+        description: typeof stage.description === 'object' ? (stage.description?.es || stage.description?.en || '') : (stage.description || ''),
+        amount: (stage.amount !== undefined && stage.amount !== null) ? stage.amount.toString() : '0',
+        status: stage.status || '',
+        isPaid: stage.isPaid || false,
+        isUnlocked: isCurrentlyUnlocked
+      });
+      setEditStageModalOpen(true);
+      console.log('[EditStage] Modal state set to open');
+    } catch (err) {
+      console.error('[EditStage] Error opening modal:', err);
+      toast.error('Error al abrir el editor de etapa');
+    }
   };
 
   // Save stage changes
@@ -3244,10 +3255,8 @@ export const VisaCaseDetailRedesign = () => {
                           variant="ghost"
                           onClick={(e) => {
                             e.stopPropagation();
-                            e.preventDefault();
                             handleOpenEditStageModal(stage);
                           }}
-                          onPointerDown={(e) => e.stopPropagation()}
                           className="text-gray-400 hover:text-blue-600 hover:bg-blue-50 h-11 w-11 min-w-[44px] p-0 touch-manipulation relative z-10"
                           aria-label="Editar etapa"
                           title="Editar etapa"
