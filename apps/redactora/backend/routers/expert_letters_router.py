@@ -106,6 +106,7 @@ _db = None
 _get_current_user = None
 _call_openai_gpt4o = None
 _call_gemini_flash_lite = None
+_call_openai_gpt4o_vision = None  # opcional — para OCR de PDFs vectorizados
 
 
 def init_router(
@@ -113,13 +114,19 @@ def init_router(
     get_current_user_func,
     call_openai_gpt4o_func,
     call_gemini_flash_lite_func,
+    call_openai_gpt4o_vision_func=None,
 ):
     global _db, _get_current_user, _call_openai_gpt4o, _call_gemini_flash_lite
+    global _call_openai_gpt4o_vision
     _db = database
     _get_current_user = get_current_user_func
     _call_openai_gpt4o = call_openai_gpt4o_func
     _call_gemini_flash_lite = call_gemini_flash_lite_func
-    logger.info("✅ Expert Letters Router initialized with dependencies")
+    _call_openai_gpt4o_vision = call_openai_gpt4o_vision_func
+    logger.info(
+        f"✅ Expert Letters Router initialized | vision_ocr="
+        f"{'available' if call_openai_gpt4o_vision_func else 'NOT available'}"
+    )
 
 
 def get_db():
@@ -135,35 +142,23 @@ async def get_current_user_wrapper(credentials: HTTPAuthorizationCredentials = D
 
 
 # ──────────────────────────────────────────────
-# Text extraction helper (inline — only used by expert letters)
+# Text extraction — delegated to the shared pdf_extractor module
+# (5-engine cascade + GPT-4o Vision OCR rescue). See pdf_extractor.py.
 # ──────────────────────────────────────────────
 
-async def _extract_text_from_upload(file: UploadFile) -> str:
-    """Extract text from an uploaded file (PDF, DOCX, or plain text)."""
-    content = await file.read()
-    fname = (file.filename or "").lower()
+from pdf_extractor import (
+    extract_text_from_upload as _shared_extract_from_upload,
+    validate_signer_name_in_cv,
+)
 
-    if fname.endswith('.pdf'):
-        try:
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(content))
-            return "\n".join(page.extract_text() or '' for page in reader.pages)
-        except ImportError:
-            try:
-                from PyPDF2 import PdfReader
-                reader = PdfReader(io.BytesIO(content))
-                return "\n".join(page.extract_text() or '' for page in reader.pages)
-            except Exception:
-                pass
-    elif fname.endswith('.docx'):
-        try:
-            import docx as python_docx
-            doc = python_docx.Document(io.BytesIO(content))
-            return "\n".join(p.text for p in doc.paragraphs)
-        except Exception:
-            pass
 
-    return content.decode('utf-8', errors='ignore')
+async def _extract_text_from_upload(file: UploadFile, file_label: str = "") -> str:
+    """Wrapper that injects the router's vision_fn (set in init_router)."""
+    return await _shared_extract_from_upload(
+        file,
+        vision_fn=_call_openai_gpt4o_vision,
+        file_label=file_label,
+    )
 
 
 def _generate_expert_letter_pdf(
@@ -408,16 +403,26 @@ async def generate_expert_letter(
     client_id: Optional[str] = Form(None),
     current_user=Depends(get_current_user_wrapper),
 ):
-    """Start async expert letter generation. Returns immediately with letter_id and status='generating'."""
+    """Start async expert letter generation. Returns immediately with letter_id and status='generating'.
+
+    ⚠️ Performance critical: SOLO leemos los bytes acá (rápido, milisegundos).
+    La extracción de texto + OCR de Tesseract (que puede tardar 10-30s con PDFs
+    vectorizados) se hace en el background task. Si extraemos acá, el endpoint
+    POST tarda demasiado y el frontend tira `AxiosError: timeout of 30000ms`.
+    """
     db = get_db()
     letter_id = str(uuid.uuid4())
 
     logger.info(f"📝 Starting expert letter generation | client_id={client_id}")
 
-    # Read file contents NOW — UploadFile cannot be used after request context closes
-    client_cv_text = await _extract_text_from_upload(client_cv)
-    project_info_text = await _extract_text_from_upload(project_info)
-    expert_cv_text = await _extract_text_from_upload(expert_cv)
+    # SOLO leer bytes — la extracción de texto se hace en el background task
+    # para no bloquear el endpoint POST con OCR de 10-30 segundos.
+    client_cv_bytes = await client_cv.read()
+    client_cv_filename = client_cv.filename or ""
+    project_info_bytes = await project_info.read()
+    project_info_filename = project_info.filename or ""
+    expert_cv_bytes = await expert_cv.read()
+    expert_cv_filename = expert_cv.filename or ""
 
     # Create letter document immediately with generating status
     from letter_format_profiles import pick_random_profile
@@ -447,7 +452,11 @@ async def generate_expert_letter(
 
     background_tasks.add_task(
         _generate_expert_letter_background,
-        letter_id, client_cv_text, project_info_text, expert_cv_text, format_profile
+        letter_id,
+        client_cv_bytes, client_cv_filename,
+        project_info_bytes, project_info_filename,
+        expert_cv_bytes, expert_cv_filename,
+        format_profile,
     )
 
     return {"letter_id": letter_id, "status": "generating", "message": "Generación iniciada en segundo plano"}
@@ -455,12 +464,12 @@ async def generate_expert_letter(
 
 async def _generate_expert_letter_background(
     letter_id: str,
-    client_cv_text: str,
-    project_info_text: str,
-    expert_cv_text: str,
+    client_cv_bytes: bytes, client_cv_filename: str,
+    project_info_bytes: bytes, project_info_filename: str,
+    expert_cv_bytes: bytes, expert_cv_filename: str,
     format_profile: dict,
 ):
-    """Background task: runs the LLM calls and updates the letter document."""
+    """Background task: extracts text from PDFs (incl. OCR), then runs LLM calls."""
     db = get_db()
     logger.info(f"🚀 Background generation started for letter {letter_id}")
 
@@ -472,10 +481,45 @@ async def _generate_expert_letter_background(
 
     try:
         from expert_letter_endpoints import EXPERT_LETTER_SYSTEM_PROMPT, ANTI_PLACEHOLDER_RULE
+        from pdf_extractor import extract_text_from_bytes as _shared_extract_from_bytes
         from datetime import datetime as dt
         today_str = dt.now().strftime("%B %d, %Y")
 
+        # ── Extracción dentro del background — puede tardar 10-30s con OCR ─────
+        await _update_progress(8, "Extrayendo texto de los documentos (puede tardar con OCR)...")
+        client_cv_text = await _shared_extract_from_bytes(
+            client_cv_bytes, client_cv_filename,
+            vision_fn=_call_openai_gpt4o_vision, file_label="client_cv",
+        )
+        project_info_text = await _shared_extract_from_bytes(
+            project_info_bytes, project_info_filename,
+            vision_fn=_call_openai_gpt4o_vision, file_label="project_info",
+        )
+        expert_cv_text = await _shared_extract_from_bytes(
+            expert_cv_bytes, expert_cv_filename,
+            vision_fn=_call_openai_gpt4o_vision, file_label="expert_cv",
+        )
+
         await _update_progress(15, "Analizando documentos con IA...")
+
+        # ── Diagnostic logging: confirm we have real text from each PDF ─────────
+        # Si el extractor falló silenciosamente (PDF escaneado, formato raro,
+        # pypdf devolvió "") veremos aquí que el texto está vacío o tiene 50
+        # chars y caemos en la rama de validación post-extracción.
+        logger.info(
+            f"📄 Texto extraído | client_cv={len(client_cv_text)}c "
+            f"project_info={len(project_info_text)}c expert_cv={len(expert_cv_text)}c"
+        )
+        if len(expert_cv_text.strip()) < 100:
+            logger.error(
+                f"⚠️ expert_cv_text muy corto ({len(expert_cv_text)}c) — "
+                f"primeros 300c: {expert_cv_text[:300]!r}"
+            )
+            raise ValueError(
+                "No se pudo extraer texto del CV del experto. "
+                "Verificá que el PDF no sea escaneado (imagen) y que tenga texto seleccionable."
+            )
+        logger.info(f"📄 expert_cv primeros 300c: {expert_cv_text[:300]!r}")
 
         analysis_prompt = f"""You are analyzing three documents for generating a professional EB-2 NIW expert opinion letter aligned with Matter of Dhanasar, 26 I&N Dec. 884 (AAO 2016).
 
@@ -485,7 +529,7 @@ async def _generate_expert_letter_background(
 **DOCUMENT 2 - PROJECT INFORMATION:**
 {project_info_text[:8000]}
 
-**DOCUMENT 3 - EXPERT'S CV:**
+**DOCUMENT 3 - EXPERT'S CV (THE SIGNER OF THE LETTER):**
 {expert_cv_text[:6000]}
 
 Extract and return ONLY a JSON object with this structure:
@@ -502,13 +546,24 @@ Extract and return ONLY a JSON object with this structure:
   "project_geographic_reach": "States, organizations, or people affected nationally",
   "project_economic_impact": "Economic value, cost savings, revenue, or jobs created/supported",
   "project_federal_alignment": "Which federal laws or programs this project aligns with",
-  "expert_name": "Full name from expert CV",
-  "expert_title": "Professional title/position",
-  "expert_organization": "Current institution/organization",
-  "expert_credentials": "Key qualifications, publications, years of experience, awards",
-  "expert_email": "Email if available",
-  "expert_phone": "Phone if available"
+  "expert_name": "Full name from DOCUMENT 3 — copy it EXACTLY as it appears, including accents and capitalization",
+  "expert_title": "Professional title/position from DOCUMENT 3 ONLY",
+  "expert_organization": "Current institution/organization from DOCUMENT 3 ONLY",
+  "expert_credentials": "Key qualifications, publications, years of experience, awards — from DOCUMENT 3 ONLY",
+  "expert_email": "Email from DOCUMENT 3 if present, else empty string",
+  "expert_phone": "Phone from DOCUMENT 3 if present, else empty string"
 }}
+
+🚨 ABSOLUTE RULES FOR THE EXPERT FIELDS — ZERO TOLERANCE FOR HALLUCINATION:
+- The expert is the PERSON WHO SIGNS THE LETTER. Their name, title, organization,
+  credentials, email and phone MUST come **exclusively** from DOCUMENT 3.
+- DO NOT invent generic experts like "Dr. Emily Thompson", "Dr. John Smith",
+  "Professor Sarah Johnson", "MIT", "Harvard", "Stanford" unless those literal
+  strings appear in DOCUMENT 3.
+- If DOCUMENT 3 looks empty, unclear, or doesn't seem to be a CV, return an
+  EMPTY STRING ("") for any expert_* field you cannot find with certainty.
+  NEVER fall back to a plausible-sounding name.
+- The `expert_name` you return MUST appear verbatim somewhere in DOCUMENT 3.
 
 IMPORTANT: Extract real, specific information from all three documents. Be thorough and precise."""
 
@@ -526,6 +581,21 @@ IMPORTANT: Extract real, specific information from all three documents. Be thoro
                 analysis_raw = analysis_raw[4:]
         extracted_data = json.loads(analysis_raw.strip())
         logger.info(f"✅ Document analysis complete for {letter_id}")
+
+        # ── HALLUCINATION GUARD — el firmante DEBE aparecer en el CV ──────────
+        # Bug histórico (2026-05-28): GPT-4o alucinó "Dr. Emily Thompson, MIT"
+        # como firmante cuando el CV real era de Gigliola Bocanegra. Esta
+        # validación (compartida con recommendation/intent letters) rechaza
+        # nombres alucinados antes de redactar la carta.
+        extracted_expert_name = (extracted_data.get('expert_name') or '').strip()
+        extracted_expert_org = (extracted_data.get('expert_organization') or '').strip()
+        logger.info(
+            f"🧑‍⚖️ Firmante extraído | name={extracted_expert_name!r} "
+            f"org={extracted_expert_org!r} title={extracted_data.get('expert_title')!r}"
+        )
+        validate_signer_name_in_cv(
+            extracted_expert_name, expert_cv_text, role_label="experto firmante"
+        )
 
         # ── Select profile based on signer's credentials ──────────────────────
         # 60/40 weighted picker: usually the suggested voice for the signer's
@@ -638,6 +708,10 @@ After paragraph 14, close with:
             system_prompt=EXPERT_LETTER_SYSTEM_PROMPT + ANTI_PLACEHOLDER_RULE,
             user_prompt=generation_prompt,
             primary_gemini_fn=_call_gemini_flash_lite,
+            # OpenAI-directo como último escalón: si OpenRouter está caído
+            # (key revocada, sin saldo), GPT-4o salva la carta sin que el
+            # usuario tenga que hacer nada.
+            openai_gpt4o_fn=_call_openai_gpt4o,
             temperature=gen_temperature,
             max_tokens=8000,
             min_chars=500,
