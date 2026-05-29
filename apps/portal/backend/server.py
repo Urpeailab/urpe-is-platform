@@ -8706,13 +8706,22 @@ async def get_visa_case_detail(
         if not case:
             raise HTTPException(status_code=404, detail="Visa case not found")
         
-        # Verificar permisos - coordinador/seller asignado o admins
+        # Verificar permisos - coordinador/advisor asignado o admins.
+        # La columna real es `advisor_id` (alias camelCase `advisorId`). Los
+        # legacy `sellerId` / `salesRepId` no existen como aliases en este
+        # schema y siempre dan None — por eso advisor nunca encontraba su
+        # caso. Mantengo los legacy como fallback por si algún row viejo
+        # todavía los trae.
         user_role = staff_payload.get('role', 'advisor')
         staff_id = staff_payload['id']
         if user_role in ['coordinator', 'advisor']:
             is_coordinator = case.get('coordinatorId') == staff_id
-            is_seller = case.get('sellerId') == staff_id or case.get('salesRepId') == staff_id
-            if not is_coordinator and not is_seller:
+            is_advisor = (
+                case.get('advisorId') == staff_id
+                or case.get('sellerId') == staff_id
+                or case.get('salesRepId') == staff_id
+            )
+            if not is_coordinator and not is_advisor:
                 raise HTTPException(status_code=403, detail="No tienes acceso a este caso")
         
         # Obtener etapas
@@ -13079,6 +13088,10 @@ payment_auth_migration_router = setup_payment_auth_migration_router(verify_staff
 from services.staff_migration import setup_staff_migration_router
 staff_migration_router = setup_staff_migration_router(verify_staff_token)
 
+# Visa Cases Team Backfill (fill missing coordinator/advisor on existing cases)
+from services.visa_cases_team_backfill import setup_visa_cases_team_backfill_router
+visa_cases_team_backfill_router = setup_visa_cases_team_backfill_router(verify_staff_token)
+
 # Setup manual payments endpoints
 from manual_payments_endpoints import setup_manual_payments_router
 manual_payments_router = setup_manual_payments_router(db, verify_staff_token)
@@ -13432,6 +13445,7 @@ app.include_router(classic_cases_router, prefix="/api")
 app.include_router(visa_cases_migration_router, prefix="/api")
 app.include_router(payment_auth_migration_router, prefix="/api")
 app.include_router(staff_migration_router, prefix="/api")
+app.include_router(visa_cases_team_backfill_router, prefix="/api")
 app.include_router(manual_payments_router, prefix="/api")
 app.include_router(webinars_router, prefix="/api")
 app.include_router(legal_library_router, prefix="/api")

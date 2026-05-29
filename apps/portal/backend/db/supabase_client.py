@@ -55,7 +55,9 @@ _COLUMN_ALIASES = {
     'lastLogin': 'last_login_at',  # column may not exist
     'user': 'client_name',  # generic 'user' field — assume client_name
     'users': 'clients',  # tabla
-    'salesRepId': 'sales_rep_id',
+    # NOTE: NO redefinir `salesRepId` acá — ya está mapeado a `advisor_id` arriba.
+    # Hubo una redefinición que pisaba esa entrada con `sales_rep_id` (columna
+    # inexistente), rompiendo filtros y permisos de advisor.
     'overallProgress': 'overall_progress',
     'clientName': 'client_name',
     'paidAmount': 'paid_amount',
