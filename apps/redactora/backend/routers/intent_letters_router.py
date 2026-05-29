@@ -146,12 +146,29 @@ async def _generate_intent_letter_background(
         await db.intent_letters.update_one({"id": letter_id}, {"$set": upd})
 
     try:
-        # ── Step 1: Extract text ────────────────────────────────────────────────
-        await _update(10, "Extrayendo texto de los documentos...")
-        cv_text = await _extract_text(cv_bytes, cv_filename, file_label="petitioner_cv")
-        project_text = await _extract_text(project_bytes, project_filename, file_label="project_info")
-        support_text = await _extract_text(support_bytes, support_filename, file_label="support_doc") if support_bytes else ""
-        signer_text = await _extract_text(signer_bytes, signer_filename, file_label="signer_cv") if signer_bytes else ""
+        # ── Step 1: Extract text (with timeouts + heartbeats) ──────────────────
+        # Cada extracción tiene timeout de 200s. Si una falla, el except global
+        # marca la carta status='error' en lugar de dejarla colgada.
+        await _update(8, "Extrayendo CV del peticionario...")
+        cv_text = await asyncio.wait_for(
+            _extract_text(cv_bytes, cv_filename, file_label="petitioner_cv"),
+            timeout=200.0,
+        )
+        await _update(10, "Extrayendo información del proyecto...")
+        project_text = await asyncio.wait_for(
+            _extract_text(project_bytes, project_filename, file_label="project_info"),
+            timeout=200.0,
+        )
+        await _update(12, "Extrayendo documentos de apoyo...")
+        support_text = await asyncio.wait_for(
+            _extract_text(support_bytes, support_filename, file_label="support_doc"),
+            timeout=200.0,
+        ) if support_bytes else ""
+        await _update(14, "Extrayendo CV del firmante...")
+        signer_text = await asyncio.wait_for(
+            _extract_text(signer_bytes, signer_filename, file_label="signer_cv"),
+            timeout=200.0,
+        ) if signer_bytes else ""
 
         # ── Hard fail if the petitioner CV came back empty (PDF imagen / problema) ─
         if len(cv_text.strip()) < 100:

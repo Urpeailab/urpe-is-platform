@@ -17,4 +17,24 @@ services:
       - .env
     environment:
       - APP_NAME=redactora
+      # Cantidad de workers uvicorn (procesos Python independientes). Cada uno
+      # tiene su event loop + semaphore de Tesseract OCR + cache de extracciones.
+      # 4 workers = ~1.6GB de RAM base + scale lineal con carga.
+      - WEB_CONCURRENCY=4
+      # Slots máximos de Tesseract OCR por worker (cap del semaphore dinámico).
+      # Se ajusta a max(2, min(cpu_count - 1, TESSERACT_MAX_CONCURRENCY)).
+      - TESSERACT_MAX_CONCURRENCY=8
+      # Logs en tiempo real (sin buffering) — crítico para diagnosticar en Coolify.
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped
+    # Resource limits — Coolify respeta estos si están seteados desde compose.
+    # También se pueden ajustar desde la UI de Coolify sin redeploy del código.
+    # Si tu VPS tiene menos recursos, bajá estos valores.
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G

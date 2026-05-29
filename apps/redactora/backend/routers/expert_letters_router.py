@@ -3,6 +3,7 @@ Expert Letters Router — Professional expert opinion letters for NIW petitions
 Extracted from server.py for better code organization.
 """
 
+import asyncio
 import io
 import re
 import json
@@ -486,18 +487,32 @@ async def _generate_expert_letter_background(
         today_str = dt.now().strftime("%B %d, %Y")
 
         # ── Extracción dentro del background — puede tardar 10-30s con OCR ─────
-        await _update_progress(8, "Extrayendo texto de los documentos (puede tardar con OCR)...")
-        client_cv_text = await _shared_extract_from_bytes(
-            client_cv_bytes, client_cv_filename,
-            vision_fn=_call_openai_gpt4o_vision, file_label="client_cv",
+        # Cada extracción tiene timeout de 200s (suficiente para OCR de 8 pgs).
+        # Si una falla por timeout, el except global marca status='error' y la
+        # carta no queda colgada en "Generando" para siempre.
+        await _update_progress(8, "Extrayendo CV del cliente (puede tardar con OCR)...")
+        client_cv_text = await asyncio.wait_for(
+            _shared_extract_from_bytes(
+                client_cv_bytes, client_cv_filename,
+                vision_fn=_call_openai_gpt4o_vision, file_label="client_cv",
+            ),
+            timeout=200.0,
         )
-        project_info_text = await _shared_extract_from_bytes(
-            project_info_bytes, project_info_filename,
-            vision_fn=_call_openai_gpt4o_vision, file_label="project_info",
+        await _update_progress(10, "Extrayendo información del proyecto...")
+        project_info_text = await asyncio.wait_for(
+            _shared_extract_from_bytes(
+                project_info_bytes, project_info_filename,
+                vision_fn=_call_openai_gpt4o_vision, file_label="project_info",
+            ),
+            timeout=200.0,
         )
-        expert_cv_text = await _shared_extract_from_bytes(
-            expert_cv_bytes, expert_cv_filename,
-            vision_fn=_call_openai_gpt4o_vision, file_label="expert_cv",
+        await _update_progress(12, "Extrayendo CV del experto firmante...")
+        expert_cv_text = await asyncio.wait_for(
+            _shared_extract_from_bytes(
+                expert_cv_bytes, expert_cv_filename,
+                vision_fn=_call_openai_gpt4o_vision, file_label="expert_cv",
+            ),
+            timeout=200.0,
         )
 
         await _update_progress(15, "Analizando documentos con IA...")
