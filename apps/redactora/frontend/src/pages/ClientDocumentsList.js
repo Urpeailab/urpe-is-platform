@@ -53,7 +53,7 @@ const ClientDocumentsList = () => {
   useEffect(() => {
     const hasGenerating = documents.some(doc => doc.status === 'generating' || doc.status === 'evaluating' || doc.status === 'in_progress');
     
-    if (hasGenerating && (docType === 'book' || docType === 'books' || docType === 'niw' || docType === 'policypaper' || docType === 'patent' || docType === 'study' || docType === 'whitepaper')) {
+    if (hasGenerating && (docType === 'book' || docType === 'books' || docType === 'niw' || docType === 'policypaper' || docType === 'patent' || docType === 'study' || docType === 'whitepaper' || docType === 'recommendation' || docType === 'expert' || docType === 'intentletter')) {
       const generatingCount = documents.filter(d => d.status === 'generating' || d.status === 'evaluating').length;
       console.log(`📝 Auto-refresh activado: ${generatingCount} documento(s) en progreso`);
       
@@ -232,8 +232,27 @@ const ClientDocumentsList = () => {
                 progress_message: doc.progress_message || 'Procesando...'
               };
             });
+          } else if (docType === 'recommendation' || docType === 'expert' || docType === 'intentletter') {
+            // Cartas: el endpoint devuelve { letters: [...] } y cada carta ya
+            // trae progress_percentage / progress_message del background task.
+            // Los completados muestran 100%; los en error muestran su mensaje.
+            const endpoint = {
+              recommendation: 'recommendation-letters',
+              expert: 'expert-letters',
+              intentletter: 'intent-letters',
+            }[docType];
+            const res = await axios.get(`${API}/${endpoint}?client_id=${clientId}`, { headers });
+            docs = (res.data.letters || []).map(doc => ({
+              ...doc,
+              progress_percentage: doc.status === 'completed'
+                ? 100
+                : (doc.progress_percentage || 0),
+              progress_message: doc.status === 'completed'
+                ? 'Completado'
+                : (doc.progress_message || 'Generando...'),
+            }));
           }
-          
+
           // Solo actualizar si hay documentos
           if (docs.length > 0) {
             console.log('📊 Actualizando documentos:', docs.map(d => ({

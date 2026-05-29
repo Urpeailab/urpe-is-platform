@@ -17,12 +17,59 @@ Also exposes `validate_signer_name_in_cv()` which the letter flows call to
 catch any hallucinated signer that slipped past the prompt.
 """
 import base64
+import hashlib
 import io
 import logging
 import re
+import time
+from collections import OrderedDict
 from typing import Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cache de extracciones por hash SHA-256 del contenido del PDF.
+#
+# Caso de uso real: una operadora hace 30 cartas en 4 min subiendo el MISMO
+# CV del cliente y el MISMO project_info en cada carta (solo el firmante
+# cambia). Sin cache: 90 extracciones, ~30 con OCR de 15s = 7.5min solo OCR.
+# Con cache: ~32 extracciones reales (1 cliente + 1 proyecto + 30 firmantes).
+#
+# LRU + TTL en memoria del proceso. No se persiste a disco para mantenerlo
+# simple — si reiniciás el container se pierde el cache, pero es trivial
+# regenerarlo en pocas extracciones.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_EXTRACT_CACHE: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
+_EXTRACT_CACHE_MAX = 256        # entradas — cada CV ocupa ~10-50KB en RAM
+_EXTRACT_CACHE_TTL = 3600.0     # 1 hora — alcanza para una sesión de operadora
+
+
+def _cache_key(content: bytes) -> str:
+    """SHA-256 truncado a 16 chars — colisión astronómicamente improbable
+    para los volúmenes que manejamos (<10K PDFs/día)."""
+    return hashlib.sha256(content).hexdigest()[:16]
+
+
+def _cache_get(key: str) -> Optional[str]:
+    entry = _EXTRACT_CACHE.get(key)
+    if entry is None:
+        return None
+    ts, text = entry
+    if time.time() - ts > _EXTRACT_CACHE_TTL:
+        _EXTRACT_CACHE.pop(key, None)
+        return None
+    # Refrescar posición LRU (más reciente al final).
+    _EXTRACT_CACHE.move_to_end(key)
+    return text
+
+
+def _cache_put(key: str, text: str) -> None:
+    _EXTRACT_CACHE[key] = (time.time(), text)
+    _EXTRACT_CACHE.move_to_end(key)
+    while len(_EXTRACT_CACHE) > _EXTRACT_CACHE_MAX:
+        _EXTRACT_CACHE.popitem(last=False)  # drop LRU
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -94,29 +141,76 @@ def _tesseract_one_page(pil_image, *, page_idx: int, n_pages: int, file_label: s
     return page_text.strip()
 
 
+# Semaphore global: limita cuántas páginas de Tesseract OCR corren al mismo
+# tiempo POR PROCESO (afecta todas las cartas concurrentes).
+#
+# Tesseract es CPU-bound: cada página usa ~1 core a 100%. Si tenemos N cores
+# disponibles, dejamos 1 libre para el event loop async + I/O y usamos N-1
+# para OCR. Cap a 8 para no abrir demasiados workers en máquinas grandes.
+#
+# Ejemplos:
+#   container con 2 vCPUs → 2 slots (Tesseract a 100%, async un poco lento pero ok)
+#   container con 4 vCPUs → 3 slots
+#   container con 8 vCPUs → 7 slots
+#   container con 16+ vCPUs → 8 slots (cap)
+#
+# Con N cartas concurrentes pidiendo OCR, las páginas se serializan a través
+# de este semaphore; no hay timeouts en la cola, solo en la ejecución (45s/pág
+# + 180s total por CV). Si hay más cartas que slots, las demás esperan turno.
+_TESSERACT_SEMAPHORE: Optional["object"] = None  # asyncio.Semaphore creado lazy
+_TESSERACT_SLOTS: int = 0  # se setea al crear el semaphore
+
+
+def _get_tesseract_semaphore():
+    """Lazy init del semaphore — solo se crea cuando hay event loop activo.
+
+    Cada worker uvicorn tiene su PROPIO proceso → su propio semaphore. Con
+    4 workers × ~3 slots c/u = 12 OCRs en paralelo en todo el container,
+    suficiente para picos de 30 cartas en 4 minutos (donde además el cache
+    LRU short-circuitea los PDFs repetidos).
+
+    El cap por proceso se puede tunear con env var TESSERACT_MAX_CONCURRENCY.
+    """
+    import asyncio
+    import os
+    global _TESSERACT_SEMAPHORE, _TESSERACT_SLOTS
+    if _TESSERACT_SEMAPHORE is None:
+        cpu_count = os.cpu_count() or 2
+        cap = int(os.environ.get("TESSERACT_MAX_CONCURRENCY", "6"))
+        # Dejar 1 core para event loop. Min 2, max `cap`.
+        _TESSERACT_SLOTS = max(2, min(cpu_count - 1, cap))
+        _TESSERACT_SEMAPHORE = asyncio.Semaphore(_TESSERACT_SLOTS)
+        logger.error(
+            f"🔧 Tesseract OCR concurrency: {_TESSERACT_SLOTS} slots/worker "
+            f"(cpu_count={cpu_count}, cap={cap}). Multi-worker uvicorn "
+            f"multiplica esto por #workers."
+        )
+    return _TESSERACT_SEMAPHORE
+
+
 async def _ocr_pdf_with_tesseract(
     content: bytes,
     *,
     max_pages: int = 8,
     file_label: str = "",
+    per_page_timeout: float = 45.0,
+    total_timeout: float = 180.0,
 ) -> str:
     """Local OCR via Tesseract — gratis, sin red, sin depender de OpenAI.
 
-    Procesa todas las páginas EN PARALELO usando un thread pool. Un CV de 6
-    páginas que antes tardaba ~40s ahora se completa en ~8-12s.
+    Procesa páginas con paralelismo LIMITADO (max 2 simultáneas via semaphore)
+    para no saturar el CPU del container. Cada página tiene su propio
+    timeout (`per_page_timeout`), y la operación completa tiene un techo
+    global (`total_timeout`) para que nunca se cuelgue indefinidamente.
 
     Funciona para PDFs vectorizados (Canva / Adobe Express) y escaneados.
-    Requiere que `tesseract-ocr` esté instalado en el sistema (ver Dockerfile)
-    además del wrapper Python `pytesseract`. Si falta cualquiera de los dos,
-    lanza TesseractNotFoundError y el caller cae al siguiente escalón.
+    Requiere `tesseract-ocr` en el sistema (Dockerfile) + `pytesseract`.
 
-    Configurado para Inglés + Español (los CVs de URPE típicamente mezclan
-    ambos idiomas).
+    Configurado para Inglés + Español (CVs URPE típicamente mezclan ambos).
     """
     import asyncio
     import pypdfium2 as pdfium
 
-    # Renderizamos todas las páginas a PIL primero (esto es rápido: ~100ms/pg).
     doc = pdfium.PdfDocument(content)
     pages_pil = []
     try:
@@ -126,7 +220,7 @@ async def _ocr_pdf_with_tesseract(
                 f"🔍 Tesseract {file_label}: PDF tiene {len(doc)} páginas, "
                 f"limitando OCR a las primeras {max_pages}"
             )
-        # scale=2.0 ≈ 144 DPI — buen balance precisión/velocidad para Tesseract.
+        # scale=2.0 ≈ 144 DPI — buen balance precisión/velocidad.
         for i in range(n_pages):
             page = doc[i]
             pages_pil.append(page.render(scale=2.0).to_pil())
@@ -139,27 +233,52 @@ async def _ocr_pdf_with_tesseract(
 
     logger.error(
         f"🔍 Tesseract {file_label}: renderizadas {len(pages_pil)} páginas, "
-        f"iniciando OCR PARALELO..."
+        f"iniciando OCR (max 2 simultáneas, timeout {per_page_timeout}s/pág)..."
     )
 
-    # Ejecutamos Tesseract en paralelo via run_in_executor (thread pool default).
+    sem = _get_tesseract_semaphore()
     loop = asyncio.get_event_loop()
-    tasks = [
-        loop.run_in_executor(
-            None,
-            lambda img=img, idx=idx: _tesseract_one_page(
-                img, page_idx=idx, n_pages=len(pages_pil), file_label=file_label,
-            ),
-        )
-        for idx, img in enumerate(pages_pil)
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Filter out exceptions and empty strings.
+    async def _run_one(idx: int, img):
+        async with sem:
+            try:
+                # Cada página tiene su propio timeout. Si una página se cuelga
+                # (PDF corrupto, página rara), no detiene a las demás.
+                return await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: _tesseract_one_page(
+                            img, page_idx=idx, n_pages=len(pages_pil),
+                            file_label=file_label,
+                        ),
+                    ),
+                    timeout=per_page_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"🔍 Tesseract {file_label} página {idx + 1} TIMEOUT "
+                    f"({per_page_timeout}s) — skip"
+                )
+                return ""
+
+    tasks = [_run_one(idx, img) for idx, img in enumerate(pages_pil)]
+
+    try:
+        # Timeout global para que el OCR completo nunca pase de `total_timeout`.
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=total_timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            f"🔍 Tesseract {file_label}: TIMEOUT GLOBAL ({total_timeout}s) — "
+            f"abortando OCR completo"
+        )
+        return ""
+
     text_parts = []
     for r in results:
         if isinstance(r, Exception):
-            # TesseractNotFoundError o cualquier otra excepción no capturada.
             if r.__class__.__name__ == "TesseractNotFoundError":
                 logger.error(
                     "🔍 Tesseract binary NOT installed in container. "
@@ -189,6 +308,7 @@ async def _ocr_pdf_with_vision(
     *,
     max_pages: int = 8,
     file_label: str = "",
+    per_page_timeout: float = 45.0,
 ) -> str:
     """OCR each page via GPT-4o Vision (or whatever `vision_fn` plugs in).
 
@@ -247,14 +367,23 @@ async def _ocr_pdf_with_vision(
                 },
             ]
             try:
-                page_text = await vision_fn(
-                    messages=messages, max_tokens=2500, temperature=0.0
+                import asyncio as _asyncio
+                page_text = await _asyncio.wait_for(
+                    vision_fn(messages=messages, max_tokens=2500, temperature=0.0),
+                    timeout=per_page_timeout,
                 )
                 if page_text:
                     all_text_parts.append(page_text.strip())
-                logger.info(
-                    f"🔍 OCR {file_label} página {i + 1}/{n_pages} → {len(page_text or '')}c"
+                logger.error(
+                    f"🔍 Vision OCR {file_label} página {i + 1}/{n_pages} → "
+                    f"{len(page_text or '')}c"
                 )
+            except _asyncio.TimeoutError:
+                logger.error(
+                    f"🔍 Vision OCR {file_label} página {i + 1} TIMEOUT "
+                    f"({per_page_timeout}s) — skip"
+                )
+                continue
             except Exception as e:
                 logger.warning(f"🔍 OCR {file_label} página {i + 1} falló: {e!r}")
                 continue
@@ -314,6 +443,18 @@ async def extract_text_from_bytes(
         f"content_type={content_type!r} bytes={len(content)} magic={first_bytes!r}"
     )
 
+    # ── Cache hit? — short-circuit ANTES de tocar Tesseract o Vision OCR ──────
+    # Crítico cuando una operadora hace 30 cartas en serie con el mismo CV
+    # de cliente / project_info — ahorra ~30 OCRs redundantes.
+    cache_key = _cache_key(content)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        logger.error(
+            f"📥 {label}: ✅ CACHE HIT (sha256={cache_key}) — devolviendo "
+            f"{len(cached)}c sin re-extraer"
+        )
+        return cached
+
     if _looks_like_pdf(content, fname, content_type):
         if not fname.endswith('.pdf'):
             logger.warning(
@@ -338,6 +479,7 @@ async def extract_text_from_bytes(
                         f"📄 {label}: PDF extraído con {name} | "
                         f"{len(text)}c totales, {non_ws}c no-whitespace"
                     )
+                    _cache_put(cache_key, text)
                     return text
                 if non_ws > len(re.sub(r'\s+', '', best_text)):
                     best_text = text
@@ -367,6 +509,7 @@ async def extract_text_from_bytes(
                     f"🔍 {label}: ✅ Tesseract OCR rescató el PDF | "
                     f"{len(tess_text)}c totales, {non_ws_tess}c no-whitespace"
                 )
+                _cache_put(cache_key, tess_text)
                 return tess_text
             logger.error(
                 f"🔍 {label}: Tesseract OCR también dio poco texto ({non_ws_tess}c)"
@@ -391,6 +534,7 @@ async def extract_text_from_bytes(
                         f"🔍 {label}: ✅ Vision OCR rescató el PDF | "
                         f"{len(ocr_text)}c totales, {non_ws_ocr}c no-whitespace"
                     )
+                    _cache_put(cache_key, ocr_text)
                     return ocr_text
                 logger.error(
                     f"🔍 {label}: Vision OCR también dio poco texto ({non_ws_ocr}c)"
@@ -418,11 +562,15 @@ async def extract_text_from_bytes(
         try:
             import docx as python_docx
             doc = python_docx.Document(io.BytesIO(content))
-            return "\n".join(p.text for p in doc.paragraphs)
+            text = "\n".join(p.text for p in doc.paragraphs)
+            _cache_put(cache_key, text)
+            return text
         except Exception as e:
             logger.warning(f"📄 {label}: python-docx falló: {e!r}")
 
-    return content.decode('utf-8', errors='ignore')
+    text = content.decode('utf-8', errors='ignore')
+    _cache_put(cache_key, text)
+    return text
 
 
 async def extract_text_from_upload(

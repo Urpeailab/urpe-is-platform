@@ -37,4 +37,13 @@ COPY --from=frontend-build /app/frontend/build ./frontend/build
 
 WORKDIR /app/backend
 EXPOSE 8080
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+
+# Multi-worker uvicorn: cada worker es un proceso Python independiente con su
+# propio event loop y semáforo de Tesseract OCR. Con 4 workers y ~3 slots/worker
+# de OCR, sustenta picos de 30+ cartas en paralelo sin saturar.
+#
+# Trade-off: cada worker carga el código + dependencias en RAM (~300-500MB
+# c/u). Si el container va al OOM killer, bajá WORKERS o subí memoria del host.
+#
+# Tunear con la env var WEB_CONCURRENCY (default 4 si no se setea).
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port 8080 --workers ${WEB_CONCURRENCY:-4}"]

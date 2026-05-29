@@ -138,7 +138,15 @@
       "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/routers/expert_letters_router.py\")",
       "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py\")",
       "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/pdf_extractor.py\")",
-      "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/routers/intent_letters_router.py\")"
+      "Bash(python -m py_compile \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/routers/intent_letters_router.py\")",
+      "Bash(awk '/async def _generate_recommendation_letter_background/,/^async def /' \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py\")",
+      "Bash(awk 'NR>=36866 && NR<=37800 && /except Exception/' \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py\")",
+      "Bash(awk 'NR>=3395 && NR<=3540 && \\(/const navigate/ || /clientId/\\)' \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/frontend/src/App.js\")",
+      "Bash(awk 'NR>=6225 && NR<=6320 && \\(/const navigate/ || /clientId/\\)' \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/frontend/src/App.js\")",
+      "Bash(awk 'NR>=6782 && NR<=6890 && \\(/const navigate/ || /clientId/\\)' \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/frontend/src/App.js\")",
+      "Bash(awk 'NR>=28210 && NR<=28500' \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py\")",
+      "Bash(awk 'NR>=33524 && NR<=33700' \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py\")",
+      "Bash(awk 'NR>=34073 && NR<=34250' \"d:/Usuarios/felix/Escritorio/urpe-is-platform/apps/redactora/backend/server.py\")"
     ],
     "additionalDirectories": [
       "C:\\Temp"

@@ -3498,18 +3498,28 @@ const CreateRecommendationLetter = () => {
       const response = await axios.post(
         `${API}/recommendation-letters/generate`,
         formData,
-        { 
-          headers: { 
+        {
+          headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'multipart/form-data'
-          } 
+          }
         }
       );
 
-      // New async flow: backend returns immediately with letter_id
+      // Async flow: backend devolvió letter_id instantáneo, la generación
+      // corre en background. Liberamos al operador redirigiéndolo al dashboard
+      // del cliente (o al general) para que pueda redactar la siguiente carta
+      // sin esperar. Esto sostiene picos de 30 cartas en 4 min.
       setLetterId(response.data.letter_id);
-      setProgressMessage('Generando carta en segundo plano...');
-      // Polling starts via useEffect when step='generating' && letterId is set
+      setProgressMessage('Carta en generación. Redirigiendo al dashboard...');
+      toast.success('✅ Carta en generación. Podés seguir redactando otras cartas.');
+      setTimeout(() => {
+        if (clientId) {
+          navigate(`/client-documents/${clientId}/recommendation`);
+        } else {
+          navigate('/dashboard');
+        }
+      }, 1500);
     } catch (error) {
       console.error('Error generating letter:', error);
       setGenerating(false);
@@ -6287,9 +6297,20 @@ const CreateIntentLetter = () => {
       const response = await axios.post(`${API}/intent-letters/generate`, formData, {
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'multipart/form-data' }
       });
+      // Async flow: backend devolvió letter_id instantáneo. Redirigimos al
+      // dashboard del cliente para que el operador pueda redactar la siguiente
+      // sin esperar (sostiene picos de 30 cartas en 4 min).
       setLetterId(response.data.letter_id);
       setLetterMode('third_party_loi');
-      setProgressMessage('Generando carta en segundo plano...');
+      setProgressMessage('Carta en generación. Redirigiendo al dashboard...');
+      toast.success('✅ Carta en generación. Podés seguir redactando otras cartas.');
+      setTimeout(() => {
+        if (clientId) {
+          navigate(`/client-documents/${clientId}/intentletter`);
+        } else {
+          navigate('/dashboard');
+        }
+      }, 1500);
     } catch (error) {
       setGenerating(false);
       setStep('upload');
@@ -6852,10 +6873,20 @@ const CreateExpertLetter = () => {
         }
       );
       if (response.data?.letter_id) {
+        // Async flow: backend devolvió letter_id instantáneo. Redirigimos al
+        // dashboard del cliente para que el operador pueda redactar la siguiente
+        // sin esperar (sostiene picos de 30 cartas en 4 min).
         setLetterId(response.data.letter_id);
         setGenerationProgress(10);
-        setProgressMessage('Analizando documentos con IA...');
-        // Polling starts via useEffect when letterId + step='generating' are set
+        setProgressMessage('Carta en generación. Redirigiendo al dashboard...');
+        toast.success('✅ Carta en generación. Podés seguir redactando otras cartas.');
+        setTimeout(() => {
+          if (clientId) {
+            navigate(`/client-documents/${clientId}/expert`);
+          } else {
+            navigate('/dashboard');
+          }
+        }, 1500);
       }
     } catch (error) {
       console.error('Error al iniciar generación:', error);

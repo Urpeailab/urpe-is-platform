@@ -395,9 +395,13 @@ async def call_openai_mini(system_message: str, user_message: str, temperature: 
         
         content = response.choices[0].message.content
         finish_reason = response.choices[0].finish_reason
-        
-        logging.info(f"📥 [call_openai_mini] Response: {len(content)} chars, finish_reason={finish_reason}")
-        
+
+        # 🌐 [PROVIDER USED] — visible siempre
+        logging.warning(
+            f"🌐 [PROVIDER USED] OpenAI Direct (gpt-4o-mini) → "
+            f"{len(content) if content else 0}c, finish={finish_reason}"
+        )
+
         return clean_content(content) if content else ""
         
     except asyncio.TimeoutError as e:
@@ -491,7 +495,13 @@ async def call_openai_gpt4o(system_message: str, user_message: str, temperature:
                 token_usage_tracker['total_tokens'] += response.usage.total_tokens
                 logging.info(f"📊 Token usage - Input: {response.usage.prompt_tokens}, Output: {response.usage.completion_tokens}, Total: {response.usage.total_tokens}")
 
-            logging.info(f"✅ GPT-4o response received. Finish reason: {finish_reason}. Content length: {len(content) if content else 0}")
+            # 🌐 [PROVIDER USED] — log WARNING para que sea visible en producción
+            # con cualquier nivel de logging. Permite `docker logs ... | grep "PROVIDER USED"`
+            # para auditar qué API se usó en cada generación (OpenAI directo vs OpenRouter).
+            logging.warning(
+                f"🌐 [PROVIDER USED] OpenAI Direct (gpt-4o) → {len(content) if content else 0}c, "
+                f"finish={finish_reason}"
+            )
 
             if finish_reason == 'length':
                 logging.error(f"⚠️ CRITICAL: GPT-4o response was truncated due to max_tokens limit ({max_tokens})")
@@ -563,7 +573,11 @@ async def call_openai_gpt4o(system_message: str, user_message: str, temperature:
                         if any(p in first_chars for p in _REFUSAL_PATTERNS) and len(content.strip()) < 500:
                             logging.warning(f"⚠️ {model_id} refused to answer: '{content.strip()[:120]}...' — trying next fallback model")
                             continue
-                        logging.warning(f"✅ {model_id} OK via OpenRouter ({len(content)} chars)")
+                        # 🌐 [PROVIDER USED] — visible aunque se llame desde fallback
+                        logging.warning(
+                            f"🌐 [PROVIDER USED] OpenRouter ({model_id}) → "
+                            f"{len(content)}c [fallback after OpenAI Direct failed]"
+                        )
                         return _strip_outer_fences(content)
                     logging.warning(f"⚠️ {model_id} returned empty content, trying next fallback")
                 else:
@@ -899,7 +913,11 @@ async def call_openai_gpt5(system_message: str, user_message: str, temperature: 
         if not content or len(content.strip()) == 0:
             raise Exception("GPT-5.1 returned empty content")
 
-        logging.info(f"✅ GPT-5.1 OK ({len(content)} chars)")
+        # 🌐 [PROVIDER USED] — visible siempre
+        logging.warning(
+            f"🌐 [PROVIDER USED] OpenAI Direct (gpt-5.1-2025-11-13) → "
+            f"{len(content)}c, finish={finish_reason}"
+        )
         return clean_content(content)
 
     except asyncio.TimeoutError:
@@ -924,7 +942,11 @@ async def call_openai_gpt5(system_message: str, user_message: str, temperature: 
                 if resp.status_code == 200:
                     content = resp.json()['choices'][0]['message']['content']
                     if content and len(content.strip()) > 100:
-                        logging.info(f"✅ {model_id} OK ({len(content)} chars)")
+                        # 🌐 [PROVIDER USED] — visible siempre
+                        logging.warning(
+                            f"🌐 [PROVIDER USED] OpenRouter ({model_id}) → "
+                            f"{len(content)}c [fallback after GPT-5.1 failed]"
+                        )
                         return clean_content(content)
                     raise Exception(f"{model_id} empty/refused")
                 raise Exception(f"{model_id} HTTP {resp.status_code}")
@@ -993,8 +1015,12 @@ async def call_claude_opus_niw(system_message: str, user_message: str, temperatu
                 result = response.json()
                 content = result['choices'][0]['message']['content']
                 finish_reason = result['choices'][0].get('finish_reason', 'unknown')
-                
-                logging.info(f"✅ Claude Opus 4 response. Finish: {finish_reason}. Length: {len(content) if content else 0}")
+
+                # 🌐 [PROVIDER USED] — visible siempre, para auditoría de qué API redacta whitepapers
+                logging.warning(
+                    f"🌐 [PROVIDER USED] OpenRouter (anthropic/claude-opus-4.6) → "
+                    f"{len(content) if content else 0}c, finish={finish_reason}"
+                )
                 print(f"   ✅ Claude Opus 4 responded ({len(content) if content else 0} chars)")
                 
                 # Check for refusal
@@ -1068,7 +1094,11 @@ async def call_claude_sonnet_niw(system_message: str, user_message: str, tempera
             content = result['choices'][0]['message']['content']
             finish_reason = result['choices'][0].get('finish_reason', 'unknown')
 
-            logging.info(f"✅ Claude Sonnet 4 response. Finish: {finish_reason}. Length: {len(content) if content else 0}")
+            # 🌐 [PROVIDER USED] — visible siempre
+            logging.warning(
+                f"🌐 [PROVIDER USED] OpenRouter (anthropic/claude-sonnet-4.6) → "
+                f"{len(content) if content else 0}c, finish={finish_reason}"
+            )
             print(f"   ✅ Claude Sonnet 4 responded ({len(content) if content else 0} chars)")
 
             # Check for refusal
@@ -1122,8 +1152,12 @@ async def call_gemini_flash_lite(system_message: str, user_message: str, tempera
         # Send message
         user_msg = UserMessage(text=user_message)
         content = await chat.send_message(user_msg)
-        
-        logging.info(f"📥 Gemini Flash Lite response received. Content length: {len(content) if content else 0}")
+
+        # 🌐 [PROVIDER USED] — visible siempre
+        logging.warning(
+            f"🌐 [PROVIDER USED] Emergent LLM Gateway (gemini-2.0-flash-lite) → "
+            f"{len(content) if content else 0}c"
+        )
         
         # Clean content
         if not content or len(content.strip()) == 0:
@@ -36889,18 +36923,32 @@ async def _generate_recommendation_letter_background(
             validate_signer_name_in_cv,
         )
 
-        await _update(15, "Extrayendo texto de los documentos...")
-        candidate_cv_text = await _shared_extract_from_bytes(
-            candidate_cv_bytes, candidate_cv_filename,
-            vision_fn=call_openai_gpt4o_vision, file_label="candidate_cv",
+        # ── Extracción con timeouts + heartbeats por archivo ───────────────────
+        # Cada extracción tiene techo de 200s; si una se cuelga, el except global
+        # marca status='error' y la carta NO queda colgada en "Generando" 20min.
+        await _update(8, "Extrayendo CV del candidato (puede tardar con OCR)...")
+        candidate_cv_text = await asyncio.wait_for(
+            _shared_extract_from_bytes(
+                candidate_cv_bytes, candidate_cv_filename,
+                vision_fn=call_openai_gpt4o_vision, file_label="candidate_cv",
+            ),
+            timeout=200.0,
         )
-        project_info_text = await _shared_extract_from_bytes(
-            project_info_bytes, project_info_filename,
-            vision_fn=call_openai_gpt4o_vision, file_label="project_info",
+        await _update(11, "Extrayendo información del proyecto...")
+        project_info_text = await asyncio.wait_for(
+            _shared_extract_from_bytes(
+                project_info_bytes, project_info_filename,
+                vision_fn=call_openai_gpt4o_vision, file_label="project_info",
+            ),
+            timeout=200.0,
         )
-        recommender_cv_text = await _shared_extract_from_bytes(
-            recommender_cv_bytes, recommender_cv_filename,
-            vision_fn=call_openai_gpt4o_vision, file_label="recommender_cv",
+        await _update(14, "Extrayendo CV del recomendador firmante...")
+        recommender_cv_text = await asyncio.wait_for(
+            _shared_extract_from_bytes(
+                recommender_cv_bytes, recommender_cv_filename,
+                vision_fn=call_openai_gpt4o_vision, file_label="recommender_cv",
+            ),
+            timeout=200.0,
         )
 
         if len(candidate_cv_text.strip()) < 100:
