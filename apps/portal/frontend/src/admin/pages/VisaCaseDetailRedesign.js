@@ -3196,17 +3196,17 @@ export const VisaCaseDetailRedesign = () => {
               const statusConfig = stage.status ? STAGE_STATUS_CONFIG[stage.status] : null;
               
               return (
-                <Card 
-                  key={stage.id || index} 
-                  className={`bg-white border-gray-200 shadow-sm transition-all cursor-pointer hover:shadow-md ${
+                <Card
+                  key={stage.id || index}
+                  className={`bg-white border-gray-200 shadow-sm transition-all ${
+                    viewAllStages ? 'cursor-pointer hover:shadow-md' : ''
+                  } ${
                     selectedStage?.stageNumber === stage.stageNumber && !viewAllStages ? 'ring-2 ring-blue-500' : ''
                   }`}
-                  onClick={() => {
-                    if (viewAllStages) {
-                      setSelectedStage(stage);
-                      setViewAllStages(false);
-                    }
-                  }}
+                  onClick={viewAllStages ? () => {
+                    setSelectedStage(stage);
+                    setViewAllStages(false);
+                  } : undefined}
                 >
                   <CardContent className="p-6">
                     <div className="flex items-start justify-between mb-4">
@@ -3232,23 +3232,27 @@ export const VisaCaseDetailRedesign = () => {
                         </div>
                       </div>
                       
-                      <div className="text-right flex items-start gap-2">
+                      <div className="text-right flex items-start gap-3">
                         <div>
                           <p className="text-2xl font-bold text-gray-900">
                             ${(stage.amount || 0).toLocaleString()}
                           </p>
                         </div>
                         <Button
+                          type="button"
                           size="sm"
                           variant="ghost"
                           onClick={(e) => {
                             e.stopPropagation();
+                            e.preventDefault();
                             handleOpenEditStageModal(stage);
                           }}
-                          className="text-gray-400 hover:text-blue-600 hover:bg-blue-50 h-8 w-8 p-0"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className="text-gray-400 hover:text-blue-600 hover:bg-blue-50 h-11 w-11 min-w-[44px] p-0 touch-manipulation relative z-10"
+                          aria-label="Editar etapa"
                           title="Editar etapa"
                         >
-                          <Edit className="h-4 w-4" />
+                          <Edit className="h-5 w-5" />
                         </Button>
                       </div>
                     </div>
